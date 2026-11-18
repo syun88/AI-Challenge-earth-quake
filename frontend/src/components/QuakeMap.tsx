@@ -94,7 +94,7 @@ export function QuakeMap({
     const src = map.getSource("buildings") as maplibregl.GeoJSONSource | undefined;
     if (!src) return;
 
-    if (!f.showBuildings || currentZoom < 14.2) {
+    if (!f.showBuildings || currentZoom < 13.5) {
       src.setData({ type: "FeatureCollection", features: [] });
       setBuildingStatus(null);
       return;
@@ -178,9 +178,17 @@ export function QuakeMap({
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-right");
 
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let layersInitialized = false;
 
-    map.on("style.load", () => {
-      if (map.getSource("meshes")) return;
+    const initMapLayers = () => {
+      if (layersInitialized || !map.isStyleLoaded()) return;
+      if (map.getSource("meshes")) {
+        layersInitialized = true;
+        setMapReady(true);
+        return;
+      }
+      layersInitialized = true;
+
       map.addSource("meshes", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -204,7 +212,7 @@ export function QuakeMap({
             HAZARD_COLORS.low,
             HAZARD_COLORS.unknown,
           ],
-          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 11, 0.48, 15, 0.22],
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.58, 14, 0.34, 16, 0.2],
         },
       });
 
@@ -213,9 +221,9 @@ export function QuakeMap({
         type: "line",
         source: "meshes",
         paint: {
-          "line-color": "#475569",
-          "line-width": 0.6,
-          "line-opacity": 0.55,
+          "line-color": "#334155",
+          "line-width": 0.85,
+          "line-opacity": 0.68,
         },
       });
 
@@ -251,7 +259,7 @@ export function QuakeMap({
             AGE_COLORS.post_2001,
             AGE_COLORS.unknown,
           ],
-          "fill-opacity": 0.84,
+          "fill-opacity": 0.86,
         },
       });
 
@@ -261,8 +269,8 @@ export function QuakeMap({
         source: "buildings",
         paint: {
           "line-color": "#0f172a",
-          "line-width": 0.6,
-          "line-opacity": 0.7,
+          "line-width": 0.65,
+          "line-opacity": 0.75,
         },
       });
 
@@ -338,8 +346,8 @@ export function QuakeMap({
           const mc = meshHits[0].properties?.meshcode;
           if (mc) {
             callbacksRef.current.onSelectMesh(String(mc));
-            if (map.getZoom() < 14.5) {
-              map.flyTo({ center: e.lngLat, zoom: 15.3, duration: 800 });
+            if (map.getZoom() < 14.2) {
+              map.flyTo({ center: e.lngLat, zoom: 15.2, duration: 800 });
             }
           }
         }
@@ -372,11 +380,17 @@ export function QuakeMap({
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
           fetchBuildingsForCurrentView();
-        }, 220);
+        }, 200);
       });
 
       setMapReady(true);
-    });
+    };
+
+    map.on("style.load", initMapLayers);
+    map.on("load", initMapLayers);
+    if (map.isStyleLoaded()) {
+      initMapLayers();
+    }
 
     mapRef.current = map;
     return () => {
@@ -503,12 +517,25 @@ export function QuakeMap({
 
       {/* Top-left floating status pills */}
       <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-col gap-1.5">
-        {zoom < 14.2 && showBuildings && (
-          <div className="pointer-events-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-xs text-slate-200 shadow-lg backdrop-blur">
+        {zoom < 13.5 && showBuildings && (
+          <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-xs text-slate-200 shadow-lg backdrop-blur">
             <ZoomIn className="h-3.5 w-3.5 text-sky-400" />
             <span>
-              現在ズーム z{zoom.toFixed(1)}（メッシュ表示中）— ズームインまたはメッシュクリックで建物ポリゴン表示
+              現在ズーム z{zoom.toFixed(1)}（250mメッシュ表示中）
             </span>
+            <button
+              type="button"
+              onClick={() => {
+                mapRef.current?.flyTo({
+                  center: mapRef.current.getCenter(),
+                  zoom: 15.2,
+                  duration: 700,
+                });
+              }}
+              className="rounded-md bg-sky-600 px-2 py-0.5 text-[11px] font-semibold text-white transition hover:bg-sky-500"
+            >
+              ズームインして建物表示
+            </button>
           </div>
         )}
 
@@ -519,7 +546,7 @@ export function QuakeMap({
           </div>
         )}
 
-        {!loadingBuildings && buildingStatus && showBuildings && zoom >= 14.2 && (
+        {!loadingBuildings && buildingStatus && showBuildings && zoom >= 13.5 && (
           <div className="inline-flex items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-[11px] text-slate-200 shadow-lg">
             <span>
               表示中の建物:{" "}

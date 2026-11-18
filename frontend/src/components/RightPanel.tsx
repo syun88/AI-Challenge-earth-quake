@@ -253,6 +253,7 @@ export function RightPanel({
                     />
                     <Bar
                       dataKey="count"
+                      isAnimationActive={false}
                       radius={[4, 4, 0, 0]}
                       className="cursor-pointer"
                       onClick={(entry) => {
@@ -308,6 +309,7 @@ export function RightPanel({
                       dataKey="pre_1981"
                       name="1981年以前"
                       stackId="a"
+                      isAnimationActive={false}
                       fill={AGE_COLORS.pre_1981}
                       className="cursor-pointer"
                       onClick={(entry) => {
@@ -319,6 +321,7 @@ export function RightPanel({
                       dataKey="1982_2000"
                       name="1982〜2000年"
                       stackId="a"
+                      isAnimationActive={false}
                       fill={AGE_COLORS["1982_2000"]}
                       className="cursor-pointer"
                       onClick={(entry) => {
@@ -330,6 +333,7 @@ export function RightPanel({
                       dataKey="post_2001"
                       name="2001年以降"
                       stackId="a"
+                      isAnimationActive={false}
                       fill={AGE_COLORS.post_2001}
                       className="cursor-pointer"
                       onClick={(entry) => {
@@ -341,6 +345,7 @@ export function RightPanel({
                       dataKey="unknown"
                       name="建築年不明"
                       stackId="a"
+                      isAnimationActive={false}
                       fill={AGE_COLORS.unknown}
                       className="cursor-pointer"
                       onClick={(entry) => {

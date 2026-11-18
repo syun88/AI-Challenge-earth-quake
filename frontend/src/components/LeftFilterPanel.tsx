@@ -122,7 +122,7 @@ export function LeftFilterPanel({
         </h2>
         <div className="space-y-2">
           <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 hover:border-slate-700">
-            <span className="text-slate-200">建物ポリゴン（ズーム14.2+）</span>
+            <span className="text-slate-200">建物ポリゴン（ズーム13.5+）</span>
             <input
               type="checkbox"
               checked={showBuildings}
