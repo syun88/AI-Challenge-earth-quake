@@ -54,7 +54,7 @@ function buildFilterQuery(params: FilterParams): string {
   if (params.ageCategories && params.ageCategories.length > 0 && params.ageCategories.length < 4) {
     sp.set("age_categories", params.ageCategories.join(","));
   }
-  if (params.hazardTiers && params.hazardTiers.length > 0 && params.hazardTiers.length < 5) {
+  if (params.hazardTiers && params.hazardTiers.length > 0 && params.hazardTiers.length < 4) {
     sp.set("hazard_tiers", params.hazardTiers.join(","));
   }
   if (params.usageGroup && params.usageGroup !== "all") {
@@ -110,7 +110,7 @@ export function getBuildingsInBbox(
   if (params.ageCategories && params.ageCategories.length > 0 && params.ageCategories.length < 4) {
     sp.set("age_categories", params.ageCategories.join(","));
   }
-  if (params.hazardTiers && params.hazardTiers.length > 0 && params.hazardTiers.length < 5) {
+  if (params.hazardTiers && params.hazardTiers.length > 0 && params.hazardTiers.length < 4) {
     sp.set("hazard_tiers", params.hazardTiers.join(","));
   }
   if (params.usageGroup && params.usageGroup !== "all") {

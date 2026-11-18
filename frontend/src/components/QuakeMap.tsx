@@ -51,6 +51,7 @@ export function QuakeMap({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [mapReady, setMapReady] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(12);
   const [loadingBuildings, setLoadingBuildings] = useState(false);
   const [buildingStatus, setBuildingStatus] = useState<{
@@ -131,43 +132,55 @@ export function QuakeMap({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: {
-        version: 8,
-        sources: {
-          gsi_pale: {
-            type: "raster",
-            tiles: ["https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png"],
-            tileSize: 256,
-            attribution:
-              '地図タイル: <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a> | 建物: <a href="https://www.mlit.go.jp/plateau/" target="_blank">Project PLATEAU</a> | ハザード: <a href="https://www.j-shis.bosai.go.jp/" target="_blank">J-SHIS (防災科研)</a>',
-          },
-        },
-        layers: [
-          {
-            id: "gsi-pale-base",
-            type: "raster",
-            source: "gsi_pale",
-            paint: {
-              "raster-brightness-max": 0.92,
-              "raster-saturation": -0.25,
+    let map: maplibregl.Map;
+    try {
+      maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
+      map = new maplibregl.Map({
+        container: containerRef.current,
+        style: {
+          version: 8,
+          sources: {
+            gsi_pale: {
+              type: "raster",
+              tiles: ["https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png"],
+              tileSize: 256,
+              attribution:
+                '地図タイル: <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a> | 建物: <a href="https://www.mlit.go.jp/plateau/" target="_blank">Project PLATEAU</a> | ハザード: <a href="https://www.j-shis.bosai.go.jp/" target="_blank">J-SHIS (防災科研)</a>',
             },
           },
-        ],
-      },
-      center: [135.7588, 34.9858],
-      zoom: 12,
-      minZoom: 10,
-      maxZoom: 19,
-    });
+          layers: [
+            {
+              id: "gsi-pale-base",
+              type: "raster",
+              source: "gsi_pale",
+              paint: {
+                "raster-brightness-max": 0.92,
+                "raster-saturation": -0.25,
+              },
+            },
+          ],
+        },
+        center: [135.7588, 34.9858],
+        zoom: 12,
+        minZoom: 10,
+        maxZoom: 19,
+      });
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? `地図の初期化に失敗しました（WebGL設定をご確認ください）: ${err.message}`
+          : "地図の初期化に失敗しました。";
+      queueMicrotask(() => setMapError(msg));
+      return;
+    }
 
     map.addControl(new maplibregl.NavigationControl(), "top-right");
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-right");
 
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-    map.on("load", () => {
+    map.on("style.load", () => {
+      if (map.getSource("meshes")) return;
       map.addSource("meshes", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -479,6 +492,14 @@ export function QuakeMap({
   return (
     <div className="relative h-full w-full bg-slate-950">
       <div ref={containerRef} className="h-full w-full" />
+
+      {mapError && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/90 p-6 text-center text-sm text-rose-200">
+          <div className="max-w-md rounded-xl border border-rose-500/40 bg-rose-950/50 p-4">
+            {mapError}
+          </div>
+        </div>
+      )}
 
       {/* Top-left floating status pills */}
       <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-col gap-1.5">
