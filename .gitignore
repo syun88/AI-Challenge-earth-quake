@@ -1,0 +1,21 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Environment / secrets
+.env
+*.env.local
+
+# Raw/cached large downloads (reproducible via script)
+backend/data/raw/
+backend/data/jshis_cache/
+
+# OS
+.DS_Store

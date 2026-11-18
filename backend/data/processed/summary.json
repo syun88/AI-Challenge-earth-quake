@@ -1,0 +1,88 @@
+{
+  "generated_at_utc": "2026-11-18T05:19:16.203025+00:00",
+  "is_partial_sample": false,
+  "municipality": {
+    "code": "26100",
+    "name": "京都市",
+    "name_en": "Kyoto City",
+    "plateau_package_id": "plateau-26100-kyoto-shi-2025",
+    "center": [
+      135.7588,
+      34.9858
+    ],
+    "default_zoom": 12,
+    "metric_crs": "EPSG:6674",
+    "storage_crs": "EPSG:4326"
+  },
+  "plateau_metadata": {
+    "title": "3D都市モデル（Project PLATEAU）京都市（2025年度）",
+    "license_title": "PLATEAU Site Policy 「３．著作権について」に拠る",
+    "license_url": "https://www.mlit.go.jp/plateau/site-policy/",
+    "metadata_modified": "2026-05-08T03:29:52.866581",
+    "citygml_url": "https://assets.cms.plateau.reearth.io/assets/c8/4c6540-2bcf-4773-b21d-74ad2d9f1ba1/26100_kyoto-shi_city_2025_citygml_1_op.zip"
+  },
+  "data_sources": [
+    {
+      "id": "plateau",
+      "name": "Project PLATEAU 3D都市モデル 京都市（2025年度）",
+      "provider": "国土交通省（MLIT）/ 京都市",
+      "reference_year": "2025年度（調査年 2025年）",
+      "license": "PLATEAU Site Policy「3. 著作権について」（商用利用含め無償利用可・出典明記）",
+      "url": "https://www.geospatial.jp/ckan/dataset/plateau-26100-kyoto-shi-2025",
+      "notes": "建築年（bldg:yearOfConstruction）は年単位のため、1981年・2000年建物の月日基準（6月1日施行）の厳密判定には使用できません。"
+    },
+    {
+      "id": "jshis",
+      "name": "J-SHIS 地震ハザードステーション Web API（2024年版 / 表層地盤 V4）",
+      "provider": "国立研究開発法人 防災科学技術研究所（NIED）",
+      "reference_year": "2024年版（Y2024・平均ケース AVR・全地震 TTL_MTTL）/ 表層地盤 V4",
+      "license": "J-SHIS 利用規約（加工・編集成果物の頒布可、出典明記必須）",
+      "url": "https://www.j-shis.bosai.go.jp/api-list",
+      "notes": "今後30年間に震度6弱以上の揺れに見舞われる確率（T30_I55_PS）等を表示。建物の倒壊確率やリアルタイム地震予測ではありません。"
+    },
+    {
+      "id": "jma",
+      "name": "気象庁 地震情報（震源・震度情報 JSON）",
+      "provider": "気象庁（JMA）",
+      "reference_year": "リアルタイム・直近履歴",
+      "license": "気象庁ホームページ利用規約（出典明記）",
+      "url": "https://www.jma.go.jp/bosai/quake/data/list.json",
+      "notes": "参考情報として直近の地震発生履歴を表示します。"
+    },
+    {
+      "id": "gsi",
+      "name": "国土地理院 地理院タイル（淡色地図）",
+      "provider": "国土地理院（GSI）",
+      "reference_year": "最新",
+      "license": "国土地理院コンテンツ利用規約（出典明記）",
+      "url": "https://maps.gsi.go.jp/development/ichiran.html",
+      "notes": "背景地図タイルとして使用しています。"
+    }
+  ],
+  "counts": {
+    "total_buildings": 513815,
+    "known_year_count": 415456,
+    "unknown_year_count": 98359,
+    "known_year_rate": 0.8086,
+    "unknown_year_rate": 0.1914,
+    "known_usage_rate": 0.8228,
+    "known_structure_rate": 0.7911,
+    "known_storeys_rate": 0.8004,
+    "pre_1981_high_or_elevated_hazard_count": 131764,
+    "pre_1981_very_high_hazard_count": 26055,
+    "mesh_count": 2990,
+    "age_breakdown": {
+      "pre_1981": 158446,
+      "1982_2000": 131749,
+      "post_2001": 125261,
+      "unknown": 98359
+    },
+    "hazard_breakdown": {
+      "very_high": 98694,
+      "elevated": 331434,
+      "moderate": 70255,
+      "low": 13432,
+      "unknown": 0
+    }
+  }
+}
