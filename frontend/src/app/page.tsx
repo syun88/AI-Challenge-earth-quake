@@ -228,7 +228,7 @@ export default function HomePage() {
       )}
 
       {/* Main 3-column workspace */}
-      <div className="relative flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 min-h-0 overflow-hidden">
         {/* Left sidebar (desktop fixed + mobile drawer) */}
         <div className="hidden lg:block lg:w-72 shrink-0 h-full overflow-hidden">
           <LeftFilterPanel
@@ -296,7 +296,7 @@ export default function HomePage() {
         )}
 
         {/* Center Interactive Map */}
-        <main className="relative flex-1 h-full overflow-hidden">
+        <main className="relative flex-1 min-h-0 h-full overflow-hidden">
           <QuakeMap
             meshesGeoJson={meshesGeoJson}
             earthquakes={earthquakes}
