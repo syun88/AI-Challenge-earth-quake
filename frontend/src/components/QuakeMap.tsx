@@ -31,6 +31,8 @@ interface QuakeMapProps {
   onSelectMesh: (meshcode: string) => void;
 }
 
+const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
+
 const AGE_MESH_PROP_MAP: Record<AgeCategory, string> = {
   pre_1981: "pre_1981_count",
   "1982_2000": "b1982_2000_count",
@@ -60,7 +62,7 @@ export function QuakeMap({
   const reqSeqRef = useRef(0);
   const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(12);
+  const [zoom, setZoom] = useState(14.8);
   const [loadingBuildings, setLoadingBuildings] = useState(false);
   const [buildingStatus, setBuildingStatus] = useState<{
     returned: number;
@@ -94,6 +96,16 @@ export function QuakeMap({
     callbacksRef.current = { onSelectBuilding, onSelectMesh };
   }, [onSelectBuilding, onSelectMesh]);
 
+  const meshesRef = useRef<GeoJSON.FeatureCollection | null>(meshesGeoJson);
+  useEffect(() => {
+    meshesRef.current = meshesGeoJson;
+  }, [meshesGeoJson]);
+
+  const earthquakesRef = useRef<EarthquakeEvent[]>(earthquakes);
+  useEffect(() => {
+    earthquakesRef.current = earthquakes;
+  }, [earthquakes]);
+
   const fetchBuildingsForCurrentView = useCallback(async () => {
     const map = mapRef.current;
     if (!map) return;
@@ -111,7 +123,7 @@ export function QuakeMap({
 
     const f = filtersRef.current;
     if (!f.showBuildings) {
-      src.setData({ type: "FeatureCollection", features: [] });
+      src.setData(EMPTY_FC);
       setBuildingStatus(null);
       setLoadingBuildings(false);
       return;
@@ -157,7 +169,7 @@ export function QuakeMap({
 
     let map: maplibregl.Map;
     try {
-      maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
+      maplibregl.setWorkerUrl("/maplibre-gl-worker.cjs");
       map = new maplibregl.Map({
         container: containerRef.current,
         style: {
@@ -183,8 +195,8 @@ export function QuakeMap({
             },
           ],
         },
-        center: [135.7588, 34.9858],
-        zoom: 12,
+        center: [135.7645, 34.9945],
+        zoom: 14.8,
         minZoom: 4.5,
         maxZoom: 19,
       });
@@ -209,6 +221,7 @@ export function QuakeMap({
         if (map.getSource("meshes")) {
           layersInitialized = true;
           setMapReady(true);
+          fetchBuildingsForCurrentView();
           return;
         }
       } catch {
@@ -218,7 +231,7 @@ export function QuakeMap({
 
       map.addSource("meshes", {
         type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
+        data: meshesRef.current ?? EMPTY_FC,
       });
 
       map.addLayer({
@@ -267,7 +280,7 @@ export function QuakeMap({
 
       map.addSource("buildings", {
         type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
+        data: EMPTY_FC,
       });
 
       map.addLayer({
@@ -330,7 +343,14 @@ export function QuakeMap({
 
       map.addSource("earthquakes", {
         type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
+        data: {
+          type: "FeatureCollection",
+          features: earthquakesRef.current.map((q) => ({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [q.lon, q.lat] },
+            properties: { ...q },
+          })),
+        },
       });
 
       map.addLayer({
@@ -431,18 +451,35 @@ export function QuakeMap({
         }, 150);
       });
 
+      map.resize();
       setMapReady(true);
       fetchBuildingsForCurrentView();
     };
+
+    map.on("error", (e) => {
+      const msg = e.error?.message;
+      if (msg && !msg.includes("Failed to fetch")) {
+        setMapError(`地図描画エラー: ${msg}`);
+      }
+    });
 
     map.on("style.load", initMapLayers);
     map.on("load", initMapLayers);
     map.on("styledata", initMapLayers);
     initMapLayers();
 
+    const ro = new ResizeObserver(() => {
+      map.resize();
+    });
+    if (containerRef.current) {
+      ro.observe(containerRef.current);
+    }
+
     mapRef.current = map;
     return () => {
+      ro.disconnect();
       if (debounceTimer) clearTimeout(debounceTimer);
+      setMapReady(false);
       map.remove();
       mapRef.current = null;
     };
@@ -615,8 +652,11 @@ export function QuakeMap({
   }, [flyToTarget, mapReady]);
 
   return (
-    <div className="relative h-full w-full bg-slate-950">
-      <div ref={containerRef} className="h-full w-full" />
+    <div className="relative h-full w-full min-h-[360px] bg-slate-950">
+      <div
+        ref={containerRef}
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+      />
 
       {mapError && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/90 p-6 text-center text-sm text-rose-200">
@@ -636,7 +676,7 @@ export function QuakeMap({
         )}
 
         {!loadingBuildings && buildingStatus && showBuildings && (
-          <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-[11px] text-slate-200 shadow-lg backdrop-blur">
+          <div className="pointer-events-auto inline-flex flex-wrap items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-[11px] text-slate-200 shadow-lg backdrop-blur">
             <span>
               表示中の建物:{" "}
               <strong className="font-mono text-white">
@@ -644,7 +684,7 @@ export function QuakeMap({
               </strong>
               棟
               {buildingStatus.truncated &&
-                `（画面内 ${buildingStatus.total.toLocaleString("ja-JP")}棟から均等サンプリング表示）`}
+                `（範囲内 ${buildingStatus.total.toLocaleString("ja-JP")}棟から均等表示）`}
             </span>
             {zoom < 15.0 && (
               <button
@@ -658,10 +698,25 @@ export function QuakeMap({
                     duration: 700,
                   });
                 }}
-                className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-2 py-0.5 text-[11px] font-semibold text-white transition hover:bg-sky-500"
+                className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-2 py-0.5 text-[10px] font-semibold text-white transition hover:bg-sky-500"
               >
                 <ZoomIn className="h-3 w-3" />
                 ズームインして全棟表示
+              </button>
+            )}
+            {zoom >= 13.0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  mapRef.current?.flyTo({
+                    center: [135.7588, 34.9858],
+                    zoom: 12.0,
+                    duration: 700,
+                  });
+                }}
+                className="rounded border border-slate-600 bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-sky-300 transition hover:bg-slate-700"
+              >
+                京都市全域（z12）
               </button>
             )}
           </div>
@@ -690,8 +745,8 @@ export function QuakeMap({
                 type="button"
                 onClick={() => {
                   mapRef.current?.flyTo({
-                    center: [135.7588, 34.9858],
-                    zoom: 12.0,
+                    center: [135.7645, 34.9945],
+                    zoom: 14.8,
                     duration: 800,
                   });
                 }}

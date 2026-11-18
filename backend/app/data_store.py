@@ -333,8 +333,7 @@ class QuakeLensDataStore:
         total_in_bbox = int(len(df))
         truncated = total_in_bbox > limit
         if truncated:
-            # Take a uniform spatial stride across the sorted GeoDataFrame so buildings
-            # are evenly distributed across the entire visible map viewport
+            # Stride uniformly across tile-ordered rows so sampled buildings span the full viewport
             step = max(1, total_in_bbox // limit)
             df = df.iloc[::step].iloc[:limit]
 

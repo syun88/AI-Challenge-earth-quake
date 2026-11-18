@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "postinstall": "cp -f node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs public/maplibre-gl-worker.mjs"
+    "postinstall": "node -e \"const fs=require('fs');const s=fs.readFileSync('node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs','utf8').replace('export{yT as default};','').replace('//# sourceMappingURL=maplibre-gl-worker.mjs.map','');fs.writeFileSync('public/maplibre-gl-worker.cjs',s);\""
   },
   "dependencies": {
     "lucide-react": "^1.74.0",
