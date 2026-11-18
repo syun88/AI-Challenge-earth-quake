@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
-import { Loader2, ZoomIn } from "lucide-react";
+import { Loader2, ZoomIn, Box } from "lucide-react";
 import { AGE_COLORS, HAZARD_COLORS } from "@/lib/colors";
 import { getBuildingsInBbox } from "@/lib/api";
 import {
@@ -24,6 +24,8 @@ interface QuakeMapProps {
   showHazardMesh: boolean;
   meshOverlayMode: MeshOverlayMode;
   showEarthquakes: boolean;
+  is3D: boolean;
+  onToggle3D: () => void;
   selectedBuildingId: string | null;
   selectedMeshcode: string | null;
   flyToTarget: { lon: number; lat: number; zoom: number; ts: number } | null;
@@ -44,6 +46,8 @@ export function QuakeMap({
   showHazardMesh,
   meshOverlayMode,
   showEarthquakes,
+  is3D,
+  onToggle3D,
   selectedBuildingId,
   selectedMeshcode,
   flyToTarget,
@@ -297,6 +301,44 @@ export function QuakeMap({
         },
       });
 
+      map.addLayer({
+        id: "buildings-3d",
+        type: "fill-extrusion",
+        source: "buildings",
+        layout: {
+          visibility: "none",
+        },
+        paint: {
+          "fill-extrusion-color": [
+            "match",
+            ["get", "age_category"],
+            "pre_1981",
+            AGE_COLORS.pre_1981,
+            "1982_2000",
+            AGE_COLORS["1982_2000"],
+            "post_2001",
+            AGE_COLORS.post_2001,
+            AGE_COLORS.unknown,
+          ],
+          "fill-extrusion-height": [
+            "coalesce",
+            ["get", "measured_height"],
+            ["*", ["coalesce", ["get", "storeys_above"], 2], 3.2],
+            6.0,
+          ],
+          "fill-extrusion-base": 0,
+          "fill-extrusion-opacity": 0.9,
+          "fill-extrusion-vertical-gradient": true,
+        },
+      });
+
+      map.setLight({
+        anchor: "viewport",
+        color: "#ffffff",
+        intensity: 0.45,
+        position: [1.5, 210, 30],
+      });
+
       map.addSource("earthquakes", {
         type: "geojson",
         data: {
@@ -351,7 +393,9 @@ export function QuakeMap({
           return;
         }
 
-        const bldgHits = map.queryRenderedFeatures(e.point, { layers: ["buildings-fill"] });
+        const bldgHits = map.queryRenderedFeatures(e.point, {
+          layers: ["buildings-fill", "buildings-3d"],
+        });
         if (bldgHits.length > 0) {
           const bid = bldgHits[0].properties?.building_id;
           if (bid) {
@@ -373,7 +417,9 @@ export function QuakeMap({
       });
 
       map.on("mousemove", (e) => {
-        const bHits = map.queryRenderedFeatures(e.point, { layers: ["buildings-fill"] });
+        const bHits = map.queryRenderedFeatures(e.point, {
+          layers: ["buildings-fill", "buildings-3d"],
+        });
         if (bHits.length > 0) {
           map.getCanvas().style.cursor = "pointer";
           const p = bHits[0].properties || {};
@@ -468,8 +514,26 @@ export function QuakeMap({
     map.setLayoutProperty("meshes-fill", "visibility", showHazardMesh ? "visible" : "none");
     map.setLayoutProperty("meshes-line", "visibility", showHazardMesh ? "visible" : "none");
     map.setLayoutProperty("meshes-selected", "visibility", showHazardMesh ? "visible" : "none");
-    map.setLayoutProperty("buildings-fill", "visibility", showBuildings ? "visible" : "none");
-    map.setLayoutProperty("buildings-outline", "visibility", showBuildings ? "visible" : "none");
+    map.setLayoutProperty(
+      "buildings-fill",
+      "visibility",
+      showBuildings && !is3D ? "visible" : "none"
+    );
+    map.setLayoutProperty(
+      "buildings-outline",
+      "visibility",
+      showBuildings && !is3D ? "visible" : "none"
+    );
+    map.setLayoutProperty(
+      "buildings-selected",
+      "visibility",
+      showBuildings && !is3D ? "visible" : "none"
+    );
+    map.setLayoutProperty(
+      "buildings-3d",
+      "visibility",
+      showBuildings && is3D ? "visible" : "none"
+    );
     map.setLayoutProperty("earthquakes-circle", "visibility", showEarthquakes ? "visible" : "none");
 
     if (meshOverlayMode === "arv") {
@@ -508,7 +572,18 @@ export function QuakeMap({
     } else {
       map.setFilter("meshes-fill", null);
     }
-  }, [showHazardMesh, showBuildings, showEarthquakes, meshOverlayMode, hazardTiers, mapReady]);
+  }, [showHazardMesh, showBuildings, showEarthquakes, is3D, meshOverlayMode, hazardTiers, mapReady]);
+
+  // Smooth camera tilt/bearing transition when toggling 2D / 3D mode
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    map.easeTo({
+      pitch: is3D ? 55 : 0,
+      bearing: is3D ? -20 : 0,
+      duration: 750,
+    });
+  }, [is3D, mapReady]);
 
   // Update selected highlight filters
   useEffect(() => {
@@ -518,6 +593,22 @@ export function QuakeMap({
       "==",
       ["get", "building_id"],
       selectedBuildingId || "",
+    ]);
+    map.setPaintProperty("buildings-3d", "fill-extrusion-color", [
+      "case",
+      ["==", ["get", "building_id"], selectedBuildingId || ""],
+      "#22d3ee",
+      [
+        "match",
+        ["get", "age_category"],
+        "pre_1981",
+        AGE_COLORS.pre_1981,
+        "1982_2000",
+        AGE_COLORS["1982_2000"],
+        "post_2001",
+        AGE_COLORS.post_2001,
+        AGE_COLORS.unknown,
+      ],
     ]);
     map.setFilter("meshes-selected", ["==", ["get", "meshcode"], selectedMeshcode || ""]);
   }, [selectedBuildingId, selectedMeshcode, mapReady]);
@@ -596,6 +687,18 @@ export function QuakeMap({
               {buildingStatus.truncated &&
                 `（範囲内 ${buildingStatus.total.toLocaleString("ja-JP")}棟中 上限表示・ズームインで全件）`}
             </span>
+            <button
+              type="button"
+              onClick={onToggle3D}
+              className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] font-semibold transition ${
+                is3D
+                  ? "border-amber-500/60 bg-amber-600/30 text-amber-200 hover:bg-amber-600/40"
+                  : "border-slate-600 bg-slate-800 text-slate-200 hover:bg-slate-700"
+              }`}
+            >
+              <Box className="h-3 w-3" />
+              {is3D ? "2Dに戻す" : "3D表示"}
+            </button>
             <button
               type="button"
               onClick={() => {

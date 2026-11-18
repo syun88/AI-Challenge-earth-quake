@@ -8,6 +8,7 @@ import {
   RotateCcw,
   AlertTriangle,
   Activity,
+  Box,
 } from "lucide-react";
 import {
   AGE_COLORS,
@@ -40,6 +41,8 @@ interface LeftFilterPanelProps {
   onChangeMeshOverlayMode: (mode: MeshOverlayMode) => void;
   showEarthquakes: boolean;
   onToggleEarthquakes: () => void;
+  is3D: boolean;
+  onChangeIs3D: (v: boolean) => void;
   onResetFilters: () => void;
   selectedMeshcode: string | null;
   onClearMeshcode: () => void;
@@ -66,6 +69,8 @@ export function LeftFilterPanel({
   onChangeMeshOverlayMode,
   showEarthquakes,
   onToggleEarthquakes,
+  is3D,
+  onChangeIs3D,
   onResetFilters,
   selectedMeshcode,
   onClearMeshcode,
@@ -121,15 +126,50 @@ export function LeftFilterPanel({
           地図レイヤー表示
         </h2>
         <div className="space-y-2">
-          <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 hover:border-slate-700">
-            <span className="text-slate-200">建物ポリゴン（ズーム13.5+）</span>
-            <input
-              type="checkbox"
-              checked={showBuildings}
-              onChange={onToggleBuildings}
-              className="h-4 w-4 accent-sky-500"
-            />
-          </label>
+          <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2">
+            <label className="flex cursor-pointer items-center justify-between">
+              <span className="text-slate-200">建物ポリゴン（ズーム13.5+）</span>
+              <input
+                type="checkbox"
+                checked={showBuildings}
+                onChange={onToggleBuildings}
+                className="h-4 w-4 accent-sky-500"
+              />
+            </label>
+            {showBuildings && (
+              <div className="mt-2">
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => onChangeIs3D(false)}
+                    className={`rounded px-2 py-1 text-[11px] font-medium transition ${
+                      !is3D
+                        ? "border border-sky-500/50 bg-sky-600/30 text-sky-200"
+                        : "border border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    2D 平面
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onChangeIs3D(true)}
+                    className={`inline-flex items-center justify-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition ${
+                      is3D
+                        ? "border border-amber-500/50 bg-amber-600/30 text-amber-200"
+                        : "border border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    <Box className="h-3 w-3" /> 3D 立体
+                  </button>
+                </div>
+                {is3D && (
+                  <p className="mt-1.5 text-[10px] leading-snug text-slate-400">
+                    PLATEAU実測高さ（判明率98.2%）で立体表示中。右ドラッグ/Ctrl+ドラッグで回転・傾き調整。
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2">
             <label className="flex cursor-pointer items-center justify-between">

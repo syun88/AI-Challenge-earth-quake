@@ -55,6 +55,7 @@ export default function HomePage() {
   const [showHazardMesh, setShowHazardMesh] = useState(true);
   const [meshOverlayMode, setMeshOverlayMode] = useState<MeshOverlayMode>("hazard");
   const [showEarthquakes, setShowEarthquakes] = useState(false);
+  const [is3D, setIs3D] = useState(false);
 
   // Selection & UI state
   const [activeTab, setActiveTab] = useState<RightTab>("stats");
@@ -249,6 +250,8 @@ export default function HomePage() {
             onChangeMeshOverlayMode={setMeshOverlayMode}
             showEarthquakes={showEarthquakes}
             onToggleEarthquakes={() => setShowEarthquakes((v) => !v)}
+            is3D={is3D}
+            onChangeIs3D={setIs3D}
             onResetFilters={handleResetFilters}
             selectedMeshcode={selectedMeshcode}
             onClearMeshcode={() => setSelectedMeshcode(null)}
@@ -283,6 +286,8 @@ export default function HomePage() {
                 onChangeMeshOverlayMode={setMeshOverlayMode}
                 showEarthquakes={showEarthquakes}
                 onToggleEarthquakes={() => setShowEarthquakes((v) => !v)}
+                is3D={is3D}
+                onChangeIs3D={setIs3D}
                 onResetFilters={handleResetFilters}
                 selectedMeshcode={selectedMeshcode}
                 onClearMeshcode={() => setSelectedMeshcode(null)}
@@ -308,6 +313,8 @@ export default function HomePage() {
             showHazardMesh={showHazardMesh}
             meshOverlayMode={meshOverlayMode}
             showEarthquakes={showEarthquakes}
+            is3D={is3D}
+            onToggle3D={() => setIs3D((v) => !v)}
             selectedBuildingId={selectedBuilding?.building_id ?? null}
             selectedMeshcode={selectedMeshcode}
             flyToTarget={flyToTarget}
