@@ -27,13 +27,14 @@ for _ in $(seq 1 30); do
   sleep 0.5
 done
 
-echo "2/2 Starting Next.js frontend on http://localhost:3000 ..."
+echo "2/2 Building & starting Next.js frontend on http://localhost:3000 ..."
 (
   cd "$ROOT_DIR/frontend"
   if [[ ! -d node_modules ]]; then
     npm install
   fi
-  exec npm run dev -- --port 3000
+  npm run build
+  exec npm run start -- --port 3000
 ) &
 FRONT_PID=$!
 

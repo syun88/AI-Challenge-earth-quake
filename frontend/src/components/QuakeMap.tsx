@@ -31,6 +31,8 @@ interface QuakeMapProps {
   onSelectMesh: (meshcode: string) => void;
 }
 
+const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
+
 export function QuakeMap({
   meshesGeoJson,
   earthquakes,
@@ -52,7 +54,7 @@ export function QuakeMap({
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(12);
+  const [zoom, setZoom] = useState(14.8);
   const [loadingBuildings, setLoadingBuildings] = useState(false);
   const [buildingStatus, setBuildingStatus] = useState<{
     returned: number;
@@ -83,6 +85,16 @@ export function QuakeMap({
   useEffect(() => {
     callbacksRef.current = { onSelectBuilding, onSelectMesh };
   }, [onSelectBuilding, onSelectMesh]);
+
+  const meshesRef = useRef<GeoJSON.FeatureCollection | null>(meshesGeoJson);
+  useEffect(() => {
+    meshesRef.current = meshesGeoJson;
+  }, [meshesGeoJson]);
+
+  const earthquakesRef = useRef<EarthquakeEvent[]>(earthquakes);
+  useEffect(() => {
+    earthquakesRef.current = earthquakes;
+  }, [earthquakes]);
 
   const fetchBuildingsForCurrentView = async () => {
     const map = mapRef.current;
@@ -160,8 +172,8 @@ export function QuakeMap({
             },
           ],
         },
-        center: [135.7588, 34.9858],
-        zoom: 12,
+        center: [135.7645, 34.9945],
+        zoom: 14.8,
         minZoom: 10,
         maxZoom: 19,
       });
@@ -191,7 +203,7 @@ export function QuakeMap({
 
       map.addSource("meshes", {
         type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
+        data: meshesRef.current ?? EMPTY_FC,
       });
 
       map.addLayer({
@@ -287,7 +299,14 @@ export function QuakeMap({
 
       map.addSource("earthquakes", {
         type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
+        data: {
+          type: "FeatureCollection",
+          features: earthquakesRef.current.map((q) => ({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [q.lon, q.lat] },
+            properties: { ...q },
+          })),
+        },
       });
 
       map.addLayer({
@@ -411,6 +430,7 @@ export function QuakeMap({
     return () => {
       ro.disconnect();
       if (debounceTimer) clearTimeout(debounceTimer);
+      setMapReady(false);
       map.remove();
       mapRef.current = null;
     };
@@ -566,7 +586,7 @@ export function QuakeMap({
         )}
 
         {!loadingBuildings && buildingStatus && showBuildings && zoom >= 13.5 && (
-          <div className="inline-flex items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-[11px] text-slate-200 shadow-lg">
+          <div className="pointer-events-auto inline-flex flex-wrap items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-[11px] text-slate-200 shadow-lg">
             <span>
               表示中の建物:{" "}
               <strong className="font-mono text-white">
@@ -576,6 +596,19 @@ export function QuakeMap({
               {buildingStatus.truncated &&
                 `（範囲内 ${buildingStatus.total.toLocaleString("ja-JP")}棟中 上限表示・ズームインで全件）`}
             </span>
+            <button
+              type="button"
+              onClick={() => {
+                mapRef.current?.flyTo({
+                  center: [135.7588, 34.9858],
+                  zoom: 12.0,
+                  duration: 700,
+                });
+              }}
+              className="rounded border border-slate-600 bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-sky-300 transition hover:bg-slate-700"
+            >
+              京都市全域（z12）
+            </button>
           </div>
         )}
       </div>
