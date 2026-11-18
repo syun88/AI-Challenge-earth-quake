@@ -1,7 +1,7 @@
 export type AgeCategory = "pre_1981" | "1982_2000" | "post_2001" | "unknown";
 export type HazardTier = "very_high" | "elevated" | "moderate" | "low" | "unknown";
 export type UsageGroup = "all" | "residential" | "non_residential";
-export type MeshOverlayMode = "hazard" | "arv";
+export type MeshOverlayMode = "hazard" | "arv" | "pre1981";
 
 export interface DataSourceInfo {
   id: string;

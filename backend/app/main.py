@@ -153,6 +153,8 @@ def get_mesh_detail(meshcode: str) -> dict[str, Any]:
 @app.get("/api/priority-areas")
 def get_priority_areas(
     ward: str | None = Query(default=None),
+    hazard_tiers: str | None = Query(default=None),
+    usage_group: str | None = Query(default=None),
     min_t30_i55: float = Query(default=0.0, ge=0.0, le=1.0),
     min_buildings: int = Query(default=20, ge=1),
     sort_by: str = Query(default="pre_1981_high_hazard"),
@@ -160,6 +162,8 @@ def get_priority_areas(
 ) -> dict[str, Any]:
     areas = _require_store().get_priority_areas(
         ward=ward,
+        hazard_tiers=_split_csv(hazard_tiers),
+        usage_group=usage_group,
         min_t30_i55=min_t30_i55,
         min_buildings=min_buildings,
         sort_by=sort_by,

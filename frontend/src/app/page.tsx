@@ -113,12 +113,14 @@ export default function HomePage() {
     })();
   }, [selectedWard, ageCategories, hazardTiers, usageGroup, selectedMeshcode]);
 
-  // Refresh priority areas whenever ward or sortBy changes
+  // Refresh priority areas whenever ward, hazardTiers, usageGroup, or sortBy changes
   useEffect(() => {
     (async () => {
       try {
         const res = await getPriorityAreas({
           ward: selectedWard,
+          hazardTiers,
+          usageGroup,
           sortBy,
           limit: 20,
         });
@@ -127,17 +129,22 @@ export default function HomePage() {
         // ignore transient errors
       }
     })();
-  }, [selectedWard, sortBy]);
+  }, [selectedWard, hazardTiers, usageGroup, sortBy]);
 
   const handleSelectWard = useCallback((ward: string) => {
     setSelectedWard(ward);
     setSelectedMeshcode(null);
+    setSelectedMesh(null);
     const center = WARD_CENTERS[ward] || WARD_CENTERS.all;
     setFlyToTarget({ ...center, ts: Date.now() });
   }, []);
 
   const handleToggleAgeCategory = useCallback((cat: AgeCategory) => {
     setAgeCategories((prev) => {
+      // When all categories are active, clicking one solos that category
+      if (prev.length === DEFAULT_AGES.length) {
+        return [cat];
+      }
       if (prev.includes(cat)) {
         const next = prev.filter((c) => c !== cat);
         return next.length === 0 ? DEFAULT_AGES : next;
@@ -148,6 +155,10 @@ export default function HomePage() {
 
   const handleToggleHazardTier = useCallback((tier: HazardTier) => {
     setHazardTiers((prev) => {
+      // When all hazard tiers are active, clicking one solos that tier
+      if (prev.length === DEFAULT_HAZARDS.length) {
+        return [tier];
+      }
       if (prev.includes(tier)) {
         const next = prev.filter((t) => t !== tier);
         return next.length === 0 ? DEFAULT_HAZARDS : next;
@@ -162,7 +173,14 @@ export default function HomePage() {
     setHazardTiers(DEFAULT_HAZARDS);
     setUsageGroup("all");
     setSelectedMeshcode(null);
+    setSelectedMesh(null);
+    setSelectedBuilding(null);
     setFlyToTarget({ ...WARD_CENTERS.all, ts: Date.now() });
+  }, []);
+
+  const handleClearMeshcode = useCallback(() => {
+    setSelectedMeshcode(null);
+    setSelectedMesh(null);
   }, []);
 
   const handleSelectBuilding = useCallback(async (buildingId: string) => {
@@ -188,21 +206,29 @@ export default function HomePage() {
     }
   }, []);
 
-  const handleSelectPriorityArea = useCallback(async (area: PriorityArea) => {
-    setSelectedMeshcode(area.meshcode);
-    setFlyToTarget({
-      lon: area.centroid_lon,
-      lat: area.centroid_lat,
-      zoom: 15.6,
-      ts: Date.now(),
-    });
-    try {
-      const detail = await getMeshDetail(area.meshcode);
-      setSelectedMesh(detail);
-    } catch {
-      // ignore
-    }
-  }, []);
+  const handleSelectPriorityArea = useCallback(
+    async (area: PriorityArea) => {
+      if (selectedMeshcode === area.meshcode) {
+        setSelectedMeshcode(null);
+        setSelectedMesh(null);
+        return;
+      }
+      setSelectedMeshcode(area.meshcode);
+      setFlyToTarget({
+        lon: area.centroid_lon,
+        lat: area.centroid_lat,
+        zoom: 15.6,
+        ts: Date.now(),
+      });
+      try {
+        const detail = await getMeshDetail(area.meshcode);
+        setSelectedMesh(detail);
+      } catch {
+        // ignore
+      }
+    },
+    [selectedMeshcode]
+  );
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-950">
@@ -237,8 +263,10 @@ export default function HomePage() {
             onSelectWard={handleSelectWard}
             ageCategories={ageCategories}
             onToggleAgeCategory={handleToggleAgeCategory}
+            onSelectAllAges={() => setAgeCategories(DEFAULT_AGES)}
             hazardTiers={hazardTiers}
             onToggleHazardTier={handleToggleHazardTier}
+            onSelectAllHazards={() => setHazardTiers(DEFAULT_HAZARDS)}
             usageGroup={usageGroup}
             onChangeUsageGroup={setUsageGroup}
             showBuildings={showBuildings}
@@ -251,7 +279,7 @@ export default function HomePage() {
             onToggleEarthquakes={() => setShowEarthquakes((v) => !v)}
             onResetFilters={handleResetFilters}
             selectedMeshcode={selectedMeshcode}
-            onClearMeshcode={() => setSelectedMeshcode(null)}
+            onClearMeshcode={handleClearMeshcode}
           />
         </div>
 
@@ -271,8 +299,10 @@ export default function HomePage() {
                 onSelectWard={handleSelectWard}
                 ageCategories={ageCategories}
                 onToggleAgeCategory={handleToggleAgeCategory}
+                onSelectAllAges={() => setAgeCategories(DEFAULT_AGES)}
                 hazardTiers={hazardTiers}
                 onToggleHazardTier={handleToggleHazardTier}
+                onSelectAllHazards={() => setHazardTiers(DEFAULT_HAZARDS)}
                 usageGroup={usageGroup}
                 onChangeUsageGroup={setUsageGroup}
                 showBuildings={showBuildings}
@@ -285,7 +315,7 @@ export default function HomePage() {
                 onToggleEarthquakes={() => setShowEarthquakes((v) => !v)}
                 onResetFilters={handleResetFilters}
                 selectedMeshcode={selectedMeshcode}
-                onClearMeshcode={() => setSelectedMeshcode(null)}
+                onClearMeshcode={handleClearMeshcode}
               />
             </div>
             <div
@@ -328,7 +358,10 @@ export default function HomePage() {
             onSelectPriorityArea={handleSelectPriorityArea}
             selectedBuilding={selectedBuilding}
             selectedMesh={selectedMesh}
+            selectedMeshcode={selectedMeshcode}
             selectedWard={selectedWard}
+            ageCategories={ageCategories}
+            hazardTiers={hazardTiers}
             onToggleAgeCategory={handleToggleAgeCategory}
             onToggleHazardTier={handleToggleHazardTier}
           />
@@ -358,7 +391,10 @@ export default function HomePage() {
                 onSelectPriorityArea={handleSelectPriorityArea}
                 selectedBuilding={selectedBuilding}
                 selectedMesh={selectedMesh}
+                selectedMeshcode={selectedMeshcode}
                 selectedWard={selectedWard}
+                ageCategories={ageCategories}
+                hazardTiers={hazardTiers}
                 onToggleAgeCategory={handleToggleAgeCategory}
                 onToggleHazardTier={handleToggleHazardTier}
               />

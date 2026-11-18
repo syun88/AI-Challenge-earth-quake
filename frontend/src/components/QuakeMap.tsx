@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import * as maplibregl from "maplibre-gl";
-import { Loader2, ZoomIn } from "lucide-react";
+import { Loader2, ZoomIn, Activity, RotateCcw } from "lucide-react";
 import { AGE_COLORS, HAZARD_COLORS } from "@/lib/colors";
 import { getBuildingsInBbox } from "@/lib/api";
 import {
@@ -31,6 +31,13 @@ interface QuakeMapProps {
   onSelectMesh: (meshcode: string) => void;
 }
 
+const AGE_MESH_PROP_MAP: Record<AgeCategory, string> = {
+  pre_1981: "pre_1981_count",
+  "1982_2000": "b1982_2000_count",
+  post_2001: "post_2001_count",
+  unknown: "unknown_year_count",
+};
+
 export function QuakeMap({
   meshesGeoJson,
   earthquakes,
@@ -50,6 +57,7 @@ export function QuakeMap({
 }: QuakeMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const reqSeqRef = useRef(0);
   const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(12);
@@ -68,6 +76,7 @@ export function QuakeMap({
     hazardTiers,
     usageGroup,
     showBuildings,
+    selectedMeshcode,
   });
   useEffect(() => {
     filtersRef.current = {
@@ -76,31 +85,40 @@ export function QuakeMap({
       hazardTiers,
       usageGroup,
       showBuildings,
+      selectedMeshcode,
     };
-  }, [selectedWard, ageCategories, hazardTiers, usageGroup, showBuildings]);
+  }, [selectedWard, ageCategories, hazardTiers, usageGroup, showBuildings, selectedMeshcode]);
 
   const callbacksRef = useRef({ onSelectBuilding, onSelectMesh });
   useEffect(() => {
     callbacksRef.current = { onSelectBuilding, onSelectMesh };
   }, [onSelectBuilding, onSelectMesh]);
 
-  const fetchBuildingsForCurrentView = async () => {
+  const fetchBuildingsForCurrentView = useCallback(async () => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
-    const f = filtersRef.current;
+    if (!map) return;
+
     const currentZoom = map.getZoom();
     setZoom(currentZoom);
 
-    const src = map.getSource("buildings") as maplibregl.GeoJSONSource | undefined;
+    let src: maplibregl.GeoJSONSource | undefined;
+    try {
+      src = map.getSource("buildings") as maplibregl.GeoJSONSource | undefined;
+    } catch {
+      return;
+    }
     if (!src) return;
 
-    if (!f.showBuildings || currentZoom < 13.5) {
+    const f = filtersRef.current;
+    if (!f.showBuildings) {
       src.setData({ type: "FeatureCollection", features: [] });
       setBuildingStatus(null);
+      setLoadingBuildings(false);
       return;
     }
 
     const b = map.getBounds();
+    const seq = ++reqSeqRef.current;
     setLoadingBuildings(true);
     try {
       const fc = await getBuildingsInBbox(
@@ -110,10 +128,13 @@ export function QuakeMap({
           ageCategories: f.ageCategories,
           hazardTiers: f.hazardTiers,
           usageGroup: f.usageGroup,
+          meshcode: f.selectedMeshcode,
         },
         3500
       );
-      src.setData(fc);
+      if (seq !== reqSeqRef.current) return;
+      const latestSrc = map.getSource("buildings") as maplibregl.GeoJSONSource | undefined;
+      latestSrc?.setData(fc);
       if (fc.meta) {
         setBuildingStatus({
           returned: fc.meta.returned,
@@ -122,11 +143,13 @@ export function QuakeMap({
         });
       }
     } catch {
-      // keep previous layer data on transient network abort
+      // keep previous layer data on transient network error
     } finally {
-      setLoadingBuildings(false);
+      if (seq === reqSeqRef.current) {
+        setLoadingBuildings(false);
+      }
     }
-  };
+  }, []);
 
   // Initialize MapLibre once
   useEffect(() => {
@@ -162,7 +185,7 @@ export function QuakeMap({
         },
         center: [135.7588, 34.9858],
         zoom: 12,
-        minZoom: 10,
+        minZoom: 4.5,
         maxZoom: 19,
       });
     } catch (err) {
@@ -181,10 +204,14 @@ export function QuakeMap({
     let layersInitialized = false;
 
     const initMapLayers = () => {
-      if (layersInitialized || !map.isStyleLoaded()) return;
-      if (map.getSource("meshes")) {
-        layersInitialized = true;
-        setMapReady(true);
+      if (layersInitialized || !map.style) return;
+      try {
+        if (map.getSource("meshes")) {
+          layersInitialized = true;
+          setMapReady(true);
+          return;
+        }
+      } catch {
         return;
       }
       layersInitialized = true;
@@ -212,7 +239,7 @@ export function QuakeMap({
             HAZARD_COLORS.low,
             HAZARD_COLORS.unknown,
           ],
-          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.58, 14, 0.34, 16, 0.2],
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.56, 14, 0.32, 16, 0.18],
         },
       });
 
@@ -259,7 +286,7 @@ export function QuakeMap({
             AGE_COLORS.post_2001,
             AGE_COLORS.unknown,
           ],
-          "fill-opacity": 0.86,
+          "fill-opacity": 0.88,
         },
       });
 
@@ -268,9 +295,25 @@ export function QuakeMap({
         type: "line",
         source: "buildings",
         paint: {
-          "line-color": "#0f172a",
-          "line-width": 0.65,
-          "line-opacity": 0.75,
+          "line-color": [
+            "step",
+            ["zoom"],
+            [
+              "match",
+              ["get", "age_category"],
+              "pre_1981",
+              AGE_COLORS.pre_1981,
+              "1982_2000",
+              AGE_COLORS["1982_2000"],
+              "post_2001",
+              AGE_COLORS.post_2001,
+              AGE_COLORS.unknown,
+            ],
+            15,
+            "#0f172a",
+          ],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 11, 2.0, 14, 1.3, 15.5, 0.65],
+          "line-opacity": 0.88,
         },
       });
 
@@ -281,7 +324,7 @@ export function QuakeMap({
         filter: ["==", ["get", "building_id"], ""],
         paint: {
           "line-color": "#22d3ee",
-          "line-width": 2.8,
+          "line-width": 3,
         },
       });
 
@@ -300,16 +343,16 @@ export function QuakeMap({
             ["linear"],
             ["coalesce", ["get", "mag"], 2],
             1,
-            5,
-            4,
-            10,
             6,
-            16,
+            4,
+            11,
+            6,
+            18,
           ],
           "circle-color": "#f43f5e",
-          "circle-opacity": 0.72,
+          "circle-opacity": 0.82,
           "circle-stroke-color": "#ffffff",
-          "circle-stroke-width": 1.5,
+          "circle-stroke-width": 1.8,
         },
       });
 
@@ -332,7 +375,7 @@ export function QuakeMap({
           return;
         }
 
-        const bldgHits = map.queryRenderedFeatures(e.point, { layers: ["buildings-fill"] });
+        const bldgHits = map.queryRenderedFeatures(e.point, { layers: ["buildings-fill", "buildings-outline"] });
         if (bldgHits.length > 0) {
           const bid = bldgHits[0].properties?.building_id;
           if (bid) {
@@ -354,7 +397,7 @@ export function QuakeMap({
       });
 
       map.on("mousemove", (e) => {
-        const bHits = map.queryRenderedFeatures(e.point, { layers: ["buildings-fill"] });
+        const bHits = map.queryRenderedFeatures(e.point, { layers: ["buildings-fill", "buildings-outline"] });
         if (bHits.length > 0) {
           map.getCanvas().style.cursor = "pointer";
           const p = bHits[0].properties || {};
@@ -376,21 +419,26 @@ export function QuakeMap({
         setHoverInfo(null);
       });
 
+      map.on("zoom", () => {
+        setZoom(map.getZoom());
+      });
+
       map.on("moveend", () => {
+        setZoom(map.getZoom());
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
           fetchBuildingsForCurrentView();
-        }, 200);
+        }, 150);
       });
 
       setMapReady(true);
+      fetchBuildingsForCurrentView();
     };
 
     map.on("style.load", initMapLayers);
     map.on("load", initMapLayers);
-    if (map.isStyleLoaded()) {
-      initMapLayers();
-    }
+    map.on("styledata", initMapLayers);
+    initMapLayers();
 
     mapRef.current = map;
     return () => {
@@ -398,7 +446,7 @@ export function QuakeMap({
       map.remove();
       mapRef.current = null;
     };
-  }, []);
+  }, [fetchBuildingsForCurrentView]);
 
   // Update 250m meshes GeoJSON
   useEffect(() => {
@@ -424,7 +472,7 @@ export function QuakeMap({
     });
   }, [earthquakes, mapReady]);
 
-  // Update layer visibility & mesh coloring mode
+  // Update layer visibility, mesh coloring mode, and mesh filter expressions
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
@@ -434,6 +482,7 @@ export function QuakeMap({
     map.setLayoutProperty("meshes-selected", "visibility", showHazardMesh ? "visible" : "none");
     map.setLayoutProperty("buildings-fill", "visibility", showBuildings ? "visible" : "none");
     map.setLayoutProperty("buildings-outline", "visibility", showBuildings ? "visible" : "none");
+    map.setLayoutProperty("buildings-selected", "visibility", showBuildings ? "visible" : "none");
     map.setLayoutProperty("earthquakes-circle", "visibility", showEarthquakes ? "visible" : "none");
 
     if (meshOverlayMode === "arv") {
@@ -449,6 +498,20 @@ export function QuakeMap({
         "#14b8a6",
         2.0,
         "#0f766e",
+      ]);
+    } else if (meshOverlayMode === "pre1981") {
+      map.setPaintProperty("meshes-fill", "fill-color", [
+        "step",
+        ["coalesce", ["get", "pre_1981_share_known"], 0],
+        "#334155",
+        0.01,
+        "#fef3c7",
+        0.25,
+        "#fdba74",
+        0.45,
+        "#f97316",
+        0.65,
+        "#c2410c",
       ]);
     } else {
       map.setPaintProperty("meshes-fill", "fill-color", [
@@ -466,13 +529,52 @@ export function QuakeMap({
       ]);
     }
 
-    // Apply hazard tier filter on meshes layer as well
-    if (hazardTiers.length > 0 && hazardTiers.length < 4) {
-      map.setFilter("meshes-fill", ["in", ["get", "hazard_tier"], ["literal", hazardTiers]]);
-    } else {
-      map.setFilter("meshes-fill", null);
+    // Build combined filter expression for 250m meshes so ALL filter buttons visually reflect on the mesh layer too
+    const meshConditions: maplibregl.FilterSpecification[] = [];
+    if (selectedWard && selectedWard !== "all") {
+      meshConditions.push(["==", ["get", "ward_name"], selectedWard]);
     }
-  }, [showHazardMesh, showBuildings, showEarthquakes, meshOverlayMode, hazardTiers, mapReady]);
+    if (hazardTiers.length > 0 && hazardTiers.length < 4) {
+      meshConditions.push(["in", ["get", "hazard_tier"], ["literal", hazardTiers]]);
+    }
+    if (ageCategories.length > 0 && ageCategories.length < 4) {
+      const sumTerms = ageCategories.map(
+        (cat) => ["coalesce", ["get", AGE_MESH_PROP_MAP[cat]], 0] as unknown as maplibregl.ExpressionSpecification
+      );
+      const sumExpr =
+        sumTerms.length === 1 ? sumTerms[0] : (["+", ...sumTerms] as unknown as maplibregl.ExpressionSpecification);
+      meshConditions.push([">", sumExpr, 0]);
+    }
+    if (usageGroup === "residential") {
+      meshConditions.push([">", ["coalesce", ["get", "residential_count"], 0], 0]);
+    } else if (usageGroup === "non_residential") {
+      meshConditions.push([
+        ">",
+        ["-", ["coalesce", ["get", "total_buildings"], 0], ["coalesce", ["get", "residential_count"], 0]],
+        0,
+      ]);
+    }
+
+    const combinedMeshFilter: maplibregl.FilterSpecification | null =
+      meshConditions.length === 0
+        ? null
+        : meshConditions.length === 1
+          ? meshConditions[0]
+          : (["all", ...meshConditions] as unknown as maplibregl.FilterSpecification);
+
+    map.setFilter("meshes-fill", combinedMeshFilter);
+    map.setFilter("meshes-line", combinedMeshFilter);
+  }, [
+    showHazardMesh,
+    showBuildings,
+    showEarthquakes,
+    meshOverlayMode,
+    selectedWard,
+    hazardTiers,
+    ageCategories,
+    usageGroup,
+    mapReady,
+  ]);
 
   // Update selected highlight filters
   useEffect(() => {
@@ -490,7 +592,16 @@ export function QuakeMap({
   useEffect(() => {
     if (!mapReady) return;
     fetchBuildingsForCurrentView();
-  }, [selectedWard, ageCategories, hazardTiers, usageGroup, showBuildings, mapReady]);
+  }, [
+    selectedWard,
+    ageCategories,
+    hazardTiers,
+    usageGroup,
+    showBuildings,
+    selectedMeshcode,
+    mapReady,
+    fetchBuildingsForCurrentView,
+  ]);
 
   // FlyTo trigger (ward change or priority area click)
   useEffect(() => {
@@ -499,7 +610,7 @@ export function QuakeMap({
     map.flyTo({
       center: [flyToTarget.lon, flyToTarget.lat],
       zoom: flyToTarget.zoom,
-      duration: 900,
+      duration: 800,
     });
   }, [flyToTarget, mapReady]);
 
@@ -517,37 +628,15 @@ export function QuakeMap({
 
       {/* Top-left floating status pills */}
       <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-col gap-1.5">
-        {zoom < 13.5 && showBuildings && (
-          <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-xs text-slate-200 shadow-lg backdrop-blur">
-            <ZoomIn className="h-3.5 w-3.5 text-sky-400" />
-            <span>
-              現在ズーム z{zoom.toFixed(1)}（250mメッシュ表示中）
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                mapRef.current?.flyTo({
-                  center: mapRef.current.getCenter(),
-                  zoom: 15.2,
-                  duration: 700,
-                });
-              }}
-              className="rounded-md bg-sky-600 px-2 py-0.5 text-[11px] font-semibold text-white transition hover:bg-sky-500"
-            >
-              ズームインして建物表示
-            </button>
-          </div>
-        )}
-
         {loadingBuildings && (
-          <div className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-slate-900/90 px-3 py-1.5 text-xs text-sky-200 shadow-lg">
+          <div className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-slate-900/90 px-3 py-1.5 text-xs text-sky-200 shadow-lg backdrop-blur">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span>建物データを読み込み中...</span>
+            <span>建物データを更新中...</span>
           </div>
         )}
 
-        {!loadingBuildings && buildingStatus && showBuildings && zoom >= 13.5 && (
-          <div className="inline-flex items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-[11px] text-slate-200 shadow-lg">
+        {!loadingBuildings && buildingStatus && showBuildings && (
+          <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-[11px] text-slate-200 shadow-lg backdrop-blur">
             <span>
               表示中の建物:{" "}
               <strong className="font-mono text-white">
@@ -555,22 +644,89 @@ export function QuakeMap({
               </strong>
               棟
               {buildingStatus.truncated &&
-                `（範囲内 ${buildingStatus.total.toLocaleString("ja-JP")}棟中 上限表示・ズームインで全件）`}
+                `（画面内 ${buildingStatus.total.toLocaleString("ja-JP")}棟から均等サンプリング表示）`}
             </span>
+            {zoom < 15.0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const map = mapRef.current;
+                  if (!map) return;
+                  map.flyTo({
+                    center: map.getCenter(),
+                    zoom: 15.5,
+                    duration: 700,
+                  });
+                }}
+                className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-2 py-0.5 text-[11px] font-semibold text-white transition hover:bg-sky-500"
+              >
+                <ZoomIn className="h-3 w-3" />
+                ズームインして全棟表示
+              </button>
+            )}
+          </div>
+        )}
+
+        {showEarthquakes && (
+          <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-lg border border-rose-500/40 bg-slate-900/90 px-3 py-1.5 text-[11px] text-rose-200 shadow-lg backdrop-blur">
+            <Activity className="h-3.5 w-3.5 text-rose-400" />
+            <span>気象庁 直近震源: {earthquakes.length}件</span>
+            {zoom > 7.5 ? (
+              <button
+                type="button"
+                onClick={() => {
+                  mapRef.current?.flyTo({
+                    center: [136.0, 35.5],
+                    zoom: 5.8,
+                    duration: 800,
+                  });
+                }}
+                className="rounded-md bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white transition hover:bg-rose-500"
+              >
+                広域で震源を見る
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  mapRef.current?.flyTo({
+                    center: [135.7588, 34.9858],
+                    zoom: 12.0,
+                    duration: 800,
+                  });
+                }}
+                className="inline-flex items-center gap-1 rounded-md bg-slate-700 px-2 py-0.5 text-[11px] font-semibold text-white transition hover:bg-slate-600"
+              >
+                <RotateCcw className="h-3 w-3" />
+                京都市に戻る
+              </button>
+            )}
           </div>
         )}
       </div>
 
-      {/* Bottom-left hover bar & ARV legend */}
+      {/* Bottom-left hover bar & Mesh legends */}
       <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex flex-col gap-2 max-w-[85%]">
         {showHazardMesh && meshOverlayMode === "arv" && (
           <div className="rounded-lg border border-slate-700 bg-slate-900/90 px-3 py-2 text-[11px] text-slate-200 shadow-lg backdrop-blur">
             <div className="mb-1 font-semibold text-teal-300">表層地盤 最大速度増幅率（ARV）</div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#ccfbf1]" /> &lt;1.2</span>
               <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#5eead4]" /> 1.2–1.6</span>
               <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#14b8a6]" /> 1.6–2.0</span>
               <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#0f766e]" /> 2.0+（揺れ増幅大）</span>
+            </div>
+          </div>
+        )}
+
+        {showHazardMesh && meshOverlayMode === "pre1981" && (
+          <div className="rounded-lg border border-slate-700 bg-slate-900/90 px-3 py-2 text-[11px] text-slate-200 shadow-lg backdrop-blur">
+            <div className="mb-1 font-semibold text-orange-300">250mメッシュ内 1981年以前建築の割合（判明分）</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#fef3c7]" /> &lt;25%</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#fdba74]" /> 25–45%</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#f97316]" /> 45–65%</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[#c2410c]" /> 65%+（高密集）</span>
             </div>
           </div>
         )}

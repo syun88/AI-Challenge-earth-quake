@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Ensure uv, node/npm (nvm), homebrew, and conda paths are available even in non-login shells
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/opt/anaconda3/bin:$PATH"
+[[ -f "$HOME/.local/bin/env" ]] && source "$HOME/.local/bin/env"
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+[[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
+
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cleanup() {
@@ -20,7 +26,7 @@ echo "1/2 Starting FastAPI backend on http://127.0.0.1:8000 ..."
 BACK_PID=$!
 
 # Wait briefly for backend health check
-for _ in $(seq 1 30); do
+for _ in $(seq 1 40); do
   if curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
     break
   fi

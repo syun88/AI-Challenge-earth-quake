@@ -82,12 +82,20 @@ export function getMeshDetail(meshcode: string) {
 
 export function getPriorityAreas(params: {
   ward?: string;
+  hazardTiers?: string[];
+  usageGroup?: string;
   sortBy?: string;
   minT30I55?: number;
   limit?: number;
 }) {
   const sp = new URLSearchParams();
   if (params.ward && params.ward !== "all") sp.set("ward", params.ward);
+  if (params.hazardTiers && params.hazardTiers.length > 0 && params.hazardTiers.length < 4) {
+    sp.set("hazard_tiers", params.hazardTiers.join(","));
+  }
+  if (params.usageGroup && params.usageGroup !== "all") {
+    sp.set("usage_group", params.usageGroup);
+  }
   if (params.sortBy) sp.set("sort_by", params.sortBy);
   if (params.minT30I55 !== undefined && params.minT30I55 > 0) {
     sp.set("min_t30_i55", String(params.minT30I55));
@@ -115,6 +123,9 @@ export function getBuildingsInBbox(
   }
   if (params.usageGroup && params.usageGroup !== "all") {
     sp.set("usage_group", params.usageGroup);
+  }
+  if (params.meshcode) {
+    sp.set("meshcode", params.meshcode);
   }
   return fetchJson<
     GeoJSON.FeatureCollection & {

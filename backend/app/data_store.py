@@ -230,6 +230,8 @@ class QuakeLensDataStore:
     def get_priority_areas(
         self,
         ward: str | None = None,
+        hazard_tiers: list[str] | None = None,
+        usage_group: str | None = None,
         min_t30_i55: float = 0.0,
         min_buildings: int = 20,
         sort_by: str = "pre_1981_high_hazard",
@@ -239,6 +241,12 @@ class QuakeLensDataStore:
         df = self.meshes.copy()
         if ward and ward != "all":
             df = df[df["ward_name"] == ward]
+        if hazard_tiers:
+            df = df[df["hazard_tier"].isin(hazard_tiers)]
+        if usage_group == "residential":
+            df = df[df["residential_count"] > 0]
+        elif usage_group == "non_residential":
+            df = df[(df["total_buildings"] - df["residential_count"]) > 0]
         if min_t30_i55 > 0:
             df = df[df["t30_i55_ps"].fillna(0.0) >= min_t30_i55]
         if min_buildings > 0:
@@ -325,8 +333,10 @@ class QuakeLensDataStore:
         total_in_bbox = int(len(df))
         truncated = total_in_bbox > limit
         if truncated:
-            # Prioritize showing older buildings first when truncated or take uniform slice
-            df = df.iloc[:limit]
+            # Take a uniform spatial stride across the sorted GeoDataFrame so buildings
+            # are evenly distributed across the entire visible map viewport
+            step = max(1, total_in_bbox // limit)
+            df = df.iloc[::step].iloc[:limit]
 
         fc = json.loads(df.to_json())
         fc["meta"] = {

@@ -28,8 +28,10 @@ interface LeftFilterPanelProps {
   onSelectWard: (ward: string) => void;
   ageCategories: AgeCategory[];
   onToggleAgeCategory: (cat: AgeCategory) => void;
+  onSelectAllAges?: () => void;
   hazardTiers: HazardTier[];
   onToggleHazardTier: (tier: HazardTier) => void;
+  onSelectAllHazards?: () => void;
   usageGroup: UsageGroup;
   onChangeUsageGroup: (ug: UsageGroup) => void;
   showBuildings: boolean;
@@ -54,8 +56,10 @@ export function LeftFilterPanel({
   onSelectWard,
   ageCategories,
   onToggleAgeCategory,
+  onSelectAllAges,
   hazardTiers,
   onToggleHazardTier,
+  onSelectAllHazards,
   usageGroup,
   onChangeUsageGroup,
   showBuildings,
@@ -70,6 +74,9 @@ export function LeftFilterPanel({
   selectedMeshcode,
   onClearMeshcode,
 }: LeftFilterPanelProps) {
+  const isAgeFiltered = ageCategories.length < ALL_AGE_CATS.length;
+  const isHazardFiltered = hazardTiers.length < ALL_HAZARD_TIERS.length;
+
   return (
     <aside className="flex h-full flex-col overflow-y-auto border-r border-slate-800 bg-slate-900/90 p-3.5 text-xs">
       {/* Area Jump */}
@@ -82,9 +89,9 @@ export function LeftFilterPanel({
           <button
             type="button"
             onClick={onResetFilters}
-            className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-sky-300"
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-slate-300 transition hover:bg-slate-800 hover:text-sky-300"
           >
-            <RotateCcw className="h-3 w-3" /> リセット
+            <RotateCcw className="h-3 w-3" /> 全リセット
           </button>
         </div>
         <select
@@ -106,7 +113,7 @@ export function LeftFilterPanel({
             <button
               type="button"
               onClick={onClearMeshcode}
-              className="font-semibold text-sky-300 hover:text-white"
+              className="rounded bg-sky-500/20 px-1.5 py-0.5 font-semibold text-sky-200 transition hover:bg-sky-500/40 hover:text-white"
             >
               解除
             </button>
@@ -122,7 +129,7 @@ export function LeftFilterPanel({
         </h2>
         <div className="space-y-2">
           <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 hover:border-slate-700">
-            <span className="text-slate-200">建物ポリゴン（ズーム13.5+）</span>
+            <span className="text-slate-200">建物ポリゴン表示</span>
             <input
               type="checkbox"
               checked={showBuildings}
@@ -142,13 +149,13 @@ export function LeftFilterPanel({
               />
             </label>
             {showHazardMesh && (
-              <div className="mt-2 grid grid-cols-2 gap-1.5">
+              <div className="mt-2 grid grid-cols-3 gap-1">
                 <button
                   type="button"
                   onClick={() => onChangeMeshOverlayMode("hazard")}
-                  className={`rounded px-2 py-1 text-[11px] font-medium transition ${
+                  className={`rounded px-1.5 py-1 text-[10px] font-medium transition ${
                     meshOverlayMode === "hazard"
-                      ? "bg-fuchsia-600/30 text-fuchsia-200 border border-fuchsia-500/50"
+                      ? "bg-fuchsia-600/30 text-fuchsia-200 border border-fuchsia-500/60"
                       : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200"
                   }`}
                 >
@@ -157,13 +164,24 @@ export function LeftFilterPanel({
                 <button
                   type="button"
                   onClick={() => onChangeMeshOverlayMode("arv")}
-                  className={`rounded px-2 py-1 text-[11px] font-medium transition ${
+                  className={`rounded px-1.5 py-1 text-[10px] font-medium transition ${
                     meshOverlayMode === "arv"
-                      ? "bg-teal-600/30 text-teal-200 border border-teal-500/50"
+                      ? "bg-teal-600/30 text-teal-200 border border-teal-500/60"
                       : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200"
                   }`}
                 >
-                  表層地盤 ARV
+                  表層地盤ARV
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangeMeshOverlayMode("pre1981")}
+                  className={`rounded px-1.5 py-1 text-[10px] font-medium transition ${
+                    meshOverlayMode === "pre1981"
+                      ? "bg-orange-600/30 text-orange-200 border border-orange-500/60"
+                      : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200"
+                  }`}
+                >
+                  1981以前率
                 </button>
               </div>
             )}
@@ -186,10 +204,21 @@ export function LeftFilterPanel({
 
       {/* Age Category Filter + Legend */}
       <section className="mb-4 border-t border-slate-800 pt-3.5">
-        <h2 className="mb-2 flex items-center gap-1.5 font-semibold text-slate-200">
-          <Filter className="h-3.5 w-3.5 text-orange-400" />
-          築年区分フィルター・凡例
-        </h2>
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="flex items-center gap-1.5 font-semibold text-slate-200">
+            <Filter className="h-3.5 w-3.5 text-orange-400" />
+            築年区分フィルター・凡例
+          </h2>
+          {isAgeFiltered && onSelectAllAges && (
+            <button
+              type="button"
+              onClick={onSelectAllAges}
+              className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-sky-300 transition hover:bg-slate-700 hover:text-white"
+            >
+              すべて表示
+            </button>
+          )}
+        </div>
         <div className="space-y-1.5">
           {ALL_AGE_CATS.map((cat) => {
             const active = ageCategories.includes(cat);
@@ -200,8 +229,10 @@ export function LeftFilterPanel({
                 onClick={() => onToggleAgeCategory(cat)}
                 className={`flex w-full items-center justify-between rounded-lg border px-2.5 py-1.5 text-left transition ${
                   active
-                    ? "border-slate-700 bg-slate-800/80 text-slate-100"
-                    : "border-slate-800/70 bg-slate-950/40 text-slate-500 opacity-60"
+                    ? isAgeFiltered
+                      ? "border-sky-500/70 bg-sky-950/40 text-white ring-1 ring-sky-500/30"
+                      : "border-slate-700 bg-slate-800/80 text-slate-100 hover:border-slate-500"
+                    : "border-slate-800/70 bg-slate-950/40 text-slate-500 opacity-50 hover:opacity-80"
                 }`}
               >
                 <span className="flex items-center gap-2">
@@ -211,7 +242,17 @@ export function LeftFilterPanel({
                   />
                   <span>{AGE_LABELS[cat]}</span>
                 </span>
-                <span className="text-[10px]">{active ? "表示中" : "除外"}</span>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                    active
+                      ? isAgeFiltered
+                        ? "bg-sky-500/20 text-sky-300"
+                        : "text-slate-400"
+                      : "text-slate-600"
+                  }`}
+                >
+                  {active ? (isAgeFiltered ? "絞込中" : "表示中") : "非表示"}
+                </span>
               </button>
             );
           })}
@@ -220,11 +261,22 @@ export function LeftFilterPanel({
 
       {/* Hazard Tier Filter + Legend */}
       <section className="mb-4 border-t border-slate-800 pt-3.5">
-        <h2 className="mb-1.5 font-semibold text-slate-200">
-          30年震度6弱以上確率（J-SHIS）
-        </h2>
+        <div className="mb-1 flex items-center justify-between">
+          <h2 className="font-semibold text-slate-200">
+            30年震度6弱以上確率（J-SHIS）
+          </h2>
+          {isHazardFiltered && onSelectAllHazards && (
+            <button
+              type="button"
+              onClick={onSelectAllHazards}
+              className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-sky-300 transition hover:bg-slate-700 hover:text-white"
+            >
+              すべて表示
+            </button>
+          )}
+        </div>
         <p className="mb-2 text-[10px] text-slate-400">
-          2024年版・平均ケース（全地震）
+          2024年版・平均ケース（クリックで絞込）
         </p>
         <div className="grid grid-cols-2 gap-1.5">
           {ALL_HAZARD_TIERS.map((tier) => {
@@ -234,17 +286,24 @@ export function LeftFilterPanel({
                 key={tier}
                 type="button"
                 onClick={() => onToggleHazardTier(tier)}
-                className={`flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11px] transition ${
+                className={`flex items-center justify-between gap-1 rounded-lg border px-2 py-1.5 text-[11px] transition ${
                   active
-                    ? "border-slate-700 bg-slate-800/80 text-slate-100"
-                    : "border-slate-800/70 bg-slate-950/40 text-slate-500 opacity-60"
+                    ? isHazardFiltered
+                      ? "border-fuchsia-500/70 bg-fuchsia-950/30 text-white ring-1 ring-fuchsia-500/30"
+                      : "border-slate-700 bg-slate-800/80 text-slate-100 hover:border-slate-500"
+                    : "border-slate-800/70 bg-slate-950/40 text-slate-500 opacity-50 hover:opacity-80"
                 }`}
               >
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                  style={{ backgroundColor: HAZARD_COLORS[tier] }}
-                />
-                <span className="truncate">{HAZARD_SHORT_LABELS[tier]}</span>
+                <span className="flex items-center gap-1.5 truncate">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                    style={{ backgroundColor: HAZARD_COLORS[tier] }}
+                  />
+                  <span className="truncate">{HAZARD_SHORT_LABELS[tier]}</span>
+                </span>
+                {active && isHazardFiltered && (
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-fuchsia-400" />
+                )}
               </button>
             );
           })}

@@ -22,7 +22,12 @@ import {
   ShieldCheck,
   AlertCircle,
 } from "lucide-react";
-import { AGE_COLORS, HAZARD_SHORT_LABELS } from "@/lib/colors";
+import {
+  AGE_COLORS,
+  AGE_LABELS,
+  HAZARD_COLORS,
+  HAZARD_SHORT_LABELS,
+} from "@/lib/colors";
 import { sendChatMessage } from "@/lib/api";
 import { MarkdownLite } from "@/components/MarkdownLite";
 import {
@@ -53,7 +58,10 @@ interface RightPanelProps {
   onSelectPriorityArea: (area: PriorityArea) => void;
   selectedBuilding: BuildingDetail | null;
   selectedMesh: MeshDetail | null;
+  selectedMeshcode?: string | null;
   selectedWard: string;
+  ageCategories?: AgeCategory[];
+  hazardTiers?: HazardTier[];
   onToggleAgeCategory: (cat: AgeCategory) => void;
   onToggleHazardTier: (tier: HazardTier) => void;
 }
@@ -66,6 +74,9 @@ const DEMO_PROMPTS = [
   "京都市の耐震診断や補助制度はありますか？",
 ];
 
+const ALL_AGE_CATS: AgeCategory[] = ["pre_1981", "1982_2000", "post_2001", "unknown"];
+const ALL_HAZARD_TIERS: HazardTier[] = ["very_high", "elevated", "moderate", "low"];
+
 export function RightPanel({
   activeTab,
   onChangeTab,
@@ -76,7 +87,10 @@ export function RightPanel({
   onSelectPriorityArea,
   selectedBuilding,
   selectedMesh,
+  selectedMeshcode,
   selectedWard,
+  ageCategories = ALL_AGE_CATS,
+  hazardTiers = ALL_HAZARD_TIERS,
   onToggleAgeCategory,
   onToggleHazardTier,
 }: RightPanelProps) {
@@ -144,6 +158,9 @@ export function RightPanel({
       shortLabel: HAZARD_SHORT_LABELS[r.hazard_tier],
     }));
 
+  const isAgeFiltered = ageCategories.length < ALL_AGE_CATS.length;
+  const isHazardFiltered = hazardTiers.length < ALL_HAZARD_TIERS.length;
+
   return (
     <aside className="flex h-full flex-col border-l border-slate-800 bg-slate-900/95">
       {/* Tabs */}
@@ -179,6 +196,7 @@ export function RightPanel({
                   <span>対象範囲サマリー</span>
                   <span className="font-mono text-[11px] text-sky-300">
                     {stats.scope.ward === "all" ? "京都市全域" : stats.scope.ward}
+                    {stats.scope.meshcode ? ` (${stats.scope.meshcode})` : ""}
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -201,12 +219,14 @@ export function RightPanel({
                         : "判明データなし"
                     }
                     accent="text-orange-400"
+                    onClick={() => onToggleAgeCategory("pre_1981")}
                   />
                   <MiniStat
                     label="高ハザード(26%+)×1981以前"
                     value={`${stats.overlap_very_high_pre1981.toLocaleString("ja-JP")}棟`}
                     sub={`6%以上合計 ${stats.overlap_elevated_or_higher_pre1981.toLocaleString("ja-JP")}棟`}
                     accent="text-fuchsia-300"
+                    onClick={() => onToggleHazardTier("very_high")}
                   />
                 </div>
               </div>
@@ -218,9 +238,9 @@ export function RightPanel({
                 <h3 className="text-xs font-semibold text-slate-200">
                   築年区分別の建物数
                 </h3>
-                <span className="text-[10px] text-slate-400">棒クリックで絞込</span>
+                <span className="text-[10px] text-slate-400">棒またはボタンで絞込</span>
               </div>
-              <div className="h-44 w-full">
+              <div className="h-40 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
                     data={ageData}
@@ -268,6 +288,32 @@ export function RightPanel({
                   </BarChart>
                 </ResponsiveContainer>
               </div>
+              {/* Clickable chips below chart so filtered-out 0-height bars can always be clicked */}
+              <div className="mt-2 grid grid-cols-4 gap-1">
+                {ALL_AGE_CATS.map((cat) => {
+                  const active = ageCategories.includes(cat);
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => onToggleAgeCategory(cat)}
+                      className={`flex items-center justify-center gap-1 rounded border px-1 py-1 text-[10px] font-medium transition ${
+                        active
+                          ? isAgeFiltered
+                            ? "border-sky-500/70 bg-sky-950/40 text-white"
+                            : "border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-500"
+                          : "border-slate-800/80 bg-slate-950/40 text-slate-500 opacity-50 hover:opacity-85"
+                      }`}
+                    >
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-sm"
+                        style={{ backgroundColor: AGE_COLORS[cat] }}
+                      />
+                      <span className="truncate">{AGE_LABELS[cat]}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Chart 2: Hazard x Age stacked */}
@@ -276,9 +322,9 @@ export function RightPanel({
                 <h3 className="text-xs font-semibold text-slate-200">
                   地震ハザード区分 × 築年区分
                 </h3>
-                <span className="text-[10px] text-slate-400">棒クリックで絞込</span>
+                <span className="text-[10px] text-slate-400">棒またはボタンで絞込</span>
               </div>
-              <div className="h-44 w-full">
+              <div className="h-40 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
                     data={crossData}
@@ -356,6 +402,31 @@ export function RightPanel({
                   </BarChart>
                 </ResponsiveContainer>
               </div>
+              <div className="mt-2 grid grid-cols-4 gap-1">
+                {ALL_HAZARD_TIERS.map((tier) => {
+                  const active = hazardTiers.includes(tier);
+                  return (
+                    <button
+                      key={tier}
+                      type="button"
+                      onClick={() => onToggleHazardTier(tier)}
+                      className={`flex items-center justify-center gap-1 rounded border px-1 py-1 text-[10px] font-medium transition ${
+                        active
+                          ? isHazardFiltered
+                            ? "border-fuchsia-500/70 bg-fuchsia-950/30 text-white"
+                            : "border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-500"
+                          : "border-slate-800/80 bg-slate-950/40 text-slate-500 opacity-50 hover:opacity-85"
+                      }`}
+                    >
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-sm"
+                        style={{ backgroundColor: HAZARD_COLORS[tier] }}
+                      />
+                      <span className="truncate">{HAZARD_SHORT_LABELS[tier]}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Priority Confirmation Areas (250m mesh ranking) */}
@@ -366,7 +437,7 @@ export function RightPanel({
                     優先確認エリア（250mメッシュ）
                   </h3>
                   <p className="text-[10px] text-slate-400">
-                    実測値ベース（行クリックで地図移動）
+                    実測値ベース（行クリックで地図移動・絞込）
                   </p>
                 </div>
                 <select
@@ -382,37 +453,54 @@ export function RightPanel({
               </div>
 
               <div className="space-y-1.5 max-h-72 overflow-y-auto pr-0.5">
-                {priorityAreas.map((area, idx) => (
-                  <button
-                    key={area.meshcode}
-                    type="button"
-                    onClick={() => onSelectPriorityArea(area)}
-                    className="flex w-full items-center justify-between rounded-lg border border-slate-800 bg-slate-900/80 px-2.5 py-2 text-left text-[11px] transition hover:border-sky-500/50 hover:bg-slate-800"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 font-semibold text-slate-100">
-                        <span className="inline-flex h-4 w-4 items-center justify-center rounded bg-slate-800 font-mono text-[10px] text-sky-300">
-                          {idx + 1}
-                        </span>
-                        <span>{area.ward_name}</span>
-                        <span className="font-mono text-[10px] text-slate-400">
-                          {area.meshcode}
-                        </span>
+                {priorityAreas.length === 0 && (
+                  <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-3 text-center text-[11px] text-slate-400">
+                    現在の絞込条件に一致するメッシュがありません。
+                  </div>
+                )}
+                {priorityAreas.map((area, idx) => {
+                  const isSelected = selectedMeshcode === area.meshcode;
+                  return (
+                    <button
+                      key={area.meshcode}
+                      type="button"
+                      onClick={() => onSelectPriorityArea(area)}
+                      className={`flex w-full items-center justify-between rounded-lg border px-2.5 py-2 text-left text-[11px] transition ${
+                        isSelected
+                          ? "border-sky-400 bg-sky-950/50 ring-1 ring-sky-400/40"
+                          : "border-slate-800 bg-slate-900/80 hover:border-sky-500/50 hover:bg-slate-800"
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 font-semibold text-slate-100">
+                          <span className="inline-flex h-4 w-4 items-center justify-center rounded bg-slate-800 font-mono text-[10px] text-sky-300">
+                            {idx + 1}
+                          </span>
+                          <span>{area.ward_name}</span>
+                          <span className="font-mono text-[10px] text-slate-400">
+                            {area.meshcode}
+                          </span>
+                          {isSelected && (
+                            <span className="rounded bg-sky-500/20 px-1.5 py-0.2 text-[9px] text-sky-300">
+                              選択中
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-0.5 text-[10px] text-slate-400">
+                          総{area.total_buildings}棟 / 判明率{(area.known_year_rate * 100).toFixed(0)}% / {area.jname} (ARV {area.arv ?? "—"})
+                        </div>
                       </div>
-                      <div className="mt-0.5 text-[10px] text-slate-400">
-                        総{area.total_buildings}棟 / 判明率{(area.known_year_rate * 100).toFixed(0)}% / {area.jname} (ARV {area.arv ?? "—"})
+                      <div className="shrink-0 text-right">
+                        <div className="font-mono font-bold text-orange-400">
+                          {area.pre_1981_count}棟
+                        </div>
+                        <div className="font-mono text-[10px] text-fuchsia-300">
+                          {area.t30_i55_ps != null ? `${(area.t30_i55_ps * 100).toFixed(1)}%` : "—"}
+                        </div>
                       </div>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <div className="font-mono font-bold text-orange-400">
-                        {area.pre_1981_count}棟
-                      </div>
-                      <div className="font-mono text-[10px] text-fuchsia-300">
-                        {area.t30_i55_ps != null ? `${(area.t30_i55_ps * 100).toFixed(1)}%` : "—"}
-                      </div>
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -692,12 +780,27 @@ function MiniStat({
   value,
   sub,
   accent = "text-white",
+  onClick,
 }: {
   label: string;
   value: string;
   sub: string;
   accent?: string;
+  onClick?: () => void;
 }) {
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="rounded-lg border border-slate-800/90 bg-slate-900/70 p-2 text-left transition hover:border-slate-600 hover:bg-slate-800/80"
+      >
+        <div className="text-[10px] text-slate-400">{label}</div>
+        <div className={`font-mono text-sm font-bold ${accent}`}>{value}</div>
+        <div className="text-[10px] text-slate-500">{sub}</div>
+      </button>
+    );
+  }
   return (
     <div className="rounded-lg border border-slate-800/90 bg-slate-900/70 p-2">
       <div className="text-[10px] text-slate-400">{label}</div>
