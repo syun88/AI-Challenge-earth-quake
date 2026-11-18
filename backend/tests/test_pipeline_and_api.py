@@ -237,6 +237,10 @@ def test_api_endpoints_with_store(synthetic_store: QuakeLensDataStore, monkeypat
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     client = TestClient(app)
 
+    root_resp = client.get("/")
+    assert root_resp.status_code == 200
+    assert "QuakeLens Japan" in root_resp.text
+
     assert client.get("/api/health").json()["building_count"] == 2
 
     stats = client.get("/api/stats").json()

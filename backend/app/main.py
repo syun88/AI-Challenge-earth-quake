@@ -13,6 +13,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from app.ai_assistant import ask_quakelens_ai
@@ -83,6 +84,23 @@ def _parse_jma_cod(cod: str | None) -> tuple[float | None, float | None, float |
     depth_m = abs(float(m.group(3))) if m.group(3) else None
     depth_km = round(depth_m / 1000.0, 1) if depth_m is not None else None
     return lat, lon, depth_km
+
+
+@app.get("/", response_class=HTMLResponse)
+def root() -> str:
+    return """<!DOCTYPE html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>QuakeLens Japan API</title></head>
+<body style="font-family:sans-serif;background:#0f172a;color:#f8fafc;padding:2rem;line-height:1.7;">
+  <h1>QuakeLens Japan Backend API</h1>
+  <p>このポート（8000）は <strong>FastAPI バックエンドAPI</strong> です。</p>
+  <p>地図・ダッシュボード・AI解説のWeb画面は、別ターミナルでフロントエンドを起動して <a href="http://localhost:3000" style="color:#38bdf8;">http://localhost:3000</a> を開いてください。</p>
+  <ul>
+    <li>API ドキュメント: <a href="/docs" style="color:#38bdf8;">/docs</a></li>
+    <li>ヘルスチェック: <a href="/api/health" style="color:#38bdf8;">/api/health</a></li>
+  </ul>
+</body>
+</html>"""
 
 
 @app.get("/api/health")
