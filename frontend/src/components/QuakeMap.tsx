@@ -217,6 +217,7 @@ export function QuakeMap({
 
     const initMapLayers = () => {
       if (layersInitialized || !map.style) return;
+      if ((map.style as unknown as { _loaded?: boolean })._loaded === false) return;
       try {
         if (map.getSource("meshes")) {
           layersInitialized = true;
@@ -465,8 +466,9 @@ export function QuakeMap({
 
     map.on("style.load", initMapLayers);
     map.on("load", initMapLayers);
-    map.on("styledata", initMapLayers);
-    initMapLayers();
+    if (map.isStyleLoaded()) {
+      initMapLayers();
+    }
 
     const ro = new ResizeObserver(() => {
       map.resize();
@@ -512,7 +514,7 @@ export function QuakeMap({
   // Update layer visibility, mesh coloring mode, and mesh filter expressions
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady) return;
+    if (!map || !mapReady || !map.getLayer("meshes-fill")) return;
 
     map.setLayoutProperty("meshes-fill", "visibility", showHazardMesh ? "visible" : "none");
     map.setLayoutProperty("meshes-line", "visibility", showHazardMesh ? "visible" : "none");
@@ -616,7 +618,7 @@ export function QuakeMap({
   // Update selected highlight filters
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady) return;
+    if (!map || !mapReady || !map.getLayer("buildings-selected")) return;
     map.setFilter("buildings-selected", [
       "==",
       ["get", "building_id"],
