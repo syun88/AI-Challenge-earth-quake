@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import { Loader2, ZoomIn, Box } from "lucide-react";
 import { AGE_COLORS, HAZARD_COLORS } from "@/lib/colors";
-import { getBuildingsInBbox } from "@/lib/api";
+import { API_BASE, getBuildingsCountInBbox } from "@/lib/api";
 import {
   AgeCategory,
   EarthquakeEvent,
@@ -12,6 +12,30 @@ import {
   MeshOverlayMode,
   UsageGroup,
 } from "@/types/quakelens";
+
+function buildBuildingMapFilter(params: {
+  selectedWard: string;
+  ageCategories: AgeCategory[];
+  hazardTiers: HazardTier[];
+  usageGroup: UsageGroup;
+}): maplibregl.FilterSpecification | null {
+  const clauses: maplibregl.ExpressionSpecification[] = [];
+  if (params.selectedWard && params.selectedWard !== "all") {
+    clauses.push(["==", ["get", "ward_name"], params.selectedWard]);
+  }
+  if (params.ageCategories.length > 0 && params.ageCategories.length < 4) {
+    clauses.push(["in", ["get", "age_category"], ["literal", params.ageCategories]]);
+  }
+  if (params.hazardTiers.length > 0 && params.hazardTiers.length < 4) {
+    clauses.push(["in", ["get", "hazard_tier"], ["literal", params.hazardTiers]]);
+  }
+  if (params.usageGroup && params.usageGroup !== "all") {
+    clauses.push(["==", ["get", "usage_group"], params.usageGroup]);
+  }
+  if (clauses.length === 0) return null;
+  if (clauses.length === 1) return clauses[0];
+  return ["all", ...clauses];
+}
 
 interface QuakeMapProps {
   meshesGeoJson: GeoJSON.FeatureCollection | null;
@@ -102,45 +126,34 @@ export function QuakeMap({
 
   const fetchBuildingsForCurrentView = async () => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map) return;
     const f = filtersRef.current;
     const currentZoom = map.getZoom();
     setZoom(currentZoom);
 
-    const src = map.getSource("buildings") as maplibregl.GeoJSONSource | undefined;
-    if (!src) return;
-
     if (!f.showBuildings || currentZoom < 13.5) {
-      src.setData({ type: "FeatureCollection", features: [] });
       setBuildingStatus(null);
       return;
     }
 
     const b = map.getBounds();
-    setLoadingBuildings(true);
     try {
-      const fc = await getBuildingsInBbox(
+      const res = await getBuildingsCountInBbox(
         [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()],
         {
           ward: f.selectedWard,
           ageCategories: f.ageCategories,
           hazardTiers: f.hazardTiers,
           usageGroup: f.usageGroup,
-        },
-        3500
+        }
       );
-      src.setData(fc);
-      if (fc.meta) {
-        setBuildingStatus({
-          returned: fc.meta.returned,
-          total: fc.meta.total_matching,
-          truncated: fc.meta.truncated,
-        });
-      }
+      setBuildingStatus({
+        returned: res.total_matching,
+        total: res.total_matching,
+        truncated: false,
+      });
     } catch {
-      // keep previous layer data on transient network abort
-    } finally {
-      setLoadingBuildings(false);
+      // ignore transient abort
     }
   };
 
@@ -254,15 +267,22 @@ export function QuakeMap({
         },
       });
 
+      const tileOrigin =
+        typeof window !== "undefined" ? `${window.location.origin}${API_BASE}` : API_BASE;
       map.addSource("buildings", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
+        type: "vector",
+        tiles: [`${tileOrigin}/api/tiles/buildings/{z}/{x}/{y}.pbf`],
+        minzoom: 13,
+        maxzoom: 15,
+        bounds: [135.45, 34.84, 135.92, 35.22],
       });
 
       map.addLayer({
         id: "buildings-fill",
         type: "fill",
         source: "buildings",
+        "source-layer": "buildings",
+        minzoom: 13.5,
         paint: {
           "fill-color": [
             "match",
@@ -283,6 +303,8 @@ export function QuakeMap({
         id: "buildings-outline",
         type: "line",
         source: "buildings",
+        "source-layer": "buildings",
+        minzoom: 13.5,
         paint: {
           "line-color": "#0f172a",
           "line-width": 0.65,
@@ -294,6 +316,8 @@ export function QuakeMap({
         id: "buildings-selected",
         type: "line",
         source: "buildings",
+        "source-layer": "buildings",
+        minzoom: 13.5,
         filter: ["==", ["get", "building_id"], ""],
         paint: {
           "line-color": "#22d3ee",
@@ -305,6 +329,8 @@ export function QuakeMap({
         id: "buildings-3d",
         type: "fill-extrusion",
         source: "buildings",
+        "source-layer": "buildings",
+        minzoom: 13.5,
         layout: {
           visibility: "none",
         },
@@ -441,11 +467,21 @@ export function QuakeMap({
         setHoverInfo(null);
       });
 
+      map.on("sourcedataloading", (e) => {
+        if (e.sourceId === "buildings" && map.getZoom() >= 13.5 && filtersRef.current.showBuildings) {
+          setLoadingBuildings(true);
+        }
+      });
+
+      map.on("idle", () => {
+        setLoadingBuildings(false);
+      });
+
       map.on("moveend", () => {
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
           fetchBuildingsForCurrentView();
-        }, 200);
+        }, 150);
       });
 
       map.resize();
@@ -613,9 +649,19 @@ export function QuakeMap({
     map.setFilter("meshes-selected", ["==", ["get", "meshcode"], selectedMeshcode || ""]);
   }, [selectedBuildingId, selectedMeshcode, mapReady]);
 
-  // Re-fetch visible buildings whenever filters change
+  // Update client-side vector tile filters instantly & refresh viewport building count
   useEffect(() => {
-    if (!mapReady) return;
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const filterExpr = buildBuildingMapFilter({
+      selectedWard,
+      ageCategories,
+      hazardTiers,
+      usageGroup,
+    });
+    if (map.getLayer("buildings-fill")) map.setFilter("buildings-fill", filterExpr);
+    if (map.getLayer("buildings-outline")) map.setFilter("buildings-outline", filterExpr);
+    if (map.getLayer("buildings-3d")) map.setFilter("buildings-3d", filterExpr);
     fetchBuildingsForCurrentView();
   }, [selectedWard, ageCategories, hazardTiers, usageGroup, showBuildings, mapReady]);
 
@@ -669,23 +715,15 @@ export function QuakeMap({
           </div>
         )}
 
-        {loadingBuildings && (
-          <div className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-slate-900/90 px-3 py-1.5 text-xs text-sky-200 shadow-lg">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span>建物データを読み込み中...</span>
-          </div>
-        )}
-
-        {!loadingBuildings && buildingStatus && showBuildings && zoom >= 13.5 && (
+        {buildingStatus && showBuildings && zoom >= 13.5 && (
           <div className="pointer-events-auto inline-flex flex-wrap items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-[11px] text-slate-200 shadow-lg">
+            {loadingBuildings && <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />}
             <span>
               表示中の建物:{" "}
               <strong className="font-mono text-white">
-                {buildingStatus.returned.toLocaleString("ja-JP")}
+                {buildingStatus.total.toLocaleString("ja-JP")}
               </strong>
-              棟
-              {buildingStatus.truncated &&
-                `（範囲内 ${buildingStatus.total.toLocaleString("ja-JP")}棟中 上限表示・ズームインで全件）`}
+              棟（全件表示・制限なし）
             </span>
             <button
               type="button"

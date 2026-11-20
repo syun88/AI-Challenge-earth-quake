@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
@@ -190,7 +190,7 @@ def get_buildings(
     hazard_tiers: str | None = Query(default=None),
     usage_group: str | None = Query(default=None),
     meshcode: str | None = Query(default=None),
-    limit: int = Query(default=3500, ge=1, le=8000),
+    limit: int = Query(default=20000, ge=1, le=100000),
 ) -> dict[str, Any]:
     parsed_bbox: tuple[float, float, float, float] | None = None
     if bbox:
@@ -211,6 +211,57 @@ def get_buildings(
         meshcode=meshcode,
         limit=limit,
     )
+
+
+@app.get("/api/buildings/count")
+def count_buildings(
+    bbox: str | None = Query(default=None, description="minx,miny,maxx,maxy in EPSG:4326"),
+    ward: str | None = Query(default=None),
+    age_categories: str | None = Query(default=None),
+    hazard_tiers: str | None = Query(default=None),
+    usage_group: str | None = Query(default=None),
+    meshcode: str | None = Query(default=None),
+) -> dict[str, Any]:
+    parsed_bbox: tuple[float, float, float, float] | None = None
+    if bbox:
+        try:
+            parts = [float(x) for x in bbox.split(",")]
+            if len(parts) != 4:
+                raise ValueError
+            parsed_bbox = (parts[0], parts[1], parts[2], parts[3])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="bbox must be minx,miny,maxx,maxy") from exc
+
+    return _require_store().count_buildings_in_bbox(
+        bbox=parsed_bbox,
+        ward=ward,
+        age_categories=_split_csv(age_categories),
+        hazard_tiers=_split_csv(hazard_tiers),
+        usage_group=usage_group,
+        meshcode=meshcode,
+    )
+
+
+@app.get("/api/tiles/buildings/{z}/{x}/{y}.pbf")
+def get_buildings_tile(
+    z: int,
+    x: int,
+    y: int,
+    request: Request,
+) -> Response:
+    if z < 0 or z > 20:
+        raise HTTPException(status_code=400, detail="Invalid zoom level")
+    s = _require_store()
+    accept_enc = request.headers.get("accept-encoding", "")
+    wants_gzip = "gzip" in accept_enc.lower()
+    payload = s.get_building_tile_mvt(z=z, x=x, y=y, gzipped=wants_gzip)
+    headers = {
+        "Cache-Control": "public, max-age=3600",
+        "Vary": "Accept-Encoding",
+    }
+    if wants_gzip and payload:
+        headers["Content-Encoding"] = "gzip"
+    return Response(content=payload, media_type="application/x-protobuf", headers=headers)
 
 
 @app.get("/api/buildings/{building_id}")

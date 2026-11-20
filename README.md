@@ -74,6 +74,7 @@ Google AI Challenge 2026 応募作品として開発された、公的オープ�
 │   ├── app/
 │   │   ├── main.py                       # FastAPI アプリ・CORS制御・全APIエンドポイント
 │   │   ├── data_store.py                 # Parquet/GeoJSON空間データ読込・フィルタ集計
+│   │   ├── mvt.py                        # 建物全件配信用 Mapbox Vector Tiles (MVT v2.1) エンコーダ
 │   │   ├── ai_assistant.py               # Gemini Interactions API / SSEストリーミング / Function Calling
 │   │   ├── grounding.py                  # AI応答の数値・メッシュコード・建物ID・URL自動検証エンジン
 │   │   ├── security.py                   # レート制限・日次上限・アクセスコード・入力サニタイズ・秘密マスク
@@ -85,9 +86,11 @@ Google AI Challenge 2026 応募作品として開発された、公的オープ�
     └── src/
         ├── app/
         │   ├── page.tsx                  # メイン3カラムワークスペース・地図/AI連携制御
-        │   └── api/chat/
-        │       ├── route.ts              # /api/chat 中継Route Handler（サイズ制限・ヘッダー転送）
-        │       └── stream/route.ts       # /api/chat/stream SSE中継Route Handler（タイムアウト回避）
+        │   └── api/
+        │       ├── [...path]/route.ts    # /api/* 汎用バイナリ/JSON中継Route Handler
+        │       └── chat/
+        │           ├── route.ts          # /api/chat 中継Route Handler（サイズ制限・ヘッダー転送）
+        │           └── stream/route.ts   # /api/chat/stream SSE中継Route Handler（タイムアウト回避）
         ├── components/
         │   ├── TopBar.tsx                # KPIサマリー・AI防災解説CTA・出典モーダル導線
         │   ├── LeftFilterPanel.tsx       # 区選択・2D/3D切替・メッシュ/震源・築年/ハザード/用途フィルター
@@ -107,7 +110,9 @@ Google AI Challenge 2026 応募作品として開発された、公的オープ�
 | `GET` | `/api/meshes` | 250mメッシュ GeoJSON 一覧 |
 | `GET` | `/api/meshes/{meshcode}` | 単一250mメッシュの詳細統計・ハザード・地盤情報 |
 | `GET` | `/api/priority-areas` | 1981年以前建築×ハザード等の実測ベース優先確認エリア一覧 |
-| `GET` | `/api/buildings` | 表示範囲（`bbox`）およびフィルター条件に一致する建物ポリゴン GeoJSON |
+| `GET` | `/api/buildings` | 表示範囲（`bbox`）およびフィルター条件に一致する建物ポリゴン GeoJSON（上限 `20,000` 拡張済） |
+| `GET` | `/api/buildings/count` | 表示範囲（`bbox`）およびフィルター条件に一致する建物総数の高速取得 |
+| `GET` | `/api/tiles/buildings/{z}/{x}/{y}.pbf` | 全513,815棟を欠落・件数上限なしで配信する Mapbox Vector Tiles (MVT v2.1) |
 | `GET` | `/api/buildings/{building_id}` | 単一建物の詳細属性・所属メッシュハザード・補助制度情報 |
 | `GET` | `/api/official-programs` | 京都市公式の耐震診断・補助制度一覧 |
 | `GET` | `/api/earthquakes` | 気象庁 地震情報 JSON キャッシュ付き取得 |

@@ -257,6 +257,17 @@ def test_api_endpoints_with_store(synthetic_store: QuakeLensDataStore, monkeypat
     bldgs = client.get("/api/buildings?bbox=135.74,34.99,135.76,35.01").json()
     assert len(bldgs["features"]) == 2
 
+    count_res = client.get("/api/buildings/count?bbox=135.74,34.99,135.76,35.01").json()
+    assert count_res["total_matching"] == 2
+
+    # MVT vector tile for Kyoto center (z=14, x=14370, y=6489) should return protobuf bytes
+    tile_resp = client.get("/api/tiles/buildings/14/14370/6489.pbf")
+    assert tile_resp.status_code == 200
+    assert "application/x-protobuf" in tile_resp.headers["content-type"]
+    assert len(tile_resp.content) > 20
+    assert b"buildings" in tile_resp.content
+    assert b"26100-bldg-100" in tile_resp.content
+
     detail = client.get("/api/buildings/26100-bldg-100").json()
     assert detail["year_built"] == 1974
     assert detail["t30_i55_ps"] == 0.54
@@ -370,6 +381,14 @@ def test_real_processed_data_consistency_and_ai_tools() -> None:
     assert meta["hazard_summary"]["max_t30_i55_ps"] == 0.5829
     assert meta["hazard_summary"]["sand_gravel_terrace_mean"] == 0.0542
     assert meta["hazard_summary"]["backmarsh_mean"] == 0.5472
+
+    # Verify MVT tile for dense central Kyoto contains well over 3,500 buildings without truncation
+    raw_tile = real_store.get_building_tile_mvt(14, 14370, 6489, gzipped=False)
+    gz_tile = real_store.get_building_tile_mvt(14, 14370, 6489, gzipped=True)
+    assert len(raw_tile) > 100_000
+    assert 0 < len(gz_tile) < len(raw_tile)
+    cnt = real_store.count_buildings_in_bbox(bbox=(135.7471, 34.9940, 135.7690, 35.0120))
+    assert cnt["total_matching"] > 15_000
 
 
 def test_public_ai_security_and_cost_protection(

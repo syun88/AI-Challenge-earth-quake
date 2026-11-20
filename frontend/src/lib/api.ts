@@ -118,7 +118,7 @@ export function getPriorityAreas(params: {
 export function getBuildingsInBbox(
   bbox: [number, number, number, number],
   params: FilterParams,
-  limit = 3500
+  limit = 20000
 ) {
   const sp = new URLSearchParams();
   sp.set("bbox", bbox.map((n) => n.toFixed(6)).join(","));
@@ -133,11 +133,36 @@ export function getBuildingsInBbox(
   if (params.usageGroup && params.usageGroup !== "all") {
     sp.set("usage_group", params.usageGroup);
   }
+  if (params.meshcode) {
+    sp.set("meshcode", params.meshcode);
+  }
   return fetchJson<
     GeoJSON.FeatureCollection & {
       meta?: { returned: number; total_matching: number; truncated: boolean; limit: number };
     }
   >(`/api/buildings?${sp.toString()}`);
+}
+
+export function getBuildingsCountInBbox(
+  bbox: [number, number, number, number],
+  params: FilterParams
+) {
+  const sp = new URLSearchParams();
+  sp.set("bbox", bbox.map((n) => n.toFixed(6)).join(","));
+  if (params.ward && params.ward !== "all") sp.set("ward", params.ward);
+  if (params.ageCategories && params.ageCategories.length > 0 && params.ageCategories.length < 4) {
+    sp.set("age_categories", params.ageCategories.join(","));
+  }
+  if (params.hazardTiers && params.hazardTiers.length > 0 && params.hazardTiers.length < 4) {
+    sp.set("hazard_tiers", params.hazardTiers.join(","));
+  }
+  if (params.usageGroup && params.usageGroup !== "all") {
+    sp.set("usage_group", params.usageGroup);
+  }
+  if (params.meshcode) {
+    sp.set("meshcode", params.meshcode);
+  }
+  return fetchJson<{ total_matching: number }>(`/api/buildings/count?${sp.toString()}`);
 }
 
 export function getBuildingDetail(buildingId: string) {
