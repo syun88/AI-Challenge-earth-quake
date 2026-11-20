@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -11,12 +12,12 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
-from app.ai_assistant import ask_quakelens_ai
+from app.ai_assistant import ask_quakelens_ai, stream_quakelens_ai
 from app.constants import OFFICIAL_RETROFIT_PROGRAMS
 from app.data_store import QuakeLensDataStore
 
@@ -263,10 +264,14 @@ class ChatRequest(BaseModel):
     message: str
     context: dict[str, Any] | None = None
     previous_interaction_id: str | None = None
+    model: str | None = None
 
 
 @app.post("/api/chat")
-def chat(req: ChatRequest) -> dict[str, Any]:
+def chat(
+    req: ChatRequest,
+    x_gemini_api_key: str | None = Header(default=None),
+) -> dict[str, Any]:
     s = _require_store()
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
@@ -276,6 +281,44 @@ def chat(req: ChatRequest) -> dict[str, Any]:
             message=req.message.strip(),
             context=req.context,
             previous_interaction_id=req.previous_interaction_id,
+            model=req.model,
+            api_key_override=x_gemini_api_key,
+            earthquakes_cache=_quake_cache.get("data"),
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"AI解説の生成中にエラーが発生しました: {exc}") from exc
+
+
+@app.post("/api/chat/stream")
+def chat_stream(
+    req: ChatRequest,
+    x_gemini_api_key: str | None = Header(default=None),
+) -> StreamingResponse:
+    s = _require_store()
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="message must not be empty")
+
+    def event_generator():
+        try:
+            for ev in stream_quakelens_ai(
+                store=s,
+                message=req.message.strip(),
+                context=req.context,
+                previous_interaction_id=req.previous_interaction_id,
+                model=req.model,
+                api_key_override=x_gemini_api_key,
+                earthquakes_cache=_quake_cache.get("data"),
+            ):
+                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            err_ev = {"type": "error", "message": f"AI解説の生成中にエラーが発生しました: {exc}"}
+            yield f"data: {json.dumps(err_ev, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

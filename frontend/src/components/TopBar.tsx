@@ -9,6 +9,7 @@ interface TopBarProps {
   selectedWard: string;
   geminiConfigured: boolean;
   onOpenSources: () => void;
+  onOpenAiTab?: () => void;
   onToggleMobileLeft?: () => void;
   onToggleMobileRight?: () => void;
 }
@@ -18,6 +19,7 @@ export function TopBar({
   selectedWard,
   geminiConfigured,
   onOpenSources,
+  onOpenAiTab,
   onToggleMobileLeft,
   onToggleMobileRight,
 }: TopBarProps) {
@@ -99,6 +101,17 @@ export function TopBar({
           >
             統計・AI
           </button>
+          {onOpenAiTab && (
+            <button
+              type="button"
+              onClick={onOpenAiTab}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-1.5 text-xs font-semibold text-emerald-200 transition hover:border-emerald-400/60 hover:bg-emerald-500/25"
+            >
+              <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">AI防災解説</span>
+              <span className="sm:hidden">AI</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={onOpenSources}
