@@ -582,13 +582,26 @@ def ask_quakelens_ai(
             previous_interaction_id=interaction.id,
         )
 
+    remaining_fc = [s for s in (interaction.steps or []) if getattr(s, "type", None) == "function_call"]
+    if remaining_fc:
+        raise RuntimeError("ツール照会回数の上限に達したため、回答生成を完了できませんでした。")
+
+    inter_status = getattr(interaction, "status", None)
+    if inter_status in {"failed", "cancelled"}:
+        raise RuntimeError(f"AI処理が正常に完了しませんでした（ステータス: {inter_status}）。")
+
+    answer_text = (interaction.output_text or "").strip()
+    if not answer_text:
+        raise RuntimeError("モデルから回答テキストが返却されませんでした。")
+
     return {
         "configured": True,
-        "answer": interaction.output_text or "回答を生成できませんでした。",
+        "answer": answer_text,
         "interaction_id": interaction.id,
         "tool_calls": tool_trace,
         "map_actions": _dedupe_actions(map_actions),
         "model": chosen_model,
+        "incomplete": inter_status == "incomplete",
     }
 
 
@@ -641,6 +654,11 @@ def stream_quakelens_ai(
         for event in client.interactions.create(**kwargs):
             ev_type = getattr(event, "event_type", None)
             ev_idx = getattr(event, "index", None)
+            if ev_type in {"error", "interaction.failed"}:
+                err_obj = getattr(event, "error", None)
+                err_msg = getattr(err_obj, "message", None) or str(err_obj or "AIストリーミング中にエラーが発生しました。")
+                yield {"type": "error", "message": err_msg}
+                return
             if ev_type == "step.start":
                 step = getattr(event, "step", None)
                 st_type = getattr(step, "type", None)
@@ -677,7 +695,19 @@ def stream_quakelens_ai(
                 completed_interaction = getattr(event, "interaction", None)
 
         if completed_interaction is None:
-            break
+            yield {
+                "type": "error",
+                "message": "AIストリーミング応答が途中で中断されました（完了イベント未受信）。",
+            }
+            return
+
+        inter_status = getattr(completed_interaction, "status", None)
+        if inter_status in {"failed", "cancelled"}:
+            yield {
+                "type": "error",
+                "message": f"AI処理が正常に完了しませんでした（ステータス: {inter_status}）。",
+            }
+            return
 
         prev_id = completed_interaction.id
 
@@ -710,9 +740,16 @@ def stream_quakelens_ai(
                     })
 
         if not fc_calls:
-            answer = "".join(full_text_parts).strip() or (
-                getattr(completed_interaction, "output_text", None) or "回答を生成できませんでした。"
+            answer = (
+                "".join(full_text_parts).strip()
+                or (getattr(completed_interaction, "output_text", None) or "").strip()
             )
+            if not answer:
+                yield {
+                    "type": "error",
+                    "message": "モデルから回答テキストが返却されませんでした（未完了）。",
+                }
+                return
             yield {
                 "type": "done",
                 "configured": True,
@@ -721,6 +758,7 @@ def stream_quakelens_ai(
                 "tool_calls": tool_trace,
                 "map_actions": _dedupe_actions(map_actions),
                 "model": chosen_model,
+                "incomplete": inter_status == "incomplete",
             }
             return
 
@@ -748,11 +786,6 @@ def stream_quakelens_ai(
         current_input = fn_results
 
     yield {
-        "type": "done",
-        "configured": True,
-        "answer": "".join(full_text_parts).strip() or "回答の生成を完了しました。",
-        "interaction_id": prev_id,
-        "tool_calls": tool_trace,
-        "map_actions": _dedupe_actions(map_actions),
-        "model": chosen_model,
+        "type": "error",
+        "message": "ツール照会回数の上限（4回）に達したため、回答の生成を完了できませんでした。質問を絞って再試行してください。",
     }

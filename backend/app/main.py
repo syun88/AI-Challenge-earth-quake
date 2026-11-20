@@ -341,6 +341,7 @@ def chat_stream(
         stop_flag = threading.Event()
 
         def worker() -> None:
+            terminal_emitted = False
             try:
                 for ev in stream_quakelens_ai(
                     store=s,
@@ -353,7 +354,14 @@ def chat_stream(
                 ):
                     if stop_flag.is_set():
                         break
+                    if ev.get("type") in {"done", "error"}:
+                        terminal_emitted = True
                     q.put(ev)
+                if not terminal_emitted and not stop_flag.is_set():
+                    q.put({
+                        "type": "error",
+                        "message": "AIストリーミングが完了イベントを受信する前に終了しました（未完了）。",
+                    })
             except Exception as exc:
                 q.put({
                     "type": "error",

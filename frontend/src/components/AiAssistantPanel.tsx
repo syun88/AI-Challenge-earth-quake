@@ -40,6 +40,9 @@ interface ChatTurn {
   model?: string | null;
   streaming?: boolean;
   statusMessage?: string;
+  incomplete?: boolean;
+  aborted?: boolean;
+  error?: string;
 }
 
 interface AiAssistantPanelProps {
@@ -150,7 +153,8 @@ export function AiAssistantPanel({
         selected_building_id: selectedBuilding?.building_id ?? null,
         is_3d: is3D,
       };
-      let receivedDone = false;
+      let receivedTerminal = false;
+      let receivedSuccessDone = false;
 
       try {
         await streamChatMessage(
@@ -204,8 +208,11 @@ export function AiAssistantPanel({
                 )
               );
             } else if (ev.type === "done") {
-              receivedDone = true;
-              if (ev.interaction_id) setInteractionId(ev.interaction_id);
+              receivedTerminal = true;
+              receivedSuccessDone = true;
+              if (!ev.incomplete && ev.interaction_id) {
+                setInteractionId(ev.interaction_id);
+              }
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
@@ -218,12 +225,14 @@ export function AiAssistantPanel({
                         toolCalls: ev.tool_calls,
                         mapActions: ev.map_actions || [],
                         model: ev.model,
+                        incomplete: Boolean(ev.incomplete),
+                        error: undefined,
                       }
                     : m
                 )
               );
             } else if (ev.type === "error") {
-              receivedDone = true;
+              receivedTerminal = true;
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
@@ -231,7 +240,7 @@ export function AiAssistantPanel({
                         ...m,
                         streaming: false,
                         statusMessage: undefined,
-                        content: `エラーが発生しました: ${ev.message}`,
+                        error: ev.message,
                       }
                     : m
                 )
@@ -243,9 +252,9 @@ export function AiAssistantPanel({
           accessCode
         );
 
-        if (receivedDone) {
+        if (receivedSuccessDone) {
           onRefreshHealth?.();
-        } else if (!controller.signal.aborted) {
+        } else if (!receivedTerminal && !controller.signal.aborted) {
           throw new Error("ストリーミング応答が完了前に終了しました");
         }
       } catch (err) {
@@ -257,12 +266,12 @@ export function AiAssistantPanel({
                     ...m,
                     streaming: false,
                     statusMessage: undefined,
-                    content: (m.content || "") + "\n\n（生成を停止しました）",
+                    aborted: true,
                   }
                 : m
             )
           );
-        } else if (!receivedDone) {
+        } else if (!receivedTerminal) {
           const initialMsg = err instanceof Error ? err.message : "";
           const isGuardRejection =
             initialMsg.includes("アクセスコード") ||
@@ -282,7 +291,7 @@ export function AiAssistantPanel({
                       ...m,
                       streaming: false,
                       statusMessage: undefined,
-                      content: `リクエスト制限: ${initialMsg}`,
+                      error: initialMsg,
                     }
                   : m
               )
@@ -307,7 +316,9 @@ export function AiAssistantPanel({
                 tempApiKey,
                 accessCode
               );
-              if (res.interaction_id) setInteractionId(res.interaction_id);
+              if (!res.incomplete && res.interaction_id) {
+                setInteractionId(res.interaction_id);
+              }
               onRefreshHealth?.();
               setMessages((prev) =>
                 prev.map((m) =>
@@ -321,6 +332,8 @@ export function AiAssistantPanel({
                         toolCalls: res.tool_calls,
                         mapActions: res.map_actions || [],
                         model: res.model,
+                        incomplete: Boolean(res.incomplete),
+                        error: undefined,
                       }
                     : m
                 )
@@ -343,7 +356,7 @@ export function AiAssistantPanel({
                         ...m,
                         streaming: false,
                         statusMessage: undefined,
-                        content: `エラーが発生しました: ${hint}`,
+                        error: hint,
                       }
                     : m
                 )
@@ -590,6 +603,27 @@ export function AiAssistantPanel({
                     m.streaming && (
                       <div className="text-[11px] text-slate-400">回答を生成しています...</div>
                     )
+                  )}
+
+                  {m.incomplete && !m.streaming && (
+                    <div className="mt-2 flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200">
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                      <span>出力トークン上限等により回答が途中で終了しました（未完了の可能性があります）</span>
+                    </div>
+                  )}
+
+                  {m.aborted && !m.streaming && (
+                    <div className="mt-2 flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200">
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                      <span>ユーザー操作により途中で生成を停止しました（未完了）</span>
+                    </div>
+                  )}
+
+                  {m.error && !m.streaming && (
+                    <div className="mt-2 flex items-start gap-1.5 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1.5 text-[11px] text-rose-200">
+                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-400" />
+                      <span>生成が途中で中断されました: {m.error}</span>
+                    </div>
                   )}
 
                   {/* Clickable Map Action Chips */}

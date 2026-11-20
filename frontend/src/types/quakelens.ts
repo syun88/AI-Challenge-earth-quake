@@ -248,6 +248,7 @@ export interface ChatResponse {
   tool_calls: ToolCallTrace[];
   map_actions?: MapAction[];
   model?: string | null;
+  incomplete?: boolean;
 }
 
 export type ChatStreamEvent =

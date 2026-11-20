@@ -451,3 +451,102 @@ def test_public_ai_security_and_cost_protection(
     ai_guard.reset()
 
 
+def test_streaming_never_reports_done_when_incomplete(
+    synthetic_store: QuakeLensDataStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+    from app.ai_assistant import stream_quakelens_ai
+    from app.security import ai_guard
+
+    ai_guard.reset()
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaFakeKeyStreamTest12345")
+
+    def fake_client_factory(stream_batches):
+        idx = {"n": 0}
+
+        class FakeInteractions:
+            def create(self, **kwargs):
+                batch = stream_batches[min(idx["n"], len(stream_batches) - 1)]
+                idx["n"] += 1
+                return iter(batch)
+
+        return SimpleNamespace(interactions=FakeInteractions())
+
+    # Case 1: Stream stops without interaction.completed -> must emit error, NEVER done
+    monkeypatch.setattr(
+        "app.ai_assistant.genai.Client",
+        lambda **kw: fake_client_factory([
+            [
+                SimpleNamespace(
+                    event_type="step.delta",
+                    index=0,
+                    delta=SimpleNamespace(type="text", text="途中までの"),
+                )
+            ]
+        ]),
+    )
+    evs1 = list(stream_quakelens_ai(synthetic_store, "test"))
+    assert evs1[-1]["type"] == "error"
+    assert all(ev["type"] != "done" for ev in evs1)
+
+    # Case 2: All 4 tool-call turns exhausted without final text -> must emit error, NEVER done
+    fc_batch = [
+        SimpleNamespace(
+            event_type="step.start",
+            index=0,
+            step=SimpleNamespace(type="function_call", id="c1", name="get_area_statistics", arguments={"ward": "all"}),
+        ),
+        SimpleNamespace(
+            event_type="interaction.completed",
+            interaction=SimpleNamespace(id="i1", status="requires_action", steps=None, output_text=None),
+        ),
+    ]
+    monkeypatch.setattr(
+        "app.ai_assistant.genai.Client",
+        lambda **kw: fake_client_factory([fc_batch, fc_batch, fc_batch, fc_batch]),
+    )
+    evs2 = list(stream_quakelens_ai(synthetic_store, "test"))
+    assert evs2[-1]["type"] == "error"
+    assert all(ev["type"] != "done" for ev in evs2)
+
+    # Case 3: interaction.completed with status='incomplete' -> done includes incomplete=True
+    monkeypatch.setattr(
+        "app.ai_assistant.genai.Client",
+        lambda **kw: fake_client_factory([
+            [
+                SimpleNamespace(
+                    event_type="step.delta",
+                    index=0,
+                    delta=SimpleNamespace(type="text", text="途中まで回答"),
+                ),
+                SimpleNamespace(
+                    event_type="interaction.completed",
+                    interaction=SimpleNamespace(id="i2", status="incomplete", steps=None, output_text=None),
+                ),
+            ]
+        ]),
+    )
+    evs3 = list(stream_quakelens_ai(synthetic_store, "test"))
+    assert evs3[-1]["type"] == "done"
+    assert evs3[-1]["incomplete"] is True
+
+    # Case 4: HTTP /api/chat/stream guard if worker ends without terminal event -> appends error
+    monkeypatch.setattr("app.main.store", synthetic_store)
+    monkeypatch.setattr(
+        "app.main.stream_quakelens_ai",
+        lambda **kw: iter([{"type": "text_delta", "delta": "断片のみ"}]),
+    )
+    client = TestClient(app)
+    with client.stream("POST", "/api/chat/stream", json={"message": "hello"}) as resp:
+        assert resp.status_code == 200
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in resp.iter_lines()
+            if line.startswith("data: ")
+        ]
+    assert events[-1]["type"] == "error"
+    assert all(ev["type"] != "done" for ev in events)
+    ai_guard.reset()
+
+
+

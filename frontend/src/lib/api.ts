@@ -214,6 +214,7 @@ export async function streamChatMessage(
   const reader = res.body.getReader();
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
+  let sawTerminalEvent = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -222,16 +223,19 @@ export async function streamChatMessage(
     } else if (done) {
       buffer += decoder.decode();
     }
-    const chunks = buffer.split("\n\n");
+    const chunks = buffer.split(/\r?\n\r?\n/);
     buffer = done ? "" : chunks.pop() || "";
 
     for (const chunk of chunks) {
-      for (const line of chunk.split("\n")) {
+      for (const line of chunk.split(/\r?\n/)) {
         if (line.startsWith("data: ")) {
           const rawJson = line.slice(6).trim();
           if (!rawJson) continue;
           try {
             const parsed = JSON.parse(rawJson) as ChatStreamEvent;
+            if (parsed.type === "done" || parsed.type === "error") {
+              sawTerminalEvent = true;
+            }
             onEvent(parsed);
           } catch {
             // ignore malformed partial frames
@@ -240,5 +244,9 @@ export async function streamChatMessage(
       }
     }
     if (done) break;
+  }
+
+  if (!sawTerminalEvent && !signal?.aborted) {
+    throw new Error("ストリーミング応答が完了前に切断されました（未完了）。");
   }
 }
