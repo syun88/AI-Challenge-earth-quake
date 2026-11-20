@@ -15,11 +15,13 @@ import {
   ChevronRight,
   Compass,
   CheckCircle2,
+  Shield,
 } from "lucide-react";
 import { sendChatMessage, streamChatMessage } from "@/lib/api";
 import { MarkdownLite } from "@/components/MarkdownLite";
 import {
   AgeCategory,
+  AiProtectionStatus,
   BuildingDetail,
   HazardTier,
   MapAction,
@@ -42,6 +44,8 @@ interface ChatTurn {
 
 interface AiAssistantPanelProps {
   geminiConfigured: boolean;
+  aiProtection?: AiProtectionStatus | null;
+  onRefreshHealth?: () => void;
   selectedWard: string;
   ageCategories: AgeCategory[];
   hazardTiers: HazardTier[];
@@ -73,6 +77,8 @@ type AiModelId = "gemini-3.5-flash-lite" | "gemini-4-hydrogen" | "gemini-4-argon
 
 export function AiAssistantPanel({
   geminiConfigured,
+  aiProtection,
+  onRefreshHealth,
   selectedWard,
   ageCategories,
   hazardTiers,
@@ -90,6 +96,7 @@ export function AiAssistantPanel({
   const [interactionId, setInteractionId] = useState<string | null>(null);
   const [model, setModel] = useState<AiModelId>("gemini-3.5-flash-lite");
   const [tempApiKey, setTempApiKey] = useState("");
+  const [accessCode, setAccessCode] = useState("");
   const [showKeyBox, setShowKeyBox] = useState(false);
   const [expandedTraces, setExpandedTraces] = useState<Record<string, boolean>>({});
 
@@ -232,10 +239,13 @@ export function AiAssistantPanel({
             }
           },
           tempApiKey,
-          controller.signal
+          controller.signal,
+          accessCode
         );
 
-        if (!receivedDone && !controller.signal.aborted) {
+        if (receivedDone) {
+          onRefreshHealth?.();
+        } else if (!controller.signal.aborted) {
           throw new Error("ストリーミング応答が完了前に終了しました");
         }
       } catch (err) {
@@ -253,25 +263,18 @@ export function AiAssistantPanel({
             )
           );
         } else if (!receivedDone) {
-          // Automatic fallback to unary /api/chat if streaming transport drops (e.g. Safari "Load failed")
-          try {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, statusMessage: "通常通信にフォールバックして再試行中..." }
-                  : m
-              )
-            );
-            const res = await sendChatMessage(
-              {
-                message: q,
-                context: contextPayload,
-                previous_interaction_id: interactionId,
-                model,
-              },
-              tempApiKey
-            );
-            if (res.interaction_id) setInteractionId(res.interaction_id);
+          const initialMsg = err instanceof Error ? err.message : "";
+          const isGuardRejection =
+            initialMsg.includes("アクセスコード") ||
+            initialMsg.includes("上限") ||
+            initialMsg.includes("制限") ||
+            initialMsg.includes("長すぎ") ||
+            initialMsg.includes("混み合って");
+          if (initialMsg.includes("アクセスコード") || initialMsg.includes("ご自身の Gemini API キー")) {
+            setShowKeyBox(true);
+          }
+
+          if (isGuardRejection) {
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantId
@@ -279,38 +282,73 @@ export function AiAssistantPanel({
                       ...m,
                       streaming: false,
                       statusMessage: undefined,
-                      configured: res.configured,
-                      content: res.answer,
-                      toolCalls: res.tool_calls,
-                      mapActions: res.map_actions || [],
-                      model: res.model,
+                      content: `リクエスト制限: ${initialMsg}`,
                     }
                   : m
               )
             );
-          } catch (fallbackErr) {
-            const rawMsg =
-              fallbackErr instanceof Error
-                ? fallbackErr.message
-                : err instanceof Error
-                  ? err.message
-                  : "通信エラー";
-            const hint =
-              rawMsg === "Load failed" || rawMsg === "Failed to fetch"
-                ? `${rawMsg}（バックエンドとの通信がタイムアウトまたは中断されました。高速な Gemini 3.5 Flash-Lite をお試しいただくか、バックエンド起動状態をご確認ください）`
-                : rawMsg;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? {
-                      ...m,
-                      streaming: false,
-                      statusMessage: undefined,
-                      content: `エラーが発生しました: ${hint}`,
-                    }
-                  : m
-              )
-            );
+          } else {
+            // Automatic fallback to unary /api/chat if streaming transport drops (e.g. Safari "Load failed")
+            try {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, statusMessage: "通常通信にフォールバックして再試行中..." }
+                    : m
+                )
+              );
+              const res = await sendChatMessage(
+                {
+                  message: q,
+                  context: contextPayload,
+                  previous_interaction_id: interactionId,
+                  model,
+                },
+                tempApiKey,
+                accessCode
+              );
+              if (res.interaction_id) setInteractionId(res.interaction_id);
+              onRefreshHealth?.();
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? {
+                        ...m,
+                        streaming: false,
+                        statusMessage: undefined,
+                        configured: res.configured,
+                        content: res.answer,
+                        toolCalls: res.tool_calls,
+                        mapActions: res.map_actions || [],
+                        model: res.model,
+                      }
+                    : m
+                )
+              );
+            } catch (fallbackErr) {
+              const rawMsg =
+                fallbackErr instanceof Error
+                  ? fallbackErr.message
+                  : err instanceof Error
+                    ? err.message
+                    : "通信エラー";
+              const hint =
+                rawMsg === "Load failed" || rawMsg === "Failed to fetch"
+                  ? `${rawMsg}（バックエンドとの通信がタイムアウトまたは中断されました。高速な Gemini 3.5 Flash-Lite をお試しいただくか、バックエンド起動状態をご確認ください）`
+                  : rawMsg;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? {
+                        ...m,
+                        streaming: false,
+                        statusMessage: undefined,
+                        content: `エラーが発生しました: ${hint}`,
+                      }
+                    : m
+                )
+              );
+            }
           }
         }
       } finally {
@@ -331,6 +369,8 @@ export function AiAssistantPanel({
       interactionId,
       model,
       tempApiKey,
+      accessCode,
+      onRefreshHealth,
     ]
   );
 
@@ -365,7 +405,11 @@ export function AiAssistantPanel({
     }
   };
 
-  const hasAnyKey = geminiConfigured || Boolean(tempApiKey.trim());
+  const hasOwnKey = Boolean(tempApiKey.trim());
+  const hasAnyKey = geminiConfigured || hasOwnKey;
+  const premiumAllowed = hasOwnKey || Boolean(aiProtection?.premium_models_allowed);
+  const accessCodeRequired = Boolean(aiProtection?.access_code_required) && !hasOwnKey;
+  const maxMessageChars = aiProtection?.max_message_chars ?? 1200;
 
   return (
     <div className="flex h-full flex-col">
@@ -374,24 +418,32 @@ export function AiAssistantPanel({
         <div className="flex flex-wrap items-center justify-between gap-1.5">
           <div className="flex items-center gap-1.5">
             <select
-              value={model}
+              value={premiumAllowed ? model : "gemini-3.5-flash-lite"}
               onChange={(e) => setModel(e.target.value as AiModelId)}
               aria-label="Geminiモデル選択"
               className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] font-medium text-emerald-300 focus:border-emerald-500 focus:outline-none"
             >
               <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite（高速・標準）</option>
-              <option value="gemini-4-hydrogen">Gemini 4 Hydrogen（高精度・じっくり）</option>
-              <option value="gemini-4-argon">Gemini 4 Argon（深層推論）</option>
+              <option value="gemini-4-hydrogen" disabled={!premiumAllowed}>
+                Gemini 4 Hydrogen{!premiumAllowed ? "（要個人APIキー）" : "（高精度・じっくり）"}
+              </option>
+              <option value="gemini-4-argon" disabled={!premiumAllowed}>
+                Gemini 4 Argon{!premiumAllowed ? "（要個人APIキー）" : "（深層推論）"}
+              </option>
             </select>
-            {!hasAnyKey && (
-              <button
-                type="button"
-                onClick={() => setShowKeyBox((v) => !v)}
-                className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] font-medium text-amber-200 hover:bg-amber-500/20"
-              >
-                <KeyRound className="h-3 w-3" /> APIキー設定
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setShowKeyBox((v) => !v)}
+              className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium transition ${
+                !hasAnyKey || (accessCodeRequired && !accessCode.trim())
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
+                  : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600"
+              }`}
+              title="個人APIキー（BYOK）やアクセスコードを設定"
+            >
+              <KeyRound className="h-3 w-3" />
+              {hasOwnKey ? "個人キー使用中" : accessCodeRequired ? "認証/キー設定" : "APIキー設定"}
+            </button>
           </div>
 
           <div className="flex items-center gap-1">
@@ -415,7 +467,7 @@ export function AiAssistantPanel({
           </div>
         </div>
 
-        {/* Active Map Context Pills */}
+        {/* Active Map Context & API Protection Pills */}
         <div className="flex flex-wrap items-center gap-1 text-[10px] text-slate-400">
           <span>参照コンテキスト:</span>
           <span className="rounded bg-slate-800 px-1.5 py-0.5 text-sky-300">
@@ -434,28 +486,53 @@ export function AiAssistantPanel({
           {is3D && (
             <span className="rounded bg-slate-800 px-1.5 py-0.5 text-amber-200">3D表示中</span>
           )}
+          {aiProtection && geminiConfigured && !hasOwnKey && (
+            <span
+              className="inline-flex items-center gap-1 rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300"
+              title={`1分あたり${aiProtection.per_minute_limit}回制限 / 本日の残り共用リクエスト枠`}
+            >
+              <Shield className="h-2.5 w-2.5" />
+              残枠 {aiProtection.daily_remaining}/{aiProtection.daily_limit}
+            </span>
+          )}
         </div>
 
         {showKeyBox && (
-          <div className="rounded-lg border border-amber-500/30 bg-slate-900 p-2 text-[10px]">
-            <div className="mb-1 text-amber-200">
-              一時的な Gemini API キー入力（ブラウザメモリ上のみ保持・保存されません）
-            </div>
-            <div className="flex gap-1.5">
-              <input
-                type="password"
-                value={tempApiKey}
-                onChange={(e) => setTempApiKey(e.target.value)}
-                placeholder="AIza..."
-                className="flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white focus:border-emerald-500 focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={() => setShowKeyBox(false)}
-                className="rounded bg-slate-800 px-2 py-1 text-slate-200 hover:bg-slate-700"
-              >
-                閉じる
-              </button>
+          <div className="space-y-2 rounded-lg border border-amber-500/30 bg-slate-900 p-2 text-[10px]">
+            {aiProtection?.access_code_required && !hasOwnKey && (
+              <div>
+                <div className="mb-1 text-sky-200">
+                  公開サーバー用アクセスコード（`X-Ai-Access-Code`・メモリのみ保持）
+                </div>
+                <input
+                  type="password"
+                  value={accessCode}
+                  onChange={(e) => setAccessCode(e.target.value)}
+                  placeholder="アクセスコードを入力..."
+                  className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white focus:border-sky-500 focus:outline-none"
+                />
+              </div>
+            )}
+            <div>
+              <div className="mb-1 text-amber-200">
+                ご自身の Gemini API キー（BYOK・ブラウザメモリ上のみ保持／制限回避・全モデル利用可）
+              </div>
+              <div className="flex gap-1.5">
+                <input
+                  type="password"
+                  value={tempApiKey}
+                  onChange={(e) => setTempApiKey(e.target.value)}
+                  placeholder="AIza..."
+                  className="flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white focus:border-emerald-500 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKeyBox(false)}
+                  className="rounded bg-slate-800 px-2 py-1 text-slate-200 hover:bg-slate-700"
+                >
+                  閉じる
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -612,8 +689,9 @@ export function AiAssistantPanel({
         <input
           type="text"
           value={input}
+          maxLength={maxMessageChars}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="京都市の建物・ハザードについて質問..."
+          placeholder={`京都市の建物・ハザードについて質問（最大${maxMessageChars}文字）...`}
           className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
         />
         {sending ? (

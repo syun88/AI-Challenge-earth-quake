@@ -497,6 +497,16 @@ def _build_unconfigured_fallback(
     }
 
 
+def _max_output_tokens() -> int:
+    raw = os.getenv("AI_MAX_OUTPUT_TOKENS", "").strip()
+    if raw:
+        try:
+            return min(4096, max(256, int(raw)))
+        except ValueError:
+            pass
+    return 1536
+
+
 def _resolve_api_key(api_key_override: str | None) -> str:
     if api_key_override and api_key_override.strip():
         return api_key_override.strip()
@@ -525,19 +535,21 @@ def ask_quakelens_ai(
     client = genai.Client(api_key=api_key, http_options={"timeout": 120000})
     tool_trace: list[dict[str, Any]] = []
     map_actions: list[dict[str, Any]] = []
+    gen_cfg = {"max_output_tokens": _max_output_tokens()}
 
     kwargs: dict[str, Any] = {
         "model": chosen_model,
         "input": prompt,
         "system_instruction": SYSTEM_INSTRUCTION,
         "tools": TOOLS,
+        "generation_config": gen_cfg,
     }
     if previous_interaction_id:
         kwargs["previous_interaction_id"] = previous_interaction_id
 
     interaction = client.interactions.create(**kwargs)
 
-    for _ in range(6):
+    for _ in range(4):
         fc_steps = [s for s in (interaction.steps or []) if getattr(s, "type", None) == "function_call"]
         if not fc_steps:
             break
@@ -566,6 +578,7 @@ def ask_quakelens_ai(
             input=fn_results,
             system_instruction=SYSTEM_INSTRUCTION,
             tools=TOOLS,
+            generation_config=gen_cfg,
             previous_interaction_id=interaction.id,
         )
 
@@ -606,15 +619,17 @@ def stream_quakelens_ai(
     full_text_parts: list[str] = []
     current_input: Any = prompt
     prev_id = previous_interaction_id
+    gen_cfg = {"max_output_tokens": _max_output_tokens()}
 
     yield {"type": "status", "message": f"{chosen_model} で実データを照会中..."}
 
-    for _ in range(6):
+    for _ in range(4):
         kwargs: dict[str, Any] = {
             "model": chosen_model,
             "input": current_input,
             "system_instruction": SYSTEM_INSTRUCTION,
             "tools": TOOLS,
+            "generation_config": gen_cfg,
             "stream": True,
         }
         if prev_id:

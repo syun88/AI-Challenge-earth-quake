@@ -95,12 +95,20 @@ Google AI Challenge 2026 応募作品として開発された、公的オープ�
 - Python 3.12+ & `uv`
 - Node.js 20+ & `npm`
 
-### 1) 環境変数設定（任意：AI解説を使う場合）
+### 1) 環境変数設定（任意：AI解説・公開時の保護設定）
 
 ```bash
 cp .env.example .env
 # .env を開き、GEMINI_API_KEY=あなたのAPIキー を記入
 ```
+
+> [!IMPORTANT]
+> **一般公開時のAPI保護・費用制御（`.env` で設定可能）**
+> 本リポジトリには公開運用時の Gemini API 不正利用・課金急増を防ぐ保護機構が組み込まれています：
+> - **モデル制限**: デフォルトで `AI_ALLOW_PREMIUM_MODELS=false` のため、共用サーバーキーではコスト効率の高い `gemini-3.5-flash-lite` のみを許可し、高負荷・高コストモデル（`gemini-4-hydrogen` / `gemini-4-argon`）は個人APIキー持込（BYOK）または明示許可時のみ利用可能。
+> - **頻度・日次上限・同時実行数制御**: IP別レート制限（`AI_RATE_LIMIT_PER_MIN=8`・`AI_RATE_LIMIT_PER_HOUR=40`）、サーバー全体の1日合計上限（`AI_DAILY_BUDGET_REQUESTS=300`）、IPあたり同時接続数上限（`2`）、文字数上限（`AI_MAX_MESSAGE_CHARS=1200`）・出力トークン上限（`AI_MAX_OUTPUT_TOKENS=1536`）を適用。
+> - **アクセスコード / BYOK専用モード**: `AI_ACCESS_CODE` を設定するとアクセスコード認証が必須になり、`AI_PUBLIC_SERVER_KEY_ENABLED=false` とすると利用者が画面上で自分のAPIキーを入力した場合のみGeminiを呼び出す完全BYOK運用になります。
+> - **CORS制限**: `CORS_ALLOW_ORIGINS` はデフォルトでローカルオリジン限定（ワイルドカード `*` 廃止）。公開ドメインを使う場合は `.env` で明示指定してください。
 
 ### 2) かんたん一括起動（推奨）
 

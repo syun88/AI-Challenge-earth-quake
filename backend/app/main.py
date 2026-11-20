@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
@@ -22,6 +22,13 @@ from pydantic import BaseModel
 from app.ai_assistant import ask_quakelens_ai, stream_quakelens_ai
 from app.constants import OFFICIAL_RETROFIT_PROGRAMS
 from app.data_store import QuakeLensDataStore
+from app.security import (
+    ai_guard,
+    extract_client_ip,
+    get_cors_allow_origins,
+    redact_secrets,
+    validate_chat_inputs,
+)
 
 # Load .env from repo root or backend directory
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
@@ -50,10 +57,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_cors_allow_origins(),
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Gemini-Api-Key", "X-Ai-Access-Code"],
 )
 
 
@@ -109,12 +116,16 @@ def root() -> str:
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    server_key_usable = bool(
+        api_key and api_key != "your_gemini_api_key_here" and ai_guard.server_key_public_enabled()
+    )
     return {
         "status": "ok",
         "data_loaded": store.loaded,
         "building_count": int(len(store.buildings)) if store.loaded else 0,
         "mesh_count": int(len(store.meshes)) if store.loaded else 0,
-        "gemini_configured": bool(api_key and api_key != "your_gemini_api_key_here"),
+        "gemini_configured": server_key_usable,
+        "ai_protection": ai_guard.get_protection_status(),
     }
 
 
@@ -272,33 +283,58 @@ class ChatRequest(BaseModel):
 @app.post("/api/chat")
 def chat(
     req: ChatRequest,
+    request: Request,
     x_gemini_api_key: str | None = Header(default=None),
+    x_ai_access_code: str | None = Header(default=None),
 ) -> dict[str, Any]:
     s = _require_store()
-    if not req.message.strip():
-        raise HTTPException(status_code=400, detail="message must not be empty")
+    cleaned_msg, cleaned_prev_id, cleaned_ctx = validate_chat_inputs(
+        req.message, req.previous_interaction_id, req.context
+    )
+    ticket = ai_guard.authorize_and_acquire(
+        client_ip=extract_client_ip(request),
+        requested_model=req.model,
+        api_key_override=x_gemini_api_key,
+        access_code=x_ai_access_code,
+    )
     try:
         return ask_quakelens_ai(
             store=s,
-            message=req.message.strip(),
-            context=req.context,
-            previous_interaction_id=req.previous_interaction_id,
+            message=cleaned_msg,
+            context=cleaned_ctx,
+            previous_interaction_id=cleaned_prev_id,
             model=req.model,
             api_key_override=x_gemini_api_key,
             earthquakes_cache=_quake_cache.get("data"),
         )
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"AI解説の生成中にエラーが発生しました: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"AI解説の生成中にエラーが発生しました: {redact_secrets(str(exc))}",
+        ) from exc
+    finally:
+        ai_guard.release_slot(ticket)
 
 
 @app.post("/api/chat/stream")
 def chat_stream(
     req: ChatRequest,
+    request: Request,
     x_gemini_api_key: str | None = Header(default=None),
+    x_ai_access_code: str | None = Header(default=None),
 ) -> StreamingResponse:
     s = _require_store()
-    if not req.message.strip():
-        raise HTTPException(status_code=400, detail="message must not be empty")
+    cleaned_msg, cleaned_prev_id, cleaned_ctx = validate_chat_inputs(
+        req.message, req.previous_interaction_id, req.context
+    )
+    ticket = ai_guard.authorize_and_acquire(
+        client_ip=extract_client_ip(request),
+        requested_model=req.model,
+        api_key_override=x_gemini_api_key,
+        access_code=x_ai_access_code,
+    )
 
     def event_generator():
         q: queue.Queue[dict[str, Any] | None] = queue.Queue()
@@ -308,9 +344,9 @@ def chat_stream(
             try:
                 for ev in stream_quakelens_ai(
                     store=s,
-                    message=req.message.strip(),
-                    context=req.context,
-                    previous_interaction_id=req.previous_interaction_id,
+                    message=cleaned_msg,
+                    context=cleaned_ctx,
+                    previous_interaction_id=cleaned_prev_id,
                     model=req.model,
                     api_key_override=x_gemini_api_key,
                     earthquakes_cache=_quake_cache.get("data"),
@@ -319,7 +355,10 @@ def chat_stream(
                         break
                     q.put(ev)
             except Exception as exc:
-                q.put({"type": "error", "message": f"AI解説の生成中にエラーが発生しました: {exc}"})
+                q.put({
+                    "type": "error",
+                    "message": f"AI解説の生成中にエラーが発生しました: {redact_secrets(str(exc))}",
+                })
             finally:
                 q.put(None)
 
@@ -338,6 +377,7 @@ def chat_stream(
                 yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
         finally:
             stop_flag.set()
+            ai_guard.release_slot(ticket)
 
     return StreamingResponse(
         event_generator(),

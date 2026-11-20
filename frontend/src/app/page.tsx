@@ -20,6 +20,7 @@ import {
 } from "@/lib/api";
 import {
   AgeCategory,
+  AiProtectionStatus,
   BuildingDetail,
   EarthquakeEvent,
   HazardTier,
@@ -42,6 +43,7 @@ export default function HomePage() {
   const [priorityAreas, setPriorityAreas] = useState<PriorityArea[]>([]);
   const [earthquakes, setEarthquakes] = useState<EarthquakeEvent[]>([]);
   const [geminiConfigured, setGeminiConfigured] = useState(false);
+  const [aiProtection, setAiProtection] = useState<AiProtectionStatus | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
 
   // Filters & Layer state
@@ -84,6 +86,7 @@ export default function HomePage() {
           getEarthquakes(40).catch(() => ({ earthquakes: [] })),
         ]);
         setGeminiConfigured(h.gemini_configured);
+        setAiProtection(h.ai_protection ?? null);
         setMetadata(m);
         setMeshesGeoJson(mj);
         setEarthquakes(eq.earthquakes || []);
@@ -96,6 +99,16 @@ export default function HomePage() {
         );
       }
     })();
+  }, []);
+
+  const handleRefreshHealth = useCallback(async () => {
+    try {
+      const h = await getHealth();
+      setGeminiConfigured(h.gemini_configured);
+      setAiProtection(h.ai_protection ?? null);
+    } catch {
+      // ignore transient error
+    }
   }, []);
 
   // Refresh stats whenever filters change
@@ -420,6 +433,8 @@ export default function HomePage() {
             usageGroup={usageGroup}
             is3D={is3D}
             geminiConfigured={geminiConfigured}
+            aiProtection={aiProtection}
+            onRefreshHealth={handleRefreshHealth}
             queuedAiPrompt={queuedAiPrompt}
             onConsumeQueuedAiPrompt={handleConsumeQueuedAiPrompt}
             onRequestAiExplain={handleRequestAiExplain}
@@ -459,6 +474,8 @@ export default function HomePage() {
                 usageGroup={usageGroup}
                 is3D={is3D}
                 geminiConfigured={geminiConfigured}
+                aiProtection={aiProtection}
+                onRefreshHealth={handleRefreshHealth}
                 queuedAiPrompt={queuedAiPrompt}
                 onConsumeQueuedAiPrompt={handleConsumeQueuedAiPrompt}
                 onRequestAiExplain={handleRequestAiExplain}

@@ -230,6 +230,17 @@ export interface MapAction {
   zoom?: number;
 }
 
+export interface AiProtectionStatus {
+  server_key_enabled: boolean;
+  access_code_required: boolean;
+  premium_models_allowed: boolean;
+  daily_limit: number;
+  daily_used: number;
+  daily_remaining: number;
+  per_minute_limit: number;
+  max_message_chars: number;
+}
+
 export interface ChatResponse {
   configured: boolean;
   answer: string;

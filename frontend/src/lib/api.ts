@@ -1,4 +1,5 @@
 import {
+  AiProtectionStatus,
   BuildingDetail,
   ChatResponse,
   ChatStreamEvent,
@@ -12,6 +13,20 @@ import {
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
 
+function formatApiError(status: number, rawText: string, statusText: string): string {
+  if (rawText) {
+    try {
+      const parsed = JSON.parse(rawText) as { detail?: string };
+      if (typeof parsed?.detail === "string" && parsed.detail.trim()) {
+        return parsed.detail.trim();
+      }
+    } catch {
+      // plain text fallback
+    }
+  }
+  return `API Error ${status}: ${rawText || statusText}`;
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -22,7 +37,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`API Error ${res.status}: ${text || res.statusText}`);
+    throw new Error(formatApiError(res.status, text, res.statusText));
   }
   return res.json() as Promise<T>;
 }
@@ -34,6 +49,7 @@ export function getHealth() {
     building_count: number;
     mesh_count: number;
     gemini_configured: boolean;
+    ai_protection?: AiProtectionStatus;
   }>("/api/health");
 }
 
@@ -143,11 +159,15 @@ export function sendChatMessage(
     previous_interaction_id?: string | null;
     model?: string;
   },
-  apiKeyOverride?: string
+  apiKeyOverride?: string,
+  accessCode?: string
 ) {
   const headers: Record<string, string> = {};
   if (apiKeyOverride?.trim()) {
     headers["X-Gemini-Api-Key"] = apiKeyOverride.trim();
+  }
+  if (accessCode?.trim()) {
+    headers["X-Ai-Access-Code"] = accessCode.trim();
   }
   return fetchJson<ChatResponse>("/api/chat", {
     method: "POST",
@@ -165,13 +185,17 @@ export async function streamChatMessage(
   },
   onEvent: (ev: ChatStreamEvent) => void,
   apiKeyOverride?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  accessCode?: string
 ) {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   if (apiKeyOverride?.trim()) {
     headers["X-Gemini-Api-Key"] = apiKeyOverride.trim();
+  }
+  if (accessCode?.trim()) {
+    headers["X-Ai-Access-Code"] = accessCode.trim();
   }
   const res = await fetch(`${API_BASE}/api/chat/stream`, {
     method: "POST",
@@ -181,7 +205,7 @@ export async function streamChatMessage(
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`API Error ${res.status}: ${text || res.statusText}`);
+    throw new Error(formatApiError(res.status, text, res.statusText));
   }
   if (!res.body) {
     throw new Error("Streaming response body is empty");

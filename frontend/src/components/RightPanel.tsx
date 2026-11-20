@@ -22,6 +22,7 @@ import { AGE_COLORS, HAZARD_SHORT_LABELS } from "@/lib/colors";
 import { AiAssistantPanel } from "@/components/AiAssistantPanel";
 import {
   AgeCategory,
+  AiProtectionStatus,
   BuildingDetail,
   HazardTier,
   MapAction,
@@ -49,6 +50,8 @@ interface RightPanelProps {
   usageGroup: UsageGroup;
   is3D: boolean;
   geminiConfigured: boolean;
+  aiProtection?: AiProtectionStatus | null;
+  onRefreshHealth?: () => void;
   queuedAiPrompt: { text: string; ts: number } | null;
   onConsumeQueuedAiPrompt: () => void;
   onRequestAiExplain: (prompt: string) => void;
@@ -73,6 +76,8 @@ export function RightPanel({
   usageGroup,
   is3D,
   geminiConfigured,
+  aiProtection,
+  onRefreshHealth,
   queuedAiPrompt,
   onConsumeQueuedAiPrompt,
   onRequestAiExplain,
@@ -536,6 +541,8 @@ export function RightPanel({
         {activeTab === "ai" && (
           <AiAssistantPanel
             geminiConfigured={geminiConfigured}
+            aiProtection={aiProtection}
+            onRefreshHealth={onRefreshHealth}
             selectedWard={selectedWard}
             ageCategories={ageCategories}
             hazardTiers={hazardTiers}
