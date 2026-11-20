@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React from "react";
 import {
   BarChart,
   Bar,
@@ -14,13 +14,9 @@ import {
   BarChart3,
   Building,
   Sparkles,
-  Send,
-  Loader2,
   ExternalLink,
   Navigation,
-  Wrench,
   ShieldCheck,
-  AlertCircle,
 } from "lucide-react";
 import {
   AGE_COLORS,
@@ -28,25 +24,20 @@ import {
   HAZARD_COLORS,
   HAZARD_SHORT_LABELS,
 } from "@/lib/colors";
-import { sendChatMessage } from "@/lib/api";
-import { MarkdownLite } from "@/components/MarkdownLite";
+import { AiAssistantPanel } from "@/components/AiAssistantPanel";
 import {
   AgeCategory,
+  AiProtectionStatus,
   BuildingDetail,
   HazardTier,
+  MapAction,
   MeshDetail,
   PriorityArea,
   StatsResponse,
+  UsageGroup,
 } from "@/types/quakelens";
 
 export type RightTab = "stats" | "detail" | "ai";
-
-interface ChatTurn {
-  role: "user" | "assistant";
-  content: string;
-  toolCalls?: Array<{ name: string; arguments: Record<string, unknown> }>;
-  configured?: boolean;
-}
 
 interface RightPanelProps {
   activeTab: RightTab;
@@ -60,19 +51,21 @@ interface RightPanelProps {
   selectedMesh: MeshDetail | null;
   selectedMeshcode?: string | null;
   selectedWard: string;
-  ageCategories?: AgeCategory[];
-  hazardTiers?: HazardTier[];
+  ageCategories: AgeCategory[];
+  hazardTiers: HazardTier[];
+  usageGroup: UsageGroup;
+  is3D: boolean;
+  geminiConfigured: boolean;
+  aiProtection?: AiProtectionStatus | null;
+  totalBuildings?: number | null;
+  onRefreshHealth?: () => void;
+  queuedAiPrompt: { text: string; ts: number } | null;
+  onConsumeQueuedAiPrompt: () => void;
+  onRequestAiExplain: (prompt: string) => void;
+  onExecuteMapAction: (action: MapAction) => void;
   onToggleAgeCategory: (cat: AgeCategory) => void;
   onToggleHazardTier: (tier: HazardTier) => void;
 }
-
-const DEMO_PROMPTS = [
-  "この地域には1981年以前の古い建物が何棟ありますか？",
-  "地震ハザードが高い場所はどこですか？",
-  "1981年以前の建物が多い優先確認エリアを教えて",
-  "この地図の数値（震度6弱+確率やARV）は何を意味していますか？",
-  "京都市の耐震診断や補助制度はありますか？",
-];
 
 const ALL_AGE_CATS: AgeCategory[] = ["pre_1981", "1982_2000", "post_2001", "unknown"];
 const ALL_HAZARD_TIERS: HazardTier[] = ["very_high", "elevated", "moderate", "low"];
@@ -89,67 +82,21 @@ export function RightPanel({
   selectedMesh,
   selectedMeshcode,
   selectedWard,
-  ageCategories = ALL_AGE_CATS,
-  hazardTiers = ALL_HAZARD_TIERS,
+  ageCategories,
+  hazardTiers,
+  usageGroup,
+  is3D,
+  geminiConfigured,
+  aiProtection,
+  totalBuildings,
+  onRefreshHealth,
+  queuedAiPrompt,
+  onConsumeQueuedAiPrompt,
+  onRequestAiExplain,
+  onExecuteMapAction,
   onToggleAgeCategory,
   onToggleHazardTier,
 }: RightPanelProps) {
-  const [messages, setMessages] = useState<ChatTurn[]>([
-    {
-      role: "assistant",
-      content:
-        "京都市のPLATEAU建物データ（51万棟超）とJ-SHIS 2024年版ハザードデータに基づいて防災情報を解説します。下の質問例をクリックするか、自由にご質問ください。",
-    },
-  ]);
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const [interactionId, setInteractionId] = useState<string | null>(null);
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, sending]);
-
-  const handleSend = async (promptText?: string) => {
-    const q = (promptText ?? input).trim();
-    if (!q || sending) return;
-    if (!promptText) setInput("");
-
-    setMessages((prev) => [...prev, { role: "user", content: q }]);
-    setSending(true);
-    try {
-      const res = await sendChatMessage({
-        message: q,
-        context: {
-          ward: selectedWard,
-          selected_meshcode: selectedMesh?.meshcode ?? null,
-          selected_building_id: selectedBuilding?.building_id ?? null,
-        },
-        previous_interaction_id: interactionId,
-      });
-      if (res.interaction_id) setInteractionId(res.interaction_id);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: res.answer,
-          toolCalls: res.tool_calls,
-          configured: res.configured,
-        },
-      ]);
-    } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: `エラーが発生しました: ${err instanceof Error ? err.message : "通信エラー"}`,
-        },
-      ]);
-    } finally {
-      setSending(false);
-    }
-  };
-
   const ageData = stats?.age_breakdown ?? [];
   const crossData = (stats?.cross_tab ?? [])
     .filter((r) => r.hazard_tier !== "unknown" || r.total > 0)
@@ -186,7 +133,11 @@ export function RightPanel({
       </div>
 
       {/* Tab Content */}
-      <div className="flex-1 overflow-y-auto p-3.5">
+      <div
+        className={`flex-1 min-h-0 ${
+          activeTab === "ai" ? "overflow-hidden p-3" : "overflow-y-auto p-3.5"
+        }`}
+      >
         {activeTab === "stats" && (
           <div className="space-y-4">
             {/* Denominator & Missingness Box */}
@@ -571,6 +522,19 @@ export function RightPanel({
                     {selectedBuilding.hazard_disclaimer}
                   </p>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    onRequestAiExplain(
+                      `現在選択中の建物（ID: ${selectedBuilding.building_id}、${selectedBuilding.ward_name}、メッシュ ${selectedBuilding.meshcode}）について、建築年・耐震基準区分・地盤とハザード・該当しうる京都市の公式補助制度を分かりやすく解説してください。`
+                    )
+                  }
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-400/60 hover:bg-emerald-500/25"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+                  この建物をAIで詳しく解説
+                </button>
               </div>
             )}
 
@@ -613,6 +577,19 @@ export function RightPanel({
                     value={`${selectedMesh.arv ?? "—"} / ${selectedMesh.avs ? `${selectedMesh.avs} m/s` : "—"}`}
                   />
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    onRequestAiExplain(
+                      `現在選択中の250mメッシュ（コード: ${selectedMesh.meshcode}、${selectedMesh.ward_name}）の統計、1981年以前建築の傾向、表層地盤（${selectedMesh.jname}・ARV ${selectedMesh.arv ?? "不明"}）、震度6弱+確率、及び京都市の補助制度について詳しく解説してください。`
+                    )
+                  }
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-400/60 hover:bg-emerald-500/25"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+                  このメッシュをAIで詳しく解説
+                </button>
               </div>
             )}
 
@@ -648,100 +625,22 @@ export function RightPanel({
         )}
 
         {activeTab === "ai" && (
-          <div className="flex h-full flex-col">
-            {/* Suggested question chips */}
-            <div className="mb-3 flex flex-wrap gap-1.5">
-              {DEMO_PROMPTS.map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  disabled={sending}
-                  onClick={() => handleSend(p)}
-                  className="rounded-full border border-slate-700 bg-slate-950/80 px-2.5 py-1 text-left text-[10px] text-slate-300 transition hover:border-emerald-500/50 hover:text-emerald-200 disabled:opacity-50"
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-
-            {/* Chat stream */}
-            <div className="flex-1 space-y-3 overflow-y-auto pr-1">
-              {messages.map((m, idx) => (
-                <div
-                  key={idx}
-                  className={`rounded-xl p-3 ${
-                    m.role === "user"
-                      ? "ml-6 border border-sky-500/30 bg-sky-500/15 text-xs text-sky-100"
-                      : "mr-2 border border-slate-800 bg-slate-950/80"
-                  }`}
-                >
-                  {m.role === "user" ? (
-                    <p>{m.content}</p>
-                  ) : (
-                    <>
-                      {m.configured === false && (
-                        <div className="mb-2 flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200">
-                          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                          APIキー未設定モード
-                        </div>
-                      )}
-                      <MarkdownLite text={m.content} />
-                      {m.toolCalls && m.toolCalls.length > 0 && (
-                        <div className="mt-2.5 border-t border-slate-800 pt-2">
-                          <div className="mb-1 flex items-center gap-1 text-[10px] text-slate-400">
-                            <Wrench className="h-3 w-3 text-emerald-400" />
-                            <span>実データ参照ツール（Function Calling）:</span>
-                          </div>
-                          <div className="flex flex-wrap gap-1">
-                            {m.toolCalls.map((tc, tIdx) => (
-                              <span
-                                key={tIdx}
-                                className="rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] text-emerald-300"
-                              >
-                                {tc.name}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              ))}
-
-              {sending && (
-                <div className="mr-2 flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/80 p-3 text-xs text-slate-300">
-                  <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
-                  <span>実データを照会して解説を生成中...</span>
-                </div>
-              )}
-              <div ref={chatEndRef} />
-            </div>
-
-            {/* Chat input */}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleSend();
-              }}
-              className="mt-3 flex gap-2 border-t border-slate-800 pt-2.5"
-            >
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="京都市の建物・ハザードについて質問..."
-                className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
-              />
-              <button
-                type="submit"
-                disabled={sending || !input.trim()}
-                className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-40"
-              >
-                <Send className="h-3.5 w-3.5" />
-              </button>
-            </form>
-          </div>
+          <AiAssistantPanel
+            geminiConfigured={geminiConfigured}
+            aiProtection={aiProtection}
+            totalBuildings={totalBuildings}
+            onRefreshHealth={onRefreshHealth}
+            selectedWard={selectedWard}
+            ageCategories={ageCategories}
+            hazardTiers={hazardTiers}
+            usageGroup={usageGroup}
+            is3D={is3D}
+            selectedBuilding={selectedBuilding}
+            selectedMesh={selectedMesh}
+            queuedPrompt={queuedAiPrompt}
+            onConsumeQueuedPrompt={onConsumeQueuedAiPrompt}
+            onExecuteMapAction={onExecuteMapAction}
+          />
         )}
       </div>
     </aside>

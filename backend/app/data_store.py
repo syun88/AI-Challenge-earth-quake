@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import gzip
 import json
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
 import pandas as pd
+
+from app.mvt import encode_buildings_mvt
 
 from app.constants import (
     AGE_CATEGORY_LABELS,
@@ -35,6 +40,8 @@ class QuakeLensDataStore:
         self.meshes: gpd.GeoDataFrame = gpd.GeoDataFrame()
         self.summary: dict[str, Any] = {}
         self.loaded = False
+        self._tile_lock = threading.Lock()
+        self._tile_cache: OrderedDict[tuple[int, int, int], tuple[bytes, bytes]] = OrderedDict()
 
     def load(self) -> None:
         """Load processed files into memory and warm spatial indices."""
@@ -47,6 +54,8 @@ class QuakeLensDataStore:
         _ = self.buildings.sindex  # warm R-tree spatial index
 
         self.meshes = gpd.read_file(self.meshes_path)
+        with self._tile_lock:
+            self._tile_cache.clear()
         if self.summary_path.exists():
             self.summary = json.loads(self.summary_path.read_text(encoding="utf-8"))
         self.loaded = True
@@ -76,14 +85,46 @@ class QuakeLensDataStore:
         return df
 
     def get_metadata(self) -> dict[str, Any]:
-        """Return dataset provenance, licenses, reference years, and overall completeness."""
+        """Return dataset provenance, licenses, reference years, and live-verified completeness."""
+        counts = dict(self.summary.get("counts", {}))
+        if not self.buildings.empty:
+            total_b = int(len(self.buildings))
+            counts.setdefault("total_buildings", total_b)
+            if "measured_height" in self.buildings.columns:
+                known_h = int(self.buildings["measured_height"].notna().sum())
+                counts["known_measured_height_count"] = known_h
+                counts["known_measured_height_rate"] = round(known_h / total_b, 4) if total_b else 0.0
+
+        hazard_summary: dict[str, Any] = {}
+        if not self.meshes.empty and "t30_i55_ps" in self.meshes.columns:
+            valid_p = self.meshes["t30_i55_ps"].dropna()
+            if not valid_p.empty:
+                hazard_summary["mesh_count"] = int(len(self.meshes))
+                hazard_summary["min_t30_i55_ps"] = round(float(valid_p.min()), 4)
+                hazard_summary["max_t30_i55_ps"] = round(float(valid_p.max()), 4)
+            if "jname" in self.meshes.columns:
+                terrace = self.meshes[self.meshes["jname"] == "砂礫質台地"]["t30_i55_ps"].dropna()
+                if not terrace.empty:
+                    hazard_summary["sand_gravel_terrace_count"] = int(len(terrace))
+                    hazard_summary["sand_gravel_terrace_mean"] = round(float(terrace.mean()), 4)
+                backmarsh = self.meshes[self.meshes["jname"] == "後背湿地"]["t30_i55_ps"].dropna()
+                if not backmarsh.empty:
+                    hazard_summary["backmarsh_count"] = int(len(backmarsh))
+                    hazard_summary["backmarsh_mean"] = round(float(backmarsh.mean()), 4)
+                    hazard_summary["backmarsh_max"] = round(float(backmarsh.max()), 4)
+            if "arv" in self.meshes.columns:
+                valid_arv = self.meshes["arv"].dropna()
+                if not valid_arv.empty:
+                    hazard_summary["max_arv"] = round(float(valid_arv.max()), 2)
+
         return {
             "municipality": self.summary.get("municipality", TARGET_MUNICIPALITY),
             "generated_at_utc": self.summary.get("generated_at_utc"),
             "is_partial_sample": self.summary.get("is_partial_sample", False),
             "plateau_metadata": self.summary.get("plateau_metadata", {}),
             "data_sources": self.summary.get("data_sources", []),
-            "counts": self.summary.get("counts", {}),
+            "counts": counts,
+            "hazard_summary": hazard_summary,
             "wards": sorted(
                 [w for w in self.buildings["ward_name"].unique().tolist() if w and w != "不明"]
             )
@@ -303,7 +344,7 @@ class QuakeLensDataStore:
             df = df[df["ward_name"] == ward]
         return json.loads(df.to_json())
 
-    def get_buildings_geojson(
+    def _filter_buildings_bbox_df(
         self,
         bbox: tuple[float, float, float, float] | None = None,
         ward: str | None = None,
@@ -311,9 +352,7 @@ class QuakeLensDataStore:
         hazard_tiers: list[str] | None = None,
         usage_group: str | None = None,
         meshcode: str | None = None,
-        limit: int = 3500,
-    ) -> dict[str, Any]:
-        """Return filtered buildings within bbox (EPSG:4326) as GeoJSON FeatureCollection."""
+    ) -> gpd.GeoDataFrame:
         df = self.buildings
         if bbox is not None:
             minx, miny, maxx, maxy = bbox
@@ -329,6 +368,67 @@ class QuakeLensDataStore:
             df = df[df["usage_group"] == usage_group]
         if meshcode:
             df = df[df["meshcode"] == meshcode]
+        return df
+
+    def count_buildings_in_bbox(
+        self,
+        bbox: tuple[float, float, float, float] | None = None,
+        ward: str | None = None,
+        age_categories: list[str] | None = None,
+        hazard_tiers: list[str] | None = None,
+        usage_group: str | None = None,
+        meshcode: str | None = None,
+    ) -> dict[str, int]:
+        """Return exact filtered building count inside a bounding box."""
+        df = self._filter_buildings_bbox_df(
+            bbox=bbox,
+            ward=ward,
+            age_categories=age_categories,
+            hazard_tiers=hazard_tiers,
+            usage_group=usage_group,
+            meshcode=meshcode,
+        )
+        return {"total_matching": int(len(df))}
+
+    def get_building_tile_mvt(self, z: int, x: int, y: int, gzipped: bool = False) -> bytes:
+        """Return cached or freshly encoded MVT v2.1 bytes for XYZ building tile."""
+        key = (z, x, y)
+        with self._tile_lock:
+            cached = self._tile_cache.get(key)
+            if cached is not None:
+                self._tile_cache.move_to_end(key)
+                return cached[1] if gzipped else cached[0]
+
+        raw = encode_buildings_mvt(self.buildings, z, x, y)
+        gz = gzip.compress(raw, compresslevel=4) if raw else b""
+
+        with self._tile_lock:
+            self._tile_cache[key] = (raw, gz)
+            self._tile_cache.move_to_end(key)
+            while len(self._tile_cache) > 512:
+                self._tile_cache.popitem(last=False)
+
+        return gz if gzipped else raw
+
+    def get_buildings_geojson(
+        self,
+        bbox: tuple[float, float, float, float] | None = None,
+        ward: str | None = None,
+        age_categories: list[str] | None = None,
+        hazard_tiers: list[str] | None = None,
+        usage_group: str | None = None,
+        meshcode: str | None = None,
+        limit: int = 20000,
+    ) -> dict[str, Any]:
+        """Return filtered buildings within bbox (EPSG:4326) as GeoJSON FeatureCollection."""
+        df = self._filter_buildings_bbox_df(
+            bbox=bbox,
+            ward=ward,
+            age_categories=age_categories,
+            hazard_tiers=hazard_tiers,
+            usage_group=usage_group,
+            meshcode=meshcode,
+        )
 
         total_in_bbox = int(len(df))
         truncated = total_in_bbox > limit

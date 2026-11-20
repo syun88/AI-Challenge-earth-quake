@@ -525,6 +525,8 @@ def run_pipeline(max_files: int = 0) -> None:
             "known_usage_rate": round(float((df_b["usage_group"] != "unknown").mean()), 4) if total_b else 0.0,
             "known_structure_rate": round(float((df_b["structure_label"] != "不明").mean()), 4) if total_b else 0.0,
             "known_storeys_rate": round(float((df_b["storeys_above"].notna()).mean()), 4) if total_b else 0.0,
+            "known_measured_height_count": int(df_b["measured_height"].notna().sum()) if total_b else 0,
+            "known_measured_height_rate": round(float((df_b["measured_height"].notna()).mean()), 4) if total_b else 0.0,
             "pre_1981_high_or_elevated_hazard_count": overlap_high_pre81,
             "pre_1981_very_high_hazard_count": overlap_very_high_pre81,
             "mesh_count": len(gdf_meshes_out),
