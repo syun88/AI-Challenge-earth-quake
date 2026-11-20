@@ -38,6 +38,7 @@ Google AI Challenge 2026 応募作品として開発された、公的オープ�
 
 1. **インタラクティブ地図（MapLibre GL JS + 地理院タイル）**
    - 築年区分による建物ポリゴンの色分け（1981年以前 / 1982〜2000年 / 2001年以降 / 建築年不明）
+   - **2D平面 / 3D立体（LOD1）表示切替**：PLATEAUの実測建物高さ（`measuredHeight`・判明率98.2%）を用いた `fill-extrusion` 3D可視化に対応（カメラ傾き・回転操作可）
    - 色覚多様性（Okabe-Ito）に配慮した建物カラーパレットと紫系ハザードメッシュの明確な視覚分離
    - J-SHIS 250mメッシュオーバーレイ（「今後30年震度6弱以上確率」と「表層地盤最大速度増幅率 ARV」を切替可能）
    - 気象庁 地震発生履歴（震源・M・最大震度）のオーバーレイ表示
@@ -51,10 +52,11 @@ Google AI Challenge 2026 応募作品として開発された、公的オープ�
 4. **詳細インスペクター＆公式耐震補助案内**
    - 建物・250mメッシュをクリックして建築年・構造・用途・地盤・ハザード確率を確認
    - 京都市公式の無料耐震診断（「木造住宅及び京町家の耐震診断士派遣事業」）および改修補助（「まちの匠・ぷらす」）等の確認済み公式ページへの導線を表示
-5. **Gemini AI 防災解説アシスタント（Function Calling）**
-   - `google-genai` SDK（`gemini-4-hydrogen` / Interactions API）を利用
-   - バックエンドの実データ照会ツール（`get_area_statistics`, `get_priority_confirmation_areas`, `get_mesh_details`, `get_building_details`, `get_data_methodology_and_programs`）をFunction Callingで呼び出し、実測値に基づいた解説を生成
-   - 回答カード下に「参照ツール（Function Calling）」バッジを表示し、数値の根拠を透明化
+5. **Gemini AI 防災解説アシスタント（SSEストリーミング × Function Calling × 地図連動）**
+   - `google-genai` SDK（Interactions API・SSEリアルタイムストリーミング）を利用し、UI上でモデル（`gemini-3.5-flash-lite`［高速・標準］ / `gemini-4-hydrogen` / `gemini-4-argon`）切替やブラウザメモリ内での一時APIキー入力に対応
+   - バックエンドの実データ照会ツール（`get_area_statistics`［築年・ハザード・用途フィルター連動］, `compare_wards`, `get_priority_confirmation_areas`, `get_mesh_details`, `get_building_details`, `get_recent_earthquakes_summary`, `get_data_methodology_and_programs`）をFunction Callingで呼び出し、実行過程と参照根拠（引数・取得結果サマリー）を折りたたみカードで透明化
+   - 回答内の注目区・250mメッシュ・建物をワンクリックで地図フォーカス＆詳細取得できるインタラクティブな **地図連動アクション（MapActions）**、ワンクリックの「現在エリアをAI診断」、建物／メッシュ詳細パネルからの「AIで詳しく解説」連携を搭載
+   - `GEMINI_API_KEY` 未設定時もダミー回答を行わず、バックエンドの実データ照会ツールを実行して正確な集計値・地図移動アクションを返却
 
 ---
 
@@ -151,8 +153,9 @@ npm run dev
    - 建物やメッシュをクリックすると右側の「詳細・補助」タブに建築年・構造・用途・地盤・ハザード確率・京都市公式の耐震診断/補助制度リンクが表示されます。
 4. **優先確認エリアの抽出（右パネル「統計・エリア」タブ下部）**：
    - 「高ハザード×1981以前順」「1981以前棟数順」「震度6弱+確率順」等で250mメッシュを並び替え、行をクリックすると該当エリアへ直接ズームインします。
-5. **AI防災解説（右パネル「AI防災解説」タブ）**：
-   - `.env` に `GEMINI_API_KEY` を設定している場合、質問例チップまたは自由入力で質問すると、Geminiがバックエンドの実測データツール（Function Calling）を呼び出して根拠付きで回答します。
+5. **AI防災解説（ヘッダー「AI防災解説」／右パネル「AI防災解説」タブ）**：
+   - `.env` に `GEMINI_API_KEY` を設定している場合（またはUI上部の「APIキー設定」からキーを入力した場合）、モデル（`gemini-3.5-flash-lite` / `gemini-4-hydrogen` / `gemini-4-argon`）を選択して「現在エリアをAI診断」・質問例・自由入力から質問すると、SSEストリーミングでリアルタイムに回答が生成されます。
+   - 「参照データ根拠（Function Calling）」折りたたみカードで実行されたツールと根拠サマリーを確認でき、回答下の地図連動アクションボタンから注目区・250mメッシュへ直接ジャンプできます。建物／メッシュ詳細タブ内の「AIで詳しく解説」ボタンからもそのままAI解説を呼び出せます。
 
 ---
 

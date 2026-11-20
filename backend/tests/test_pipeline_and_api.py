@@ -260,10 +260,70 @@ def test_api_endpoints_with_store(synthetic_store: QuakeLensDataStore, monkeypat
     areas = client.get("/api/priority-areas?min_buildings=1").json()
     assert areas["areas"][0]["meshcode"] == "5235362024"
 
-    # Chat should gracefully handle missing GEMINI_API_KEY
-    chat_resp = client.post("/api/chat", json={"message": "古い建物は何棟？"}).json()
+    # Chat should gracefully handle missing GEMINI_API_KEY while still executing real data tools
+    chat_resp = client.post(
+        "/api/chat",
+        json={
+            "message": "古い建物は何棟？",
+            "context": {"ward": "中京区", "selected_meshcode": "5235362024"},
+        },
+    ).json()
     assert chat_resp["configured"] is False
     assert "GEMINI_API_KEY" in chat_resp["answer"]
+    assert len(chat_resp["tool_calls"]) >= 2
+    assert any(tc["name"] == "get_area_statistics" for tc in chat_resp["tool_calls"])
+    assert any(tc["name"] == "get_mesh_details" for tc in chat_resp["tool_calls"])
+    assert any(a["type"] == "fly_to_mesh" for a in chat_resp.get("map_actions", []))
+    assert any(a["type"] == "fly_to_ward" for a in chat_resp.get("map_actions", []))
+
+    # SSE streaming endpoint in unconfigured mode should emit tool events, text_delta, and done
+    with client.stream(
+        "POST",
+        "/api/chat/stream",
+        json={"message": "伏見区の状況を教えて", "model": "gemini-4-argon", "context": {"ward": "中京区"}},
+    ) as stream_resp:
+        assert stream_resp.status_code == 200
+        assert "text/event-stream" in stream_resp.headers["content-type"]
+        raw_lines = [line for line in stream_resp.iter_lines() if line.startswith("data: ")]
+
+    events = [json.loads(line.removeprefix("data: ")) for line in raw_lines]
+    event_types = [ev["type"] for ev in events]
+    assert "tool_result" in event_types
+    assert events[-1]["type"] == "done"
+    assert events[-1]["configured"] is False
+    assert events[-1]["model"] == "gemini-4-argon"
+    assert "GEMINI_API_KEY" in events[-1]["answer"]
+
+
+def test_ai_tools_compare_wards_earthquakes_and_map_actions(synthetic_store: QuakeLensDataStore) -> None:
+    from app.ai_assistant import _execute_tool, _extract_map_actions, _resolve_model
+
+    assert _resolve_model(None) == "gemini-3.5-flash-lite"
+    assert _resolve_model("gemini-4-hydrogen") == "gemini-4-hydrogen"
+    assert _resolve_model("gemini-4-argon") == "gemini-4-argon"
+    assert _resolve_model("unknown-model") == "gemini-3.5-flash-lite"
+
+    ward_cmp = _execute_tool(synthetic_store, "compare_wards", {"usage_group": "all"})
+    assert len(ward_cmp["wards"]) >= 1
+    first_ward = ward_cmp["wards"][0]["ward_name"]
+    ward_actions = _extract_map_actions("compare_wards", ward_cmp)
+    assert ward_actions[0]["type"] == "fly_to_ward"
+    assert ward_actions[0]["ward"] == first_ward
+
+    sample_eq = [{"eid": "eq1", "at": "2026-01-01T00:00:00+09:00", "anm": "京都府南部", "mag": 3.2, "maxi": "2"}]
+    eq_res = _execute_tool(
+        synthetic_store,
+        "get_recent_earthquakes_summary",
+        {"limit": 5},
+        earthquakes_cache=sample_eq,
+    )
+    assert eq_res["count"] == 1
+    assert eq_res["earthquakes"][0]["anm"] == "京都府南部"
+
+    bldg_res = _execute_tool(synthetic_store, "get_building_details", {"building_id": "26100-bldg-100"})
+    bldg_actions = _extract_map_actions("get_building_details", bldg_res)
+    assert bldg_actions[0]["type"] == "focus_building"
+    assert bldg_actions[0]["building_id"] == "26100-bldg-100"
 
 
 def test_real_processed_data_consistency_and_ai_tools() -> None:

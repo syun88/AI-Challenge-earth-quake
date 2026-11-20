@@ -1,6 +1,7 @@
 import {
   BuildingDetail,
   ChatResponse,
+  ChatStreamEvent,
   EarthquakeEvent,
   MeshDetail,
   MetadataResponse,
@@ -135,13 +136,85 @@ export function getEarthquakes(limit = 50) {
   }>(`/api/earthquakes?limit=${limit}`);
 }
 
-export function sendChatMessage(body: {
-  message: string;
-  context?: Record<string, unknown>;
-  previous_interaction_id?: string | null;
-}) {
+export function sendChatMessage(
+  body: {
+    message: string;
+    context?: Record<string, unknown>;
+    previous_interaction_id?: string | null;
+    model?: string;
+  },
+  apiKeyOverride?: string
+) {
+  const headers: Record<string, string> = {};
+  if (apiKeyOverride?.trim()) {
+    headers["X-Gemini-Api-Key"] = apiKeyOverride.trim();
+  }
   return fetchJson<ChatResponse>("/api/chat", {
     method: "POST",
+    headers,
     body: JSON.stringify(body),
   });
+}
+
+export async function streamChatMessage(
+  body: {
+    message: string;
+    context?: Record<string, unknown>;
+    previous_interaction_id?: string | null;
+    model?: string;
+  },
+  onEvent: (ev: ChatStreamEvent) => void,
+  apiKeyOverride?: string,
+  signal?: AbortSignal
+) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (apiKeyOverride?.trim()) {
+    headers["X-Gemini-Api-Key"] = apiKeyOverride.trim();
+  }
+  const res = await fetch(`${API_BASE}/api/chat/stream`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`API Error ${res.status}: ${text || res.statusText}`);
+  }
+  if (!res.body) {
+    throw new Error("Streaming response body is empty");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value) {
+      buffer += decoder.decode(value, { stream: !done });
+    } else if (done) {
+      buffer += decoder.decode();
+    }
+    const chunks = buffer.split("\n\n");
+    buffer = done ? "" : chunks.pop() || "";
+
+    for (const chunk of chunks) {
+      for (const line of chunk.split("\n")) {
+        if (line.startsWith("data: ")) {
+          const rawJson = line.slice(6).trim();
+          if (!rawJson) continue;
+          try {
+            const parsed = JSON.parse(rawJson) as ChatStreamEvent;
+            onEvent(parsed);
+          } catch {
+            // ignore malformed partial frames
+          }
+        }
+      }
+    }
+    if (done) break;
+  }
 }

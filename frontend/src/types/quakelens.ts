@@ -212,10 +212,37 @@ export interface EarthquakeEvent {
   depth_km: number | null;
 }
 
+export interface ToolCallTrace {
+  name: string;
+  arguments: Record<string, unknown>;
+  summary?: string;
+}
+
+export interface MapAction {
+  type: "fly_to_mesh" | "fly_to_ward" | "focus_building";
+  key: string;
+  label: string;
+  meshcode?: string;
+  ward?: string;
+  building_id?: string;
+  lon?: number;
+  lat?: number;
+  zoom?: number;
+}
+
 export interface ChatResponse {
   configured: boolean;
   answer: string;
   interaction_id: string | null;
-  tool_calls: Array<{ name: string; arguments: Record<string, unknown> }>;
-  model?: string;
+  tool_calls: ToolCallTrace[];
+  map_actions?: MapAction[];
+  model?: string | null;
 }
+
+export type ChatStreamEvent =
+  | { type: "status"; message: string }
+  | { type: "tool_start"; name: string }
+  | { type: "tool_result"; name: string; arguments: Record<string, unknown>; summary?: string }
+  | { type: "text_delta"; delta: string }
+  | ({ type: "done" } & ChatResponse)
+  | { type: "error"; message: string };

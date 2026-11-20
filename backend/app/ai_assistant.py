@@ -1,35 +1,37 @@
-"""Gemini AI Assistant with Function Calling backed by QuakeLensDataStore."""
+"""Gemini AI Assistant with streaming Function Calling backed by QuakeLensDataStore."""
 
 from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from typing import Any
 
 from google import genai
 
-from app.constants import OFFICIAL_RETROFIT_PROGRAMS
+from app.constants import OFFICIAL_RETROFIT_PROGRAMS, WARD_NAMES
 from app.data_store import QuakeLensDataStore
 
-MODEL_NAME = "gemini-4-hydrogen"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
+ALLOWED_MODELS = {"gemini-3.5-flash-lite", "gemini-4-hydrogen", "gemini-4-argon"}
 
 SYSTEM_INSTRUCTION = """あなたは「QuakeLens Japan」の防災データ解説AIアシスタントです。
 対象地域は京都市全域（Project PLATEAU 2025年度版 + J-SHIS 2024年版地震ハザード・表層地盤V4）です。
 
 【厳守事項】
-1. 建物棟数、割合、ハザード確率、増幅率(ARV)、メッシュコード、区別数値、公式補助制度URLを回答する際は、必ず事前に用意されたFunction Callingツールを呼び出し、返却された実データのみに基づいて回答してください。
+1. 建物棟数、割合、ハザード確率、増幅率(ARV)、メッシュコード、区別数値、地震履歴、公式補助制度URLを回答する際は、必ず事前に用意されたFunction Callingツールを呼び出し、返却された実データのみに基づいて回答してください。
 2. 実データにない数値・住所・確率・URLを絶対に推測・捏造しないでください。データが「不明」または欠損している場合は、その事実と不明件数・割合（分母）を明記してください。
 3. J-SHISの「今後30年間に震度6弱以上となる確率（T30_I55_PS）」等は地震動の確率であり、「建物の倒壊確率」「個別の耐震診断結果」「リアルタイムの地震予知」ではないことを明確に説明してください。
 4. PLATEAUの建築年は「年」単位のため、1981年6月1日（新耐震基準）や2000年6月1日（木造住宅接合部等の規定強化）の前後判定を築年数だけで断定しないでください。
 5. 任意の重み付けスコア等を「公式の危険度」として提示しないでください。
-6. 簡潔でわかりやすく、防災の専門家ではない一般利用者にも理解しやすい日本語（箇条書きや太字を活用）で回答してください。
+6. 簡潔でわかりやすく、一般利用者にも直感的に理解できる日本語（見出し・箇条書き・表・太字を活用）で回答してください。
 """
 
 TOOLS = [
     {
         "type": "function",
         "name": "get_area_statistics",
-        "description": "京都市全体または指定した区（例: '伏見区', '東山区', '中京区'）の建物統計、築年区分別棟数、建築年不明率、地震ハザード区分別棟数、1981年以前×高ハザード重複件数、区別サマリーを取得します。",
+        "description": "京都市全体または指定した区（例: '伏見区', '東山区', '中京区'）の建物統計、築年区分別棟数、建築年不明率、地震ハザード区分別棟数、1981年以前×高ハザード重複件数、区別サマリーを取得します。現在の画面フィルター（age_categories, hazard_tiers, usage_group, meshcode）も渡せます。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -40,6 +42,40 @@ TOOLS = [
                 "usage_group": {
                     "type": "string",
                     "description": "'all'（全用途）, 'residential'（住宅系）, 'non_residential'（非住宅）",
+                },
+                "age_categories": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "絞り込む築年区分（pre_1981, 1982_2000, post_2001, unknown）",
+                },
+                "hazard_tiers": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "絞り込むハザード区分（very_high, elevated, moderate, low）",
+                },
+                "meshcode": {
+                    "type": "string",
+                    "description": "特定の250mメッシュコードで絞り込む場合に指定",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "type": "function",
+        "name": "compare_wards",
+        "description": "京都市の複数の区（または全11区）の建物総数、建築年判明率、1981年以前建物数、高ハザード×1981以前重複数、平均30年震度6弱以上確率を比較します。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "wards": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "比較したい区名の配列（例: ['伏見区', '東山区', '山科区']）。省略時は全11区を比較。",
+                },
+                "usage_group": {
+                    "type": "string",
+                    "description": "'all', 'residential', 'non_residential'",
                 },
             },
             "required": [],
@@ -58,7 +94,11 @@ TOOLS = [
                 },
                 "sort_by": {
                     "type": "string",
-                    "description": "並び順: 'pre_1981_high_hazard'（高ハザード域×1981年以前棟数）, 'pre_1981_count'（1981年以前棟数順）, 't30_i55_ps'（震度6弱以上確率順）, 'pre_1981_share_known'（判明建物のうち1981年以前割合順）",
+                    "description": "並び順: 'pre_1981_high_hazard', 'pre_1981_count', 't30_i55_ps', 'pre_1981_share_known'",
+                },
+                "min_t30_i55": {
+                    "type": "number",
+                    "description": "最低30年震度6弱以上確率（0.0〜1.0、例: 0.26 で26%以上）",
                 },
                 "limit": {
                     "type": "integer",
@@ -77,7 +117,7 @@ TOOLS = [
             "properties": {
                 "meshcode": {
                     "type": "string",
-                    "description": "10桁のJIS 250mメッシュコード（例: '5235362024'）",
+                    "description": "10桁のJIS 250mメッシュコード（例: '5235367414'）",
                 }
             },
             "required": ["meshcode"],
@@ -100,6 +140,21 @@ TOOLS = [
     },
     {
         "type": "function",
+        "name": "get_recent_earthquakes_summary",
+        "description": "気象庁 地震情報APIのキャッシュから直近の地震発生履歴（発生日時・震央地名・マグニチュード・最大震度）を取得します。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "取得件数（最大20）",
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "type": "function",
         "name": "get_data_methodology_and_programs",
         "description": "使用しているデータセットの出典・基準年・ライセンス、地図の指標（T30_I55_PS, ARV, AVS, 築年区分）の定義、および京都市公式の耐震診断・耐震改修補助制度情報を取得します。",
         "parameters": {
@@ -111,13 +166,135 @@ TOOLS = [
 ]
 
 
-def _execute_tool(store: QuakeLensDataStore, name: str, args: dict[str, Any] | None) -> Any:
+def _resolve_model(model: str | None) -> str:
+    if model and model in ALLOWED_MODELS:
+        return model
+    return DEFAULT_MODEL
+
+
+def _summarize_tool_call(name: str, args: dict[str, Any], result: Any) -> str:
+    if isinstance(result, dict) and result.get("error"):
+        return str(result["error"])
+    if name == "get_area_statistics" and isinstance(result, dict):
+        ward = (result.get("scope") or {}).get("ward", "all")
+        w_label = "京都市全域" if ward == "all" else f"京都市{ward}"
+        tot = result.get("total_buildings", 0)
+        pre81 = result.get("pre_1981_count", 0)
+        rate = float(result.get("known_year_rate") or 0) * 100
+        return f"{w_label}: {tot:,}棟（1981以前 {pre81:,}棟 / 判明率 {rate:.1f}%）"
+    if name == "compare_wards" and isinstance(result, dict):
+        rows = result.get("wards", [])
+        return f"区別比較: {len(rows)}区の統計を取得"
+    if name == "get_priority_confirmation_areas" and isinstance(result, dict):
+        areas = result.get("areas", [])
+        if areas:
+            top = areas[0]
+            return f"優先エリア {len(areas)}件取得（1位: {top['ward_name']} {top['meshcode']} / 1981以前 {top['pre_1981_count']}棟）"
+        return "該当する優先確認エリア 0件"
+    if name == "get_mesh_details" and isinstance(result, dict):
+        return f"メッシュ {result.get('meshcode')}（{result.get('ward_name')}）: 総{result.get('total_buildings', 0):,}棟・1981以前 {result.get('pre_1981_count', 0):,}棟"
+    if name == "get_building_details" and isinstance(result, dict):
+        yr = f"{result['year_built']}年築" if result.get("year_built") else "建築年不明"
+        return f"建物 {result.get('building_id')}（{result.get('ward_name')} / {yr} / {result.get('structure_label')}）"
+    if name == "get_recent_earthquakes_summary" and isinstance(result, dict):
+        return f"気象庁 直近地震情報 {len(result.get('earthquakes', []))}件"
+    if name == "get_data_methodology_and_programs":
+        return "データ出典・指標定義・京都市公式耐震補助制度を取得"
+    return f"{name} 実行完了"
+
+
+def _extract_map_actions(name: str, result: Any) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    if not isinstance(result, dict) or result.get("error"):
+        return actions
+
+    if name == "get_priority_confirmation_areas":
+        for area in (result.get("areas") or [])[:3]:
+            prob = f"{area['t30_i55_ps']*100:.0f}%" if area.get("t30_i55_ps") is not None else "—"
+            actions.append({
+                "type": "fly_to_mesh",
+                "key": f"mesh:{area['meshcode']}",
+                "label": f"{area['ward_name']} {area['meshcode']}（1981以前 {area['pre_1981_count']}棟・確率{prob}）",
+                "meshcode": area["meshcode"],
+                "lon": area["centroid_lon"],
+                "lat": area["centroid_lat"],
+                "zoom": 15.8,
+            })
+    elif name == "get_mesh_details" and result.get("meshcode"):
+        actions.append({
+            "type": "fly_to_mesh",
+            "key": f"mesh:{result['meshcode']}",
+            "label": f"メッシュ {result['meshcode']}（{result['ward_name']}）へ移動",
+            "meshcode": result["meshcode"],
+            "lon": result["centroid_lon"],
+            "lat": result["centroid_lat"],
+            "zoom": 15.8,
+        })
+    elif name == "get_building_details" and result.get("building_id"):
+        actions.append({
+            "type": "focus_building",
+            "key": f"bldg:{result['building_id']}",
+            "label": f"建物 {result['building_id']} を地図で確認",
+            "building_id": result["building_id"],
+            "lon": result["centroid_lon"],
+            "lat": result["centroid_lat"],
+            "zoom": 17.2,
+        })
+    elif name == "get_area_statistics":
+        ward = (result.get("scope") or {}).get("ward")
+        if ward and ward != "all" and ward in WARD_NAMES.values():
+            actions.append({
+                "type": "fly_to_ward",
+                "key": f"ward:{ward}",
+                "label": f"京都市 {ward} に移動して表示",
+                "ward": ward,
+            })
+    elif name == "compare_wards":
+        for row in (result.get("wards") or [])[:2]:
+            w = row.get("ward_name")
+            if w and w in WARD_NAMES.values():
+                actions.append({
+                    "type": "fly_to_ward",
+                    "key": f"ward:{w}",
+                    "label": f"{w}（1981以前 {row['pre_1981_count']:,}棟）へ移動",
+                    "ward": w,
+                })
+    return actions
+
+
+def _dedupe_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for a in actions:
+        k = str(a.get("key") or a.get("label"))
+        if k not in seen:
+            seen.add(k)
+            out.append(a)
+        if len(out) >= 6:
+            break
+    return out
+
+
+def _execute_tool(
+    store: QuakeLensDataStore,
+    name: str,
+    args: dict[str, Any] | None,
+    earthquakes_cache: list[dict[str, Any]] | None = None,
+) -> Any:
     args = args or {}
     if name == "get_area_statistics":
         ward = args.get("ward") or "all"
         usage_group = args.get("usage_group") or "all"
-        stats = store.get_stats(ward=ward, usage_group=usage_group)
-        # Keep response compact and clear for LLM
+        age_cats = args.get("age_categories") or None
+        hazard_tiers = args.get("hazard_tiers") or None
+        meshcode = args.get("meshcode") or None
+        stats = store.get_stats(
+            ward=ward,
+            age_categories=age_cats,
+            hazard_tiers=hazard_tiers,
+            usage_group=usage_group,
+            meshcode=meshcode,
+        )
         return {
             "scope": stats["scope"],
             "total_buildings": stats["total_buildings"],
@@ -137,12 +314,30 @@ def _execute_tool(store: QuakeLensDataStore, name: str, args: dict[str, Any] | N
             "ward_summary": stats["ward_summary"],
         }
 
+    if name == "compare_wards":
+        usage_group = args.get("usage_group") or "all"
+        stats = store.get_stats(ward="all", usage_group=usage_group)
+        target_wards = args.get("wards") or []
+        rows = stats["ward_summary"]
+        if target_wards:
+            rows = [r for r in rows if r["ward_name"] in target_wards]
+        return {
+            "usage_group": usage_group,
+            "wards": rows,
+        }
+
     if name == "get_priority_confirmation_areas":
         ward = args.get("ward") or "all"
         sort_by = args.get("sort_by") or "pre_1981_high_hazard"
+        min_t30 = float(args.get("min_t30_i55") or 0.0)
         limit = min(int(args.get("limit") or 10), 15)
-        areas = store.get_priority_areas(ward=ward, sort_by=sort_by, limit=limit)
-        return {"ward": ward, "sort_by": sort_by, "areas": areas}
+        areas = store.get_priority_areas(
+            ward=ward,
+            min_t30_i55=min_t30,
+            sort_by=sort_by,
+            limit=limit,
+        )
+        return {"ward": ward, "sort_by": sort_by, "min_t30_i55": min_t30, "areas": areas}
 
     if name == "get_mesh_details":
         meshcode = str(args.get("meshcode") or "")
@@ -153,6 +348,16 @@ def _execute_tool(store: QuakeLensDataStore, name: str, args: dict[str, Any] | N
         building_id = str(args.get("building_id") or "")
         detail = store.get_building_detail(building_id)
         return detail or {"error": f"建物ID '{building_id}' のデータが見つかりません。"}
+
+    if name == "get_recent_earthquakes_summary":
+        limit = min(int(args.get("limit") or 10), 20)
+        items = (earthquakes_cache or [])[:limit]
+        return {
+            "source": "気象庁 地震情報 JSON",
+            "count": len(items),
+            "earthquakes": items,
+            "note": "未取得の場合は地図レイヤー『気象庁 直近震源履歴』から最新情報を取得できます。" if not items else None,
+        }
 
     if name == "get_data_methodology_and_programs":
         meta = store.get_metadata()
@@ -173,41 +378,156 @@ def _execute_tool(store: QuakeLensDataStore, name: str, args: dict[str, Any] | N
     return {"error": f"Unknown tool: {name}"}
 
 
+def _build_contextual_prompt(message: str, context: dict[str, Any] | None) -> str:
+    if not context:
+        return message
+    ctx_lines = []
+    if context.get("ward") and context["ward"] != "all":
+        ctx_lines.append(f"表示中の区: {context['ward']}")
+    if context.get("usage_group") and context["usage_group"] != "all":
+        ctx_lines.append(f"用途フィルター: {context['usage_group']}")
+    if context.get("age_categories") and len(context["age_categories"]) < 4:
+        ctx_lines.append(f"築年フィルター: {','.join(context['age_categories'])}")
+    if context.get("hazard_tiers") and len(context["hazard_tiers"]) < 4:
+        ctx_lines.append(f"ハザードフィルター: {','.join(context['hazard_tiers'])}")
+    if context.get("selected_meshcode"):
+        ctx_lines.append(f"選択中の250mメッシュ: {context['selected_meshcode']}")
+    if context.get("selected_building_id"):
+        ctx_lines.append(f"選択中の建物ID: {context['selected_building_id']}")
+    if context.get("is_3d"):
+        ctx_lines.append("地図表示モード: 3D立体表示")
+    if not ctx_lines:
+        return message
+    return f"[現在の画面コンテキスト: {' / '.join(ctx_lines)}]\n\n質問: {message}"
+
+
+def _build_unconfigured_fallback(
+    store: QuakeLensDataStore,
+    message: str,
+    context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Return real backend tool results + transparent setup notice when no Gemini API key is configured."""
+    ctx = context or {}
+    ward = str(ctx.get("ward") or "all")
+    meshcode = ctx.get("selected_meshcode")
+    building_id = ctx.get("selected_building_id")
+
+    tool_trace: list[dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
+    sections: list[str] = [
+        "⚠️ **Gemini APIキー（`GEMINI_API_KEY`）が未設定のため、AIによる自然言語生成は停止中です。**\n"
+        "代わりに、バックエンドの実データ照会ツールを直接実行して得られた正確な集計値をご案内します。\n"
+        "（`.env` に `GEMINI_API_KEY` を設定するか、上の「APIキー一時設定」からキーを入力すると Gemini による対話解説が利用できます）"
+    ]
+
+    if building_id:
+        b = _execute_tool(store, "get_building_details", {"building_id": building_id})
+        tool_trace.append({
+            "name": "get_building_details",
+            "arguments": {"building_id": building_id},
+            "summary": _summarize_tool_call("get_building_details", {"building_id": building_id}, b),
+        })
+        actions.extend(_extract_map_actions("get_building_details", b))
+        if isinstance(b, dict) and not b.get("error"):
+            prob = f"{b['t30_i55_ps']*100:.1f}%" if b.get("t30_i55_ps") is not None else "不明"
+            sections.append(
+                f"### 選択建物（`{b['building_id']}`）の実測データ\n"
+                f"- 所在地・区分: 京都市 {b['ward_name']} / {b['age_label']}（建築年: {b.get('year_built') or '不明'}）\n"
+                f"- 構造・用途: {b['structure_label']} / {b['usage_label']}\n"
+                f"- 30年震度6弱以上確率: **{prob}**（微地形: {b['jname']} / ARV: {b.get('arv') or '—'}）"
+            )
+    elif meshcode:
+        m = _execute_tool(store, "get_mesh_details", {"meshcode": meshcode})
+        tool_trace.append({
+            "name": "get_mesh_details",
+            "arguments": {"meshcode": meshcode},
+            "summary": _summarize_tool_call("get_mesh_details", {"meshcode": meshcode}, m),
+        })
+        actions.extend(_extract_map_actions("get_mesh_details", m))
+        if isinstance(m, dict) and not m.get("error"):
+            prob = f"{m['t30_i55_ps']*100:.1f}%" if m.get("t30_i55_ps") is not None else "不明"
+            sections.append(
+                f"### 選択メッシュ（`{m['meshcode']}` / {m['ward_name']}）の実測データ\n"
+                f"- 総建物数: **{m['total_buildings']:,}棟**（建築年不明 {m['unknown_year_count']:,}棟・判明率 {m['known_year_rate']*100:.1f}%）\n"
+                f"- 1981年以前建築: **{m['pre_1981_count']:,}棟**（木造 {m['wooden_pre_1981_count']:,}棟）\n"
+                f"- 30年震度6弱以上確率: **{prob}** / 表層地盤増幅率 ARV: **{m.get('arv') or '—'}**（{m['jname']}）"
+            )
+
+    stats = _execute_tool(store, "get_area_statistics", {"ward": ward})
+    tool_trace.append({
+        "name": "get_area_statistics",
+        "arguments": {"ward": ward},
+        "summary": _summarize_tool_call("get_area_statistics", {"ward": ward}, stats),
+    })
+    actions.extend(_extract_map_actions("get_area_statistics", stats))
+    w_label = "京都市全域" if ward == "all" else f"京都市 {ward}"
+    sections.append(
+        f"### {w_label} の建物・ハザード統計\n"
+        f"- 対象総棟数: **{stats['total_buildings']:,}棟**（建築年判明 {stats['known_year_count']:,}棟 [{stats['known_year_rate']*100:.1f}%] / 不明 {stats['unknown_year_count']:,}棟 [{stats['unknown_year_rate']*100:.1f}%]）\n"
+        f"- 1981年以前建築: **{stats['pre_1981_count']:,}棟**\n"
+        f"- 震度6弱+確率6%以上 × 1981以前重複: **{stats['overlap_elevated_or_higher_pre1981_6pct_plus']:,}棟**（うち26%以上: {stats['overlap_very_high_pre1981_26pct_plus']:,}棟）"
+    )
+
+    if any(k in message for k in ["優先", "多い", "エリア", "メッシュ", "ハザード", "どこ"]):
+        p_res = _execute_tool(store, "get_priority_confirmation_areas", {"ward": ward, "limit": 3})
+        tool_trace.append({
+            "name": "get_priority_confirmation_areas",
+            "arguments": {"ward": ward, "limit": 3},
+            "summary": _summarize_tool_call("get_priority_confirmation_areas", {"ward": ward, "limit": 3}, p_res),
+        })
+        actions.extend(_extract_map_actions("get_priority_confirmation_areas", p_res))
+
+    if any(k in message for k in ["補助", "診断", "制度", "支援"]):
+        prog = _execute_tool(store, "get_data_methodology_and_programs", {})
+        tool_trace.append({
+            "name": "get_data_methodology_and_programs",
+            "arguments": {},
+            "summary": _summarize_tool_call("get_data_methodology_and_programs", {}, prog),
+        })
+        links = "\n".join(f"- [{p['title']}]({p['url']})" for p in prog["official_retrofit_programs"][:3])
+        sections.append(f"### 京都市公式の耐震診断・補助制度\n{links}")
+
+    return {
+        "configured": False,
+        "answer": "\n\n".join(sections),
+        "interaction_id": None,
+        "tool_calls": tool_trace,
+        "map_actions": _dedupe_actions(actions),
+        "model": None,
+    }
+
+
+def _resolve_api_key(api_key_override: str | None) -> str:
+    if api_key_override and api_key_override.strip():
+        return api_key_override.strip()
+    env_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if env_key and env_key != "your_gemini_api_key_here":
+        return env_key
+    return ""
+
+
 def ask_quakelens_ai(
     store: QuakeLensDataStore,
     message: str,
     context: dict[str, Any] | None = None,
     previous_interaction_id: str | None = None,
+    model: str | None = None,
+    api_key_override: str | None = None,
+    earthquakes_cache: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run Gemini Interactions API with Function Calling against real Kyoto City data."""
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key or api_key == "your_gemini_api_key_here":
-        return {
-            "configured": False,
-            "answer": (
-                "現在 `GEMINI_API_KEY` が設定されていないため、AI自然言語解説機能は利用できません。"
-                "地図・フィルター・ダッシュボード統計・優先確認エリア分析はAPIキーなしで引き続き全機能をご利用いただけます。\n\n"
-                "`.env` に `GEMINI_API_KEY` を設定してバックエンドを再起動すると、実データに基づいたAI解説が有効になります。"
-            ),
-            "interaction_id": None,
-            "tool_calls": [],
-        }
+    api_key = _resolve_api_key(api_key_override)
+    if not api_key:
+        return _build_unconfigured_fallback(store, message, context)
 
-    ctx_lines = []
-    if context:
-        if context.get("ward") and context["ward"] != "all":
-            ctx_lines.append(f"現在の画面フィルター区: {context['ward']}")
-        if context.get("selected_meshcode"):
-            ctx_lines.append(f"現在選択中の250mメッシュ: {context['selected_meshcode']}")
-        if context.get("selected_building_id"):
-            ctx_lines.append(f"現在選択中の建物ID: {context['selected_building_id']}")
-    prompt = message if not ctx_lines else f"[画面コンテキスト: {' / '.join(ctx_lines)}]\n\n質問: {message}"
-
-    client = genai.Client(api_key=api_key)
+    chosen_model = _resolve_model(model)
+    prompt = _build_contextual_prompt(message, context)
+    client = genai.Client(api_key=api_key, http_options={"timeout": 120000})
     tool_trace: list[dict[str, Any]] = []
+    map_actions: list[dict[str, Any]] = []
 
     kwargs: dict[str, Any] = {
-        "model": MODEL_NAME,
+        "model": chosen_model,
         "input": prompt,
         "system_instruction": SYSTEM_INSTRUCTION,
         "tools": TOOLS,
@@ -217,7 +537,6 @@ def ask_quakelens_ai(
 
     interaction = client.interactions.create(**kwargs)
 
-    # Multi-step function calling loop (max 6 turns to avoid runaway loops)
     for _ in range(6):
         fc_steps = [s for s in (interaction.steps or []) if getattr(s, "type", None) == "function_call"]
         if not fc_steps:
@@ -227,8 +546,14 @@ def ask_quakelens_ai(
         for fc in fc_steps:
             fn_name = fc.name
             fn_args = dict(fc.arguments) if fc.arguments else {}
-            result_data = _execute_tool(store, fn_name, fn_args)
-            tool_trace.append({"name": fn_name, "arguments": fn_args})
+            result_data = _execute_tool(store, fn_name, fn_args, earthquakes_cache=earthquakes_cache)
+            summary = _summarize_tool_call(fn_name, fn_args, result_data)
+            map_actions.extend(_extract_map_actions(fn_name, result_data))
+            tool_trace.append({
+                "name": fn_name,
+                "arguments": fn_args,
+                "summary": summary,
+            })
             fn_results.append({
                 "type": "function_result",
                 "name": fn_name,
@@ -237,7 +562,7 @@ def ask_quakelens_ai(
             })
 
         interaction = client.interactions.create(
-            model=MODEL_NAME,
+            model=chosen_model,
             input=fn_results,
             system_instruction=SYSTEM_INSTRUCTION,
             tools=TOOLS,
@@ -249,5 +574,170 @@ def ask_quakelens_ai(
         "answer": interaction.output_text or "回答を生成できませんでした。",
         "interaction_id": interaction.id,
         "tool_calls": tool_trace,
-        "model": MODEL_NAME,
+        "map_actions": _dedupe_actions(map_actions),
+        "model": chosen_model,
+    }
+
+
+def stream_quakelens_ai(
+    store: QuakeLensDataStore,
+    message: str,
+    context: dict[str, Any] | None = None,
+    previous_interaction_id: str | None = None,
+    model: str | None = None,
+    api_key_override: str | None = None,
+    earthquakes_cache: list[dict[str, Any]] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Yield structured SSE events while streaming Gemini Function Calling and text deltas."""
+    api_key = _resolve_api_key(api_key_override)
+    if not api_key:
+        fallback = _build_unconfigured_fallback(store, message, context)
+        for tc in fallback["tool_calls"]:
+            yield {"type": "tool_result", **tc}
+        yield {"type": "done", **fallback, "model": _resolve_model(model)}
+        return
+
+    chosen_model = _resolve_model(model)
+    prompt = _build_contextual_prompt(message, context)
+    client = genai.Client(api_key=api_key, http_options={"timeout": 120000})
+
+    tool_trace: list[dict[str, Any]] = []
+    map_actions: list[dict[str, Any]] = []
+    full_text_parts: list[str] = []
+    current_input: Any = prompt
+    prev_id = previous_interaction_id
+
+    yield {"type": "status", "message": f"{chosen_model} で実データを照会中..."}
+
+    for _ in range(6):
+        kwargs: dict[str, Any] = {
+            "model": chosen_model,
+            "input": current_input,
+            "system_instruction": SYSTEM_INSTRUCTION,
+            "tools": TOOLS,
+            "stream": True,
+        }
+        if prev_id:
+            kwargs["previous_interaction_id"] = prev_id
+
+        completed_interaction = None
+        fc_by_index: dict[int, dict[str, Any]] = {}
+
+        for event in client.interactions.create(**kwargs):
+            ev_type = getattr(event, "event_type", None)
+            ev_idx = getattr(event, "index", None)
+            if ev_type == "step.start":
+                step = getattr(event, "step", None)
+                st_type = getattr(step, "type", None)
+                if st_type == "thought":
+                    yield {"type": "status", "message": f"{chosen_model} が質問内容と必要なツールを分析中..."}
+                elif st_type == "function_call":
+                    fn_name = getattr(step, "name", "")
+                    init_args = getattr(step, "arguments", None)
+                    key = ev_idx if ev_idx is not None else len(fc_by_index)
+                    fc_by_index[key] = {
+                        "id": getattr(step, "id", ""),
+                        "name": fn_name,
+                        "arguments": dict(init_args) if isinstance(init_args, dict) else {},
+                        "arg_chunks": [],
+                    }
+                    yield {
+                        "type": "tool_start",
+                        "name": fn_name,
+                    }
+            elif ev_type == "step.delta":
+                delta = getattr(event, "delta", None)
+                d_type = getattr(delta, "type", None)
+                if d_type == "text" and getattr(delta, "text", None):
+                    chunk = delta.text
+                    full_text_parts.append(chunk)
+                    yield {"type": "text_delta", "delta": chunk}
+                elif ev_idx in fc_by_index and getattr(delta, "arguments", None) is not None:
+                    arg_val = delta.arguments
+                    if isinstance(arg_val, str):
+                        fc_by_index[ev_idx]["arg_chunks"].append(arg_val)
+                    elif isinstance(arg_val, dict):
+                        fc_by_index[ev_idx]["arguments"].update(arg_val)
+            elif ev_type == "interaction.completed":
+                completed_interaction = getattr(event, "interaction", None)
+
+        if completed_interaction is None:
+            break
+
+        prev_id = completed_interaction.id
+
+        # Build unified function calls list from streamed steps (with fallback to completed.steps)
+        fc_calls: list[dict[str, Any]] = []
+        if fc_by_index:
+            for _, fc_raw in sorted(fc_by_index.items()):
+                merged_args = dict(fc_raw["arguments"])
+                if fc_raw["arg_chunks"]:
+                    raw_str = "".join(fc_raw["arg_chunks"]).strip()
+                    if raw_str:
+                        try:
+                            parsed = json.loads(raw_str)
+                            if isinstance(parsed, dict):
+                                merged_args.update(parsed)
+                        except json.JSONDecodeError:
+                            pass
+                fc_calls.append({
+                    "id": fc_raw["id"],
+                    "name": fc_raw["name"],
+                    "arguments": merged_args,
+                })
+        elif getattr(completed_interaction, "steps", None):
+            for s in completed_interaction.steps:
+                if getattr(s, "type", None) == "function_call":
+                    fc_calls.append({
+                        "id": getattr(s, "id", ""),
+                        "name": getattr(s, "name", ""),
+                        "arguments": dict(s.arguments) if getattr(s, "arguments", None) else {},
+                    })
+
+        if not fc_calls:
+            answer = "".join(full_text_parts).strip() or (
+                getattr(completed_interaction, "output_text", None) or "回答を生成できませんでした。"
+            )
+            yield {
+                "type": "done",
+                "configured": True,
+                "answer": answer,
+                "interaction_id": completed_interaction.id,
+                "tool_calls": tool_trace,
+                "map_actions": _dedupe_actions(map_actions),
+                "model": chosen_model,
+            }
+            return
+
+        fn_results = []
+        for fc in fc_calls:
+            fn_name = fc["name"]
+            fn_args = fc["arguments"]
+            result_data = _execute_tool(store, fn_name, fn_args, earthquakes_cache=earthquakes_cache)
+            summary = _summarize_tool_call(fn_name, fn_args, result_data)
+            map_actions.extend(_extract_map_actions(fn_name, result_data))
+            tc_entry = {
+                "name": fn_name,
+                "arguments": fn_args,
+                "summary": summary,
+            }
+            tool_trace.append(tc_entry)
+            yield {"type": "tool_result", **tc_entry}
+            fn_results.append({
+                "type": "function_result",
+                "name": fn_name,
+                "call_id": fc["id"],
+                "result": [{"type": "text", "text": json.dumps(result_data, ensure_ascii=False)}],
+            })
+
+        current_input = fn_results
+
+    yield {
+        "type": "done",
+        "configured": True,
+        "answer": "".join(full_text_parts).strip() or "回答の生成を完了しました。",
+        "interaction_id": prev_id,
+        "tool_calls": tool_trace,
+        "map_actions": _dedupe_actions(map_actions),
+        "model": chosen_model,
     }

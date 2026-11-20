@@ -23,6 +23,7 @@ import {
   BuildingDetail,
   EarthquakeEvent,
   HazardTier,
+  MapAction,
   MeshDetail,
   MeshOverlayMode,
   MetadataResponse,
@@ -55,6 +56,7 @@ export default function HomePage() {
   const [showHazardMesh, setShowHazardMesh] = useState(true);
   const [meshOverlayMode, setMeshOverlayMode] = useState<MeshOverlayMode>("hazard");
   const [showEarthquakes, setShowEarthquakes] = useState(false);
+  const [is3D, setIs3D] = useState(false);
 
   // Selection & UI state
   const [activeTab, setActiveTab] = useState<RightTab>("stats");
@@ -69,6 +71,7 @@ export default function HomePage() {
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [mobileLeftOpen, setMobileLeftOpen] = useState(false);
   const [mobileRightOpen, setMobileRightOpen] = useState(false);
+  const [queuedAiPrompt, setQueuedAiPrompt] = useState<{ text: string; ts: number } | null>(null);
 
   // Initial load: health, metadata, meshes, earthquakes
   useEffect(() => {
@@ -204,6 +207,82 @@ export default function HomePage() {
     }
   }, []);
 
+  const handleOpenAiTab = useCallback(() => {
+    setActiveTab("ai");
+    setMobileRightOpen(true);
+  }, []);
+
+  const handleRequestAiExplain = useCallback((prompt: string) => {
+    setQueuedAiPrompt({ text: prompt, ts: Date.now() });
+    setActiveTab("ai");
+    setMobileRightOpen(true);
+  }, []);
+
+  const handleConsumeQueuedAiPrompt = useCallback(() => {
+    setQueuedAiPrompt(null);
+  }, []);
+
+  const handleExecuteMapAction = useCallback(async (action: MapAction) => {
+    setMobileRightOpen(false);
+    if (action.type === "fly_to_ward" && action.ward) {
+      setSelectedWard(action.ward);
+      setSelectedMeshcode(null);
+      const center = WARD_CENTERS[action.ward] || WARD_CENTERS.all;
+      setFlyToTarget({
+        lon: action.lon ?? center.lon,
+        lat: action.lat ?? center.lat,
+        zoom: action.zoom ?? center.zoom ?? 12.6,
+        ts: Date.now(),
+      });
+      return;
+    }
+
+    if (action.type === "fly_to_mesh" && action.meshcode) {
+      setSelectedMeshcode(action.meshcode);
+      if (action.lon != null && action.lat != null) {
+        setFlyToTarget({
+          lon: action.lon,
+          lat: action.lat,
+          zoom: action.zoom ?? 15.6,
+          ts: Date.now(),
+        });
+      }
+      try {
+        const detail = await getMeshDetail(action.meshcode);
+        setSelectedMesh(detail);
+        if (action.lon == null || action.lat == null) {
+          setFlyToTarget({
+            lon: detail.centroid_lon,
+            lat: detail.centroid_lat,
+            zoom: action.zoom ?? 15.6,
+            ts: Date.now(),
+          });
+        }
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    if (action.type === "focus_building" && action.building_id) {
+      try {
+        const detail = await getBuildingDetail(action.building_id);
+        setSelectedBuilding(detail);
+        if (detail.meshcode) {
+          setSelectedMeshcode(detail.meshcode);
+        }
+        setFlyToTarget({
+          lon: action.lon ?? detail.centroid_lon,
+          lat: action.lat ?? detail.centroid_lat,
+          zoom: action.zoom ?? 17.2,
+          ts: Date.now(),
+        });
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-950">
       <TopBar
@@ -211,6 +290,7 @@ export default function HomePage() {
         selectedWard={selectedWard}
         geminiConfigured={geminiConfigured}
         onOpenSources={() => setSourcesOpen(true)}
+        onOpenAiTab={handleOpenAiTab}
         onToggleMobileLeft={() => setMobileLeftOpen((v) => !v)}
         onToggleMobileRight={() => setMobileRightOpen((v) => !v)}
       />
@@ -249,6 +329,8 @@ export default function HomePage() {
             onChangeMeshOverlayMode={setMeshOverlayMode}
             showEarthquakes={showEarthquakes}
             onToggleEarthquakes={() => setShowEarthquakes((v) => !v)}
+            is3D={is3D}
+            onChangeIs3D={setIs3D}
             onResetFilters={handleResetFilters}
             selectedMeshcode={selectedMeshcode}
             onClearMeshcode={() => setSelectedMeshcode(null)}
@@ -283,6 +365,8 @@ export default function HomePage() {
                 onChangeMeshOverlayMode={setMeshOverlayMode}
                 showEarthquakes={showEarthquakes}
                 onToggleEarthquakes={() => setShowEarthquakes((v) => !v)}
+                is3D={is3D}
+                onChangeIs3D={setIs3D}
                 onResetFilters={handleResetFilters}
                 selectedMeshcode={selectedMeshcode}
                 onClearMeshcode={() => setSelectedMeshcode(null)}
@@ -308,6 +392,8 @@ export default function HomePage() {
             showHazardMesh={showHazardMesh}
             meshOverlayMode={meshOverlayMode}
             showEarthquakes={showEarthquakes}
+            is3D={is3D}
+            onToggle3D={() => setIs3D((v) => !v)}
             selectedBuildingId={selectedBuilding?.building_id ?? null}
             selectedMeshcode={selectedMeshcode}
             flyToTarget={flyToTarget}
@@ -329,6 +415,15 @@ export default function HomePage() {
             selectedBuilding={selectedBuilding}
             selectedMesh={selectedMesh}
             selectedWard={selectedWard}
+            ageCategories={ageCategories}
+            hazardTiers={hazardTiers}
+            usageGroup={usageGroup}
+            is3D={is3D}
+            geminiConfigured={geminiConfigured}
+            queuedAiPrompt={queuedAiPrompt}
+            onConsumeQueuedAiPrompt={handleConsumeQueuedAiPrompt}
+            onRequestAiExplain={handleRequestAiExplain}
+            onExecuteMapAction={handleExecuteMapAction}
             onToggleAgeCategory={handleToggleAgeCategory}
             onToggleHazardTier={handleToggleHazardTier}
           />
@@ -359,6 +454,15 @@ export default function HomePage() {
                 selectedBuilding={selectedBuilding}
                 selectedMesh={selectedMesh}
                 selectedWard={selectedWard}
+                ageCategories={ageCategories}
+                hazardTiers={hazardTiers}
+                usageGroup={usageGroup}
+                is3D={is3D}
+                geminiConfigured={geminiConfigured}
+                queuedAiPrompt={queuedAiPrompt}
+                onConsumeQueuedAiPrompt={handleConsumeQueuedAiPrompt}
+                onRequestAiExplain={handleRequestAiExplain}
+                onExecuteMapAction={handleExecuteMapAction}
                 onToggleAgeCategory={handleToggleAgeCategory}
                 onToggleHazardTier={handleToggleHazardTier}
               />

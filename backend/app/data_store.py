@@ -325,8 +325,9 @@ class QuakeLensDataStore:
         total_in_bbox = int(len(df))
         truncated = total_in_bbox > limit
         if truncated:
-            # Prioritize showing older buildings first when truncated or take uniform slice
-            df = df.iloc[:limit]
+            # Stride uniformly across tile-ordered rows so sampled buildings span the full viewport
+            step = max(1, total_in_bbox // limit)
+            df = df.iloc[::step].iloc[:limit]
 
         fc = json.loads(df.to_json())
         fc["meta"] = {
