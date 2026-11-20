@@ -347,6 +347,7 @@ export default function HomePage() {
             onResetFilters={handleResetFilters}
             selectedMeshcode={selectedMeshcode}
             onClearMeshcode={() => setSelectedMeshcode(null)}
+            knownHeightRate={metadata?.counts?.known_measured_height_rate ?? null}
           />
         </div>
 
@@ -383,6 +384,7 @@ export default function HomePage() {
                 onResetFilters={handleResetFilters}
                 selectedMeshcode={selectedMeshcode}
                 onClearMeshcode={() => setSelectedMeshcode(null)}
+                knownHeightRate={metadata?.counts?.known_measured_height_rate ?? null}
               />
             </div>
             <div
@@ -434,6 +436,7 @@ export default function HomePage() {
             is3D={is3D}
             geminiConfigured={geminiConfigured}
             aiProtection={aiProtection}
+            totalBuildings={metadata?.counts?.total_buildings ?? stats?.total_buildings ?? null}
             onRefreshHealth={handleRefreshHealth}
             queuedAiPrompt={queuedAiPrompt}
             onConsumeQueuedAiPrompt={handleConsumeQueuedAiPrompt}
@@ -475,6 +478,7 @@ export default function HomePage() {
                 is3D={is3D}
                 geminiConfigured={geminiConfigured}
                 aiProtection={aiProtection}
+                totalBuildings={metadata?.counts?.total_buildings ?? stats?.total_buildings ?? null}
                 onRefreshHealth={handleRefreshHealth}
                 queuedAiPrompt={queuedAiPrompt}
                 onConsumeQueuedAiPrompt={handleConsumeQueuedAiPrompt}

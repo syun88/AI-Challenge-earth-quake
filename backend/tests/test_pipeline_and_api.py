@@ -362,6 +362,15 @@ def test_real_processed_data_consistency_and_ai_tools() -> None:
     ai_programs = _execute_tool(real_store, "get_data_methodology_and_programs", {})
     assert len(ai_programs["official_retrofit_programs"]) >= 3
 
+    meta = real_store.get_metadata()
+    assert meta["counts"]["known_measured_height_count"] == 504362
+    assert meta["counts"]["known_measured_height_rate"] == 0.9816
+    assert meta["hazard_summary"]["mesh_count"] == 2990
+    assert meta["hazard_summary"]["min_t30_i55_ps"] == 0.0054
+    assert meta["hazard_summary"]["max_t30_i55_ps"] == 0.5829
+    assert meta["hazard_summary"]["sand_gravel_terrace_mean"] == 0.0542
+    assert meta["hazard_summary"]["backmarsh_mean"] == 0.5472
+
 
 def test_public_ai_security_and_cost_protection(
     synthetic_store: QuakeLensDataStore, monkeypatch: pytest.MonkeyPatch
@@ -547,6 +556,163 @@ def test_streaming_never_reports_done_when_incomplete(
     assert events[-1]["type"] == "error"
     assert all(ev["type"] != "done" for ev in events)
     ai_guard.reset()
+
+
+def test_grounding_verification_and_metadata_accuracy(
+    synthetic_store: QuakeLensDataStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+    from app.ai_assistant import ask_quakelens_ai, stream_quakelens_ai
+    from app.grounding import verify_grounded_response
+    from app.security import ai_guard
+
+    # 1. Grounded claims match executed tool outputs
+    tool_records = [
+        {
+            "name": "get_area_statistics",
+            "arguments": {"ward": "中京区"},
+            "result": {
+                "scope": {"ward": "中京区"},
+                "total_buildings": 2,
+                "known_year_count": 1,
+                "unknown_year_count": 1,
+                "known_year_rate": 0.5,
+                "pre_1981_count": 1,
+            },
+        },
+        {
+            "name": "get_mesh_details",
+            "arguments": {"meshcode": "5235362024"},
+            "result": {"meshcode": "5235362024", "t30_i55_ps": 0.54, "arv": 1.85},
+        },
+        {
+            "name": "get_data_methodology_and_programs",
+            "arguments": {},
+            "result": {
+                "official_retrofit_programs": [
+                    {"url": "https://www.city.kyoto.lg.jp/tokei/page/0000119039.html"}
+                ]
+            },
+        },
+    ]
+    v_ok = verify_grounded_response(
+        "中京区メッシュ 5235362024 は総数2棟（判明率50.0%）、震度6弱+確率54.0%、ARV 1.85です。詳細は https://www.city.kyoto.lg.jp/tokei/page/0000119039.html を参照。",
+        tool_records,
+    )
+    assert v_ok["status"] == "verified"
+    assert v_ok["unverified_claims"] == []
+    assert v_ok["unverified_urls"] == []
+
+    # 2. Fabricated counts, meshcodes, and URLs are flagged
+    v_bad = verify_grounded_response(
+        "中京区メッシュ 9999999999 は1981年以前が99,999棟、確率88.8%です。https://example.com/fake",
+        tool_records,
+    )
+    assert v_bad["status"] == "warning"
+    assert any("99,999" in c for c in v_bad["unverified_claims"])
+    assert "メッシュ 9999999999" in v_bad["unverified_claims"]
+    assert "https://example.com/fake" in v_bad["unverified_urls"]
+
+    # 3. Missing tool calls triggers automatic self-correction in stream_quakelens_ai & ask_quakelens_ai
+    ai_guard.reset()
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaFakeKeyGroundingTest123")
+
+    calls = {"stream_turn": 0}
+
+    def fake_stream_client(**kw):
+        class FakeInteractions:
+            def create(self, **kwargs):
+                calls["stream_turn"] += 1
+                t = calls["stream_turn"]
+                if t == 1:
+                    # Turn 1: Unverified claim with NO tool calls
+                    return iter([
+                        SimpleNamespace(
+                            event_type="step.delta",
+                            index=0,
+                            delta=SimpleNamespace(type="text", text="1981年以前は999棟です。"),
+                        ),
+                        SimpleNamespace(
+                            event_type="interaction.completed",
+                            interaction=SimpleNamespace(id="id1", status="completed", steps=None, output_text=None),
+                        ),
+                    ])
+                if t == 2:
+                    # Correction Turn: executes get_area_statistics
+                    return iter([
+                        SimpleNamespace(
+                            event_type="step.start",
+                            index=0,
+                            step=SimpleNamespace(
+                                type="function_call", id="fc1", name="get_area_statistics", arguments={"ward": "all"}
+                            ),
+                        ),
+                        SimpleNamespace(
+                            event_type="interaction.completed",
+                            interaction=SimpleNamespace(id="id2", status="requires_action", steps=None, output_text=None),
+                        ),
+                    ])
+                # Turn 3: Grounded answer matching synthetic_store (2棟, pre_1981=1棟)
+                return iter([
+                    SimpleNamespace(
+                        event_type="step.delta",
+                        index=0,
+                        delta=SimpleNamespace(type="text", text="総棟数は2棟、1981年以前は1棟（50.0%）です。"),
+                    ),
+                    SimpleNamespace(
+                        event_type="interaction.completed",
+                        interaction=SimpleNamespace(id="id3", status="completed", steps=None, output_text=None),
+                    ),
+                ])
+
+        return SimpleNamespace(interactions=FakeInteractions())
+
+    monkeypatch.setattr("app.ai_assistant.genai.Client", fake_stream_client)
+    stream_evs = list(stream_quakelens_ai(synthetic_store, "1981年以前は？"))
+    ev_types = [e["type"] for e in stream_evs]
+    assert "reset_draft" in ev_types
+    assert "verification" in ev_types
+    assert stream_evs[-1]["type"] == "done"
+    assert stream_evs[-1]["verification"]["status"] == "verified"
+
+    # Unary ask_quakelens_ai also verifies & attaches verification object
+    u_turns = {"n": 0}
+
+    def fake_unary_client(**kw):
+        class FakeInteractions:
+            def create(self, **kwargs):
+                u_turns["n"] += 1
+                if u_turns["n"] == 1:
+                    return SimpleNamespace(
+                        id="u1",
+                        status="requires_action",
+                        output_text=None,
+                        steps=[
+                            SimpleNamespace(
+                                type="function_call", id="ufc1", name="get_area_statistics", arguments={"ward": "all"}
+                            )
+                        ],
+                    )
+                return SimpleNamespace(
+                    id="u2",
+                    status="completed",
+                    output_text="総棟数は2棟で1981年以前建築は1棟です。",
+                    steps=[],
+                )
+
+        return SimpleNamespace(interactions=FakeInteractions())
+
+    monkeypatch.setattr("app.ai_assistant.genai.Client", fake_unary_client)
+    res_unary = ask_quakelens_ai(synthetic_store, "総棟数は？")
+    assert res_unary["verification"]["status"] == "verified"
+
+    # 4. Non-Gemini metadata completeness matches loaded DataFrame/GeoDataFrame
+    meta = synthetic_store.get_metadata()
+    assert meta["counts"]["known_measured_height_count"] == 2
+    assert meta["counts"]["known_measured_height_rate"] == 1.0
+    assert meta["hazard_summary"]["mesh_count"] == 1
+    assert meta["hazard_summary"]["min_t30_i55_ps"] == 0.54
+
 
 
 

@@ -46,6 +46,7 @@ interface LeftFilterPanelProps {
   onResetFilters: () => void;
   selectedMeshcode: string | null;
   onClearMeshcode: () => void;
+  knownHeightRate?: number | null;
 }
 
 const ALL_AGE_CATS: AgeCategory[] = ["pre_1981", "1982_2000", "post_2001", "unknown"];
@@ -74,6 +75,7 @@ export function LeftFilterPanel({
   onResetFilters,
   selectedMeshcode,
   onClearMeshcode,
+  knownHeightRate,
 }: LeftFilterPanelProps) {
   return (
     <aside className="flex h-full flex-col overflow-y-auto border-r border-slate-800 bg-slate-900/90 p-3.5 text-xs">
@@ -164,7 +166,11 @@ export function LeftFilterPanel({
                 </div>
                 {is3D && (
                   <p className="mt-1.5 text-[10px] leading-snug text-slate-400">
-                    PLATEAU実測高さ（判明率98.2%）で立体表示中。右ドラッグ/Ctrl+ドラッグで回転・傾き調整。
+                    PLATEAU実測高さ（
+                    {knownHeightRate != null
+                      ? `判明率 ${(knownHeightRate * 100).toFixed(1)}%`
+                      : "高さ情報あり"}
+                    ）で立体表示中。右ドラッグ/Ctrl+ドラッグで回転・傾き調整。
                   </p>
                 )}
               </div>

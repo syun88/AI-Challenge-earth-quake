@@ -46,7 +46,20 @@ export interface MetadataResponse {
     known_usage_rate: number;
     known_structure_rate: number;
     known_storeys_rate: number;
+    known_measured_height_count?: number;
+    known_measured_height_rate?: number;
     mesh_count: number;
+  };
+  hazard_summary?: {
+    mesh_count?: number;
+    min_t30_i55_ps?: number;
+    max_t30_i55_ps?: number;
+    sand_gravel_terrace_count?: number;
+    sand_gravel_terrace_mean?: number;
+    backmarsh_count?: number;
+    backmarsh_mean?: number;
+    backmarsh_max?: number;
+    max_arv?: number;
   };
   wards: string[];
   age_labels: Record<string, string>;
@@ -241,6 +254,16 @@ export interface AiProtectionStatus {
   max_message_chars: number;
 }
 
+export interface GroundingVerification {
+  status: "verified" | "warning" | "no_tools" | "no_numeric_claims";
+  tool_count: number;
+  checked_claims_count: number;
+  verified_claims: string[];
+  unverified_claims: string[];
+  unverified_urls: string[];
+  note: string;
+}
+
 export interface ChatResponse {
   configured: boolean;
   answer: string;
@@ -249,6 +272,7 @@ export interface ChatResponse {
   map_actions?: MapAction[];
   model?: string | null;
   incomplete?: boolean;
+  verification?: GroundingVerification;
 }
 
 export type ChatStreamEvent =
@@ -256,5 +280,7 @@ export type ChatStreamEvent =
   | { type: "tool_start"; name: string }
   | { type: "tool_result"; name: string; arguments: Record<string, unknown>; summary?: string }
   | { type: "text_delta"; delta: string }
+  | { type: "reset_draft" }
+  | ({ type: "verification" } & GroundingVerification)
   | ({ type: "done" } & ChatResponse)
   | { type: "error"; message: string };

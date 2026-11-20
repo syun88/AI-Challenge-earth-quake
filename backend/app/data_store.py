@@ -76,14 +76,46 @@ class QuakeLensDataStore:
         return df
 
     def get_metadata(self) -> dict[str, Any]:
-        """Return dataset provenance, licenses, reference years, and overall completeness."""
+        """Return dataset provenance, licenses, reference years, and live-verified completeness."""
+        counts = dict(self.summary.get("counts", {}))
+        if not self.buildings.empty:
+            total_b = int(len(self.buildings))
+            counts.setdefault("total_buildings", total_b)
+            if "measured_height" in self.buildings.columns:
+                known_h = int(self.buildings["measured_height"].notna().sum())
+                counts["known_measured_height_count"] = known_h
+                counts["known_measured_height_rate"] = round(known_h / total_b, 4) if total_b else 0.0
+
+        hazard_summary: dict[str, Any] = {}
+        if not self.meshes.empty and "t30_i55_ps" in self.meshes.columns:
+            valid_p = self.meshes["t30_i55_ps"].dropna()
+            if not valid_p.empty:
+                hazard_summary["mesh_count"] = int(len(self.meshes))
+                hazard_summary["min_t30_i55_ps"] = round(float(valid_p.min()), 4)
+                hazard_summary["max_t30_i55_ps"] = round(float(valid_p.max()), 4)
+            if "jname" in self.meshes.columns:
+                terrace = self.meshes[self.meshes["jname"] == "砂礫質台地"]["t30_i55_ps"].dropna()
+                if not terrace.empty:
+                    hazard_summary["sand_gravel_terrace_count"] = int(len(terrace))
+                    hazard_summary["sand_gravel_terrace_mean"] = round(float(terrace.mean()), 4)
+                backmarsh = self.meshes[self.meshes["jname"] == "後背湿地"]["t30_i55_ps"].dropna()
+                if not backmarsh.empty:
+                    hazard_summary["backmarsh_count"] = int(len(backmarsh))
+                    hazard_summary["backmarsh_mean"] = round(float(backmarsh.mean()), 4)
+                    hazard_summary["backmarsh_max"] = round(float(backmarsh.max()), 4)
+            if "arv" in self.meshes.columns:
+                valid_arv = self.meshes["arv"].dropna()
+                if not valid_arv.empty:
+                    hazard_summary["max_arv"] = round(float(valid_arv.max()), 2)
+
         return {
             "municipality": self.summary.get("municipality", TARGET_MUNICIPALITY),
             "generated_at_utc": self.summary.get("generated_at_utc"),
             "is_partial_sample": self.summary.get("is_partial_sample", False),
             "plateau_metadata": self.summary.get("plateau_metadata", {}),
             "data_sources": self.summary.get("data_sources", []),
-            "counts": self.summary.get("counts", {}),
+            "counts": counts,
+            "hazard_summary": hazard_summary,
             "wards": sorted(
                 [w for w in self.buildings["ward_name"].unique().tolist() if w and w != "不明"]
             )

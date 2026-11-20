@@ -51,6 +51,7 @@ interface RightPanelProps {
   is3D: boolean;
   geminiConfigured: boolean;
   aiProtection?: AiProtectionStatus | null;
+  totalBuildings?: number | null;
   onRefreshHealth?: () => void;
   queuedAiPrompt: { text: string; ts: number } | null;
   onConsumeQueuedAiPrompt: () => void;
@@ -77,6 +78,7 @@ export function RightPanel({
   is3D,
   geminiConfigured,
   aiProtection,
+  totalBuildings,
   onRefreshHealth,
   queuedAiPrompt,
   onConsumeQueuedAiPrompt,
@@ -542,6 +544,7 @@ export function RightPanel({
           <AiAssistantPanel
             geminiConfigured={geminiConfigured}
             aiProtection={aiProtection}
+            totalBuildings={totalBuildings}
             onRefreshHealth={onRefreshHealth}
             selectedWard={selectedWard}
             ageCategories={ageCategories}

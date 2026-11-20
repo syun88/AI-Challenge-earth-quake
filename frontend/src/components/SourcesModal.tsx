@@ -14,6 +14,12 @@ export function SourcesModal({ open, onClose, metadata }: SourcesModalProps) {
   if (!open) return null;
 
   const counts = metadata?.counts;
+  const hs = metadata?.hazard_summary;
+  const minPct = hs?.min_t30_i55_ps != null ? (hs.min_t30_i55_ps * 100).toFixed(1) : null;
+  const maxPct = hs?.max_t30_i55_ps != null ? (hs.max_t30_i55_ps * 100).toFixed(1) : null;
+  const terracePct =
+    hs?.sand_gravel_terrace_mean != null ? (hs.sand_gravel_terrace_mean * 100).toFixed(1) : null;
+  const backmarshPct = hs?.backmarsh_mean != null ? (hs.backmarsh_mean * 100).toFixed(1) : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
@@ -38,14 +44,36 @@ export function SourcesModal({ open, onClose, metadata }: SourcesModalProps) {
             対象自治体選定理由：京都市（plateau-26100-kyoto-shi-2025）
           </div>
           <p className="mb-2 leading-relaxed text-slate-300">
-            東京23区のPLATEAUデータ（2020/2022年度）を事前検証したところ、標準の建築年（bldg:yearOfConstruction）属性が未整備（0%）であったため、建築年・用途・構造・階数が網羅的かつ最新（2025年度版）であり、市内でも地盤・ハザード確率（約5%〜55%）の地域差が顕著な京都市を選定しました。
+            本プロジェクト開発時の事前調査にて、G空間情報センター（CKAN）公開の東京23区PLATEAU CityGML（2020/2022年度）を検証したところ標準の建築年（bldg:yearOfConstruction）属性が未整備（0%）であったため、建築年・用途・構造・階数・実測高さが網羅的かつ最新（2025年度版）の京都市を選定しました。
+            {minPct && maxPct && (
+              <>
+                {" "}
+                J-SHIS 2024年版（全{(hs?.mesh_count ?? counts?.mesh_count ?? 0).toLocaleString("ja-JP")}メッシュ集計）でも、30年震度6弱以上確率は{" "}
+                <span className="font-mono text-sky-200">
+                  {minPct}%〜{maxPct}%
+                </span>
+                {terracePct && backmarshPct && (
+                  <>
+                    （砂礫質台地平均 {terracePct}% vs 後背湿地平均 {backmarshPct}%）
+                  </>
+                )}
+                と地域差が顕著に表れています。
+              </>
+            )}
           </p>
           {counts && (
-            <div className="grid grid-cols-2 gap-2 pt-1 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2 pt-1 sm:grid-cols-3">
               <StatChip label="総建物数" value={`${counts.total_buildings.toLocaleString("ja-JP")}棟`} />
               <StatChip label="建築年判明率" value={`${(counts.known_year_rate * 100).toFixed(1)}%`} />
               <StatChip label="建物用途判明率" value={`${(counts.known_usage_rate * 100).toFixed(1)}%`} />
               <StatChip label="構造判明率" value={`${(counts.known_structure_rate * 100).toFixed(1)}%`} />
+              <StatChip label="地上階数判明率" value={`${(counts.known_storeys_rate * 100).toFixed(1)}%`} />
+              {counts.known_measured_height_rate != null && (
+                <StatChip
+                  label="実測高さ判明率"
+                  value={`${(counts.known_measured_height_rate * 100).toFixed(1)}%`}
+                />
+              )}
             </div>
           )}
         </div>

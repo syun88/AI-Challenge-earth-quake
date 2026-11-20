@@ -11,6 +11,7 @@ from google import genai
 
 from app.constants import OFFICIAL_RETROFIT_PROGRAMS, WARD_NAMES
 from app.data_store import QuakeLensDataStore
+from app.grounding import verify_grounded_response
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 ALLOWED_MODELS = {"gemini-3.5-flash-lite", "gemini-4-hydrogen", "gemini-4-argon"}
@@ -401,6 +402,20 @@ def _build_contextual_prompt(message: str, context: dict[str, Any] | None) -> st
     return f"[現在の画面コンテキスト: {' / '.join(ctx_lines)}]\n\n質問: {message}"
 
 
+def _build_correction_prompt(verification: dict[str, Any]) -> str:
+    if verification["status"] == "no_tools":
+        return (
+            "実データ照会ツールを呼び出さずに数値・識別子・URLを記述しました。"
+            "必ず事前に用意されたFunction Callingツールを実行し、返却された実測値・コード・URLのみを用いて回答し直してください。"
+        )
+    flagged = (verification.get("unverified_claims") or []) + (verification.get("unverified_urls") or [])
+    sample = ", ".join(flagged[:6])
+    return (
+        f"回答内の次の数値・識別子またはURLがツール返却値内で直接照合できませんでした: {sample}。"
+        "推測や記憶による数値を削除するか必要なツールを追加呼び出しし、ツール返却値に含まれる数値・コード・URLのみを使って正確に回答を書き直してください。"
+    )
+
+
 def _build_unconfigured_fallback(
     store: QuakeLensDataStore,
     message: str,
@@ -411,21 +426,27 @@ def _build_unconfigured_fallback(
     ward = str(ctx.get("ward") or "all")
     meshcode = ctx.get("selected_meshcode")
     building_id = ctx.get("selected_building_id")
+    usage_group = str(ctx.get("usage_group") or "all")
+    age_categories = ctx.get("age_categories") if isinstance(ctx.get("age_categories"), list) else None
+    hazard_tiers = ctx.get("hazard_tiers") if isinstance(ctx.get("hazard_tiers"), list) else None
 
     tool_trace: list[dict[str, Any]] = []
+    tool_records: list[dict[str, Any]] = []
     actions: list[dict[str, Any]] = []
     sections: list[str] = [
         "⚠️ **Gemini APIキー（`GEMINI_API_KEY`）が未設定のため、AIによる自然言語生成は停止中です。**\n"
         "代わりに、バックエンドの実データ照会ツールを直接実行して得られた正確な集計値をご案内します。\n"
-        "（`.env` に `GEMINI_API_KEY` を設定するか、上の「APIキー一時設定」からキーを入力すると Gemini による対話解説が利用できます）"
+        "（`.env` に `GEMINI_API_KEY` を設定するか、上の「APIキー設定」からキーを入力すると Gemini による対話解説が利用できます）"
     ]
 
     if building_id:
-        b = _execute_tool(store, "get_building_details", {"building_id": building_id})
+        b_args = {"building_id": building_id}
+        b = _execute_tool(store, "get_building_details", b_args)
+        tool_records.append({"name": "get_building_details", "arguments": b_args, "result": b})
         tool_trace.append({
             "name": "get_building_details",
-            "arguments": {"building_id": building_id},
-            "summary": _summarize_tool_call("get_building_details", {"building_id": building_id}, b),
+            "arguments": b_args,
+            "summary": _summarize_tool_call("get_building_details", b_args, b),
         })
         actions.extend(_extract_map_actions("get_building_details", b))
         if isinstance(b, dict) and not b.get("error"):
@@ -437,48 +458,65 @@ def _build_unconfigured_fallback(
                 f"- 30年震度6弱以上確率: **{prob}**（微地形: {b['jname']} / ARV: {b.get('arv') or '—'}）"
             )
     elif meshcode:
-        m = _execute_tool(store, "get_mesh_details", {"meshcode": meshcode})
+        m_args = {"meshcode": meshcode}
+        m = _execute_tool(store, "get_mesh_details", m_args)
+        tool_records.append({"name": "get_mesh_details", "arguments": m_args, "result": m})
         tool_trace.append({
             "name": "get_mesh_details",
-            "arguments": {"meshcode": meshcode},
-            "summary": _summarize_tool_call("get_mesh_details", {"meshcode": meshcode}, m),
+            "arguments": m_args,
+            "summary": _summarize_tool_call("get_mesh_details", m_args, m),
         })
         actions.extend(_extract_map_actions("get_mesh_details", m))
         if isinstance(m, dict) and not m.get("error"):
             prob = f"{m['t30_i55_ps']*100:.1f}%" if m.get("t30_i55_ps") is not None else "不明"
             sections.append(
                 f"### 選択メッシュ（`{m['meshcode']}` / {m['ward_name']}）の実測データ\n"
-                f"- 総建物数: **{m['total_buildings']:,}棟**（建築年不明 {m['unknown_year_count']:,}棟・判明率 {m['known_year_rate']*100:.1f}%）\n"
+                f"- 総建物数: **{m['total_buildings']:,}棟**（建築年不明 {m['unknown_year_count']:,}棟・判明率 {m['known_year_rate']*100:.2f}%）\n"
                 f"- 1981年以前建築: **{m['pre_1981_count']:,}棟**（木造 {m['wooden_pre_1981_count']:,}棟）\n"
                 f"- 30年震度6弱以上確率: **{prob}** / 表層地盤増幅率 ARV: **{m.get('arv') or '—'}**（{m['jname']}）"
             )
 
-    stats = _execute_tool(store, "get_area_statistics", {"ward": ward})
+    stats_args: dict[str, Any] = {"ward": ward}
+    if usage_group and usage_group != "all":
+        stats_args["usage_group"] = usage_group
+    if age_categories and len(age_categories) < 4:
+        stats_args["age_categories"] = age_categories
+    if hazard_tiers and len(hazard_tiers) < 5:
+        stats_args["hazard_tiers"] = hazard_tiers
+
+    stats = _execute_tool(store, "get_area_statistics", stats_args)
+    tool_records.append({"name": "get_area_statistics", "arguments": stats_args, "result": stats})
     tool_trace.append({
         "name": "get_area_statistics",
-        "arguments": {"ward": ward},
-        "summary": _summarize_tool_call("get_area_statistics", {"ward": ward}, stats),
+        "arguments": stats_args,
+        "summary": _summarize_tool_call("get_area_statistics", stats_args, stats),
     })
     actions.extend(_extract_map_actions("get_area_statistics", stats))
     w_label = "京都市全域" if ward == "all" else f"京都市 {ward}"
+    tot_b = stats["total_buildings"]
+    known_pct = (stats["known_year_count"] / tot_b * 100.0) if tot_b else 0.0
+    unknown_pct = (stats["unknown_year_count"] / tot_b * 100.0) if tot_b else 0.0
     sections.append(
         f"### {w_label} の建物・ハザード統計\n"
-        f"- 対象総棟数: **{stats['total_buildings']:,}棟**（建築年判明 {stats['known_year_count']:,}棟 [{stats['known_year_rate']*100:.1f}%] / 不明 {stats['unknown_year_count']:,}棟 [{stats['unknown_year_rate']*100:.1f}%]）\n"
+        f"- 対象総棟数: **{tot_b:,}棟**（建築年判明 {stats['known_year_count']:,}棟 [{known_pct:.2f}%] / 不明 {stats['unknown_year_count']:,}棟 [{unknown_pct:.2f}%]）\n"
         f"- 1981年以前建築: **{stats['pre_1981_count']:,}棟**\n"
         f"- 震度6弱+確率6%以上 × 1981以前重複: **{stats['overlap_elevated_or_higher_pre1981_6pct_plus']:,}棟**（うち26%以上: {stats['overlap_very_high_pre1981_26pct_plus']:,}棟）"
     )
 
     if any(k in message for k in ["優先", "多い", "エリア", "メッシュ", "ハザード", "どこ"]):
-        p_res = _execute_tool(store, "get_priority_confirmation_areas", {"ward": ward, "limit": 3})
+        p_args = {"ward": ward, "limit": 3}
+        p_res = _execute_tool(store, "get_priority_confirmation_areas", p_args)
+        tool_records.append({"name": "get_priority_confirmation_areas", "arguments": p_args, "result": p_res})
         tool_trace.append({
             "name": "get_priority_confirmation_areas",
-            "arguments": {"ward": ward, "limit": 3},
-            "summary": _summarize_tool_call("get_priority_confirmation_areas", {"ward": ward, "limit": 3}, p_res),
+            "arguments": p_args,
+            "summary": _summarize_tool_call("get_priority_confirmation_areas", p_args, p_res),
         })
         actions.extend(_extract_map_actions("get_priority_confirmation_areas", p_res))
 
     if any(k in message for k in ["補助", "診断", "制度", "支援"]):
         prog = _execute_tool(store, "get_data_methodology_and_programs", {})
+        tool_records.append({"name": "get_data_methodology_and_programs", "arguments": {}, "result": prog})
         tool_trace.append({
             "name": "get_data_methodology_and_programs",
             "arguments": {},
@@ -487,13 +525,16 @@ def _build_unconfigured_fallback(
         links = "\n".join(f"- [{p['title']}]({p['url']})" for p in prog["official_retrofit_programs"][:3])
         sections.append(f"### 京都市公式の耐震診断・補助制度\n{links}")
 
+    answer = "\n\n".join(sections)
+    verification = verify_grounded_response(answer, tool_records)
     return {
         "configured": False,
-        "answer": "\n\n".join(sections),
+        "answer": answer,
         "interaction_id": None,
         "tool_calls": tool_trace,
         "map_actions": _dedupe_actions(actions),
         "model": None,
+        "verification": verification,
     }
 
 
@@ -534,75 +575,80 @@ def ask_quakelens_ai(
     prompt = _build_contextual_prompt(message, context)
     client = genai.Client(api_key=api_key, http_options={"timeout": 120000})
     tool_trace: list[dict[str, Any]] = []
+    tool_records: list[dict[str, Any]] = []
     map_actions: list[dict[str, Any]] = []
     gen_cfg = {"max_output_tokens": _max_output_tokens()}
+    current_input: Any = prompt
+    prev_id = previous_interaction_id
+    tool_rounds = 0
+    correction_used = False
 
-    kwargs: dict[str, Any] = {
-        "model": chosen_model,
-        "input": prompt,
-        "system_instruction": SYSTEM_INSTRUCTION,
-        "tools": TOOLS,
-        "generation_config": gen_cfg,
-    }
-    if previous_interaction_id:
-        kwargs["previous_interaction_id"] = previous_interaction_id
+    for _ in range(6):
+        kwargs: dict[str, Any] = {
+            "model": chosen_model,
+            "input": current_input,
+            "system_instruction": SYSTEM_INSTRUCTION,
+            "tools": TOOLS,
+            "generation_config": gen_cfg,
+        }
+        if prev_id:
+            kwargs["previous_interaction_id"] = prev_id
 
-    interaction = client.interactions.create(**kwargs)
+        interaction = client.interactions.create(**kwargs)
+        inter_status = getattr(interaction, "status", None)
+        if inter_status in {"failed", "cancelled"}:
+            raise RuntimeError(f"AI処理が正常に完了しませんでした（ステータス: {inter_status}）。")
+        prev_id = interaction.id
 
-    for _ in range(4):
         fc_steps = [s for s in (interaction.steps or []) if getattr(s, "type", None) == "function_call"]
-        if not fc_steps:
-            break
+        if fc_steps:
+            tool_rounds += 1
+            if tool_rounds > 4:
+                raise RuntimeError("ツール照会回数の上限に達したため、回答生成を完了できませんでした。")
+            fn_results = []
+            for fc in fc_steps:
+                fn_name = fc.name
+                fn_args = dict(fc.arguments) if fc.arguments else {}
+                result_data = _execute_tool(store, fn_name, fn_args, earthquakes_cache=earthquakes_cache)
+                tool_records.append({"name": fn_name, "arguments": fn_args, "result": result_data})
+                summary = _summarize_tool_call(fn_name, fn_args, result_data)
+                map_actions.extend(_extract_map_actions(fn_name, result_data))
+                tool_trace.append({
+                    "name": fn_name,
+                    "arguments": fn_args,
+                    "summary": summary,
+                })
+                fn_results.append({
+                    "type": "function_result",
+                    "name": fn_name,
+                    "call_id": fc.id,
+                    "result": [{"type": "text", "text": json.dumps(result_data, ensure_ascii=False)}],
+                })
+            current_input = fn_results
+            continue
 
-        fn_results = []
-        for fc in fc_steps:
-            fn_name = fc.name
-            fn_args = dict(fc.arguments) if fc.arguments else {}
-            result_data = _execute_tool(store, fn_name, fn_args, earthquakes_cache=earthquakes_cache)
-            summary = _summarize_tool_call(fn_name, fn_args, result_data)
-            map_actions.extend(_extract_map_actions(fn_name, result_data))
-            tool_trace.append({
-                "name": fn_name,
-                "arguments": fn_args,
-                "summary": summary,
-            })
-            fn_results.append({
-                "type": "function_result",
-                "name": fn_name,
-                "call_id": fc.id,
-                "result": [{"type": "text", "text": json.dumps(result_data, ensure_ascii=False)}],
-            })
+        answer_text = (interaction.output_text or "").strip()
+        if not answer_text:
+            raise RuntimeError("モデルから回答テキストが返却されませんでした。")
 
-        interaction = client.interactions.create(
-            model=chosen_model,
-            input=fn_results,
-            system_instruction=SYSTEM_INSTRUCTION,
-            tools=TOOLS,
-            generation_config=gen_cfg,
-            previous_interaction_id=interaction.id,
-        )
+        verification = verify_grounded_response(answer_text, tool_records)
+        if verification["status"] in {"no_tools", "warning"} and not correction_used and inter_status != "incomplete":
+            correction_used = True
+            current_input = _build_correction_prompt(verification)
+            continue
 
-    remaining_fc = [s for s in (interaction.steps or []) if getattr(s, "type", None) == "function_call"]
-    if remaining_fc:
-        raise RuntimeError("ツール照会回数の上限に達したため、回答生成を完了できませんでした。")
+        return {
+            "configured": True,
+            "answer": answer_text,
+            "interaction_id": interaction.id,
+            "tool_calls": tool_trace,
+            "map_actions": _dedupe_actions(map_actions),
+            "model": chosen_model,
+            "incomplete": inter_status == "incomplete",
+            "verification": verification,
+        }
 
-    inter_status = getattr(interaction, "status", None)
-    if inter_status in {"failed", "cancelled"}:
-        raise RuntimeError(f"AI処理が正常に完了しませんでした（ステータス: {inter_status}）。")
-
-    answer_text = (interaction.output_text or "").strip()
-    if not answer_text:
-        raise RuntimeError("モデルから回答テキストが返却されませんでした。")
-
-    return {
-        "configured": True,
-        "answer": answer_text,
-        "interaction_id": interaction.id,
-        "tool_calls": tool_trace,
-        "map_actions": _dedupe_actions(map_actions),
-        "model": chosen_model,
-        "incomplete": inter_status == "incomplete",
-    }
+    raise RuntimeError("ツール照会回数の上限に達したため、回答生成を完了できませんでした。")
 
 
 def stream_quakelens_ai(
@@ -628,15 +674,18 @@ def stream_quakelens_ai(
     client = genai.Client(api_key=api_key, http_options={"timeout": 120000})
 
     tool_trace: list[dict[str, Any]] = []
+    tool_records: list[dict[str, Any]] = []
     map_actions: list[dict[str, Any]] = []
     full_text_parts: list[str] = []
     current_input: Any = prompt
     prev_id = previous_interaction_id
     gen_cfg = {"max_output_tokens": _max_output_tokens()}
+    tool_rounds = 0
+    correction_used = False
 
     yield {"type": "status", "message": f"{chosen_model} で実データを照会中..."}
 
-    for _ in range(4):
+    for _ in range(6):
         kwargs: dict[str, Any] = {
             "model": chosen_model,
             "input": current_input,
@@ -750,6 +799,22 @@ def stream_quakelens_ai(
                     "message": "モデルから回答テキストが返却されませんでした（未完了）。",
                 }
                 return
+
+            verification = verify_grounded_response(answer, tool_records)
+            if (
+                verification["status"] in {"no_tools", "warning"}
+                and not correction_used
+                and inter_status != "incomplete"
+            ):
+                correction_used = True
+                if full_text_parts:
+                    full_text_parts.clear()
+                    yield {"type": "reset_draft"}
+                yield {"type": "status", "message": "実データとの数値照合で根拠を再確認中..."}
+                current_input = _build_correction_prompt(verification)
+                continue
+
+            yield {"type": "verification", **verification}
             yield {
                 "type": "done",
                 "configured": True,
@@ -759,6 +824,15 @@ def stream_quakelens_ai(
                 "map_actions": _dedupe_actions(map_actions),
                 "model": chosen_model,
                 "incomplete": inter_status == "incomplete",
+                "verification": verification,
+            }
+            return
+
+        tool_rounds += 1
+        if tool_rounds > 4:
+            yield {
+                "type": "error",
+                "message": "ツール照会回数の上限（4回）に達したため、回答の生成を完了できませんでした。質問を絞って再試行してください。",
             }
             return
 
@@ -767,6 +841,7 @@ def stream_quakelens_ai(
             fn_name = fc["name"]
             fn_args = fc["arguments"]
             result_data = _execute_tool(store, fn_name, fn_args, earthquakes_cache=earthquakes_cache)
+            tool_records.append({"name": fn_name, "arguments": fn_args, "result": result_data})
             summary = _summarize_tool_call(fn_name, fn_args, result_data)
             map_actions.extend(_extract_map_actions(fn_name, result_data))
             tc_entry = {

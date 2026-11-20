@@ -23,6 +23,7 @@ import {
   AgeCategory,
   AiProtectionStatus,
   BuildingDetail,
+  GroundingVerification,
   HazardTier,
   MapAction,
   MeshDetail,
@@ -43,11 +44,13 @@ interface ChatTurn {
   incomplete?: boolean;
   aborted?: boolean;
   error?: string;
+  verification?: GroundingVerification;
 }
 
 interface AiAssistantPanelProps {
   geminiConfigured: boolean;
   aiProtection?: AiProtectionStatus | null;
+  totalBuildings?: number | null;
   onRefreshHealth?: () => void;
   selectedWard: string;
   ageCategories: AgeCategory[];
@@ -69,11 +72,18 @@ const DEMO_PROMPTS = [
   "京都市の耐震診断や補助制度はありますか？",
 ];
 
+function buildWelcomeText(totalBuildings?: number | null): string {
+  const countLabel =
+    totalBuildings && totalBuildings > 0
+      ? `（${totalBuildings.toLocaleString("ja-JP")}棟）`
+      : "";
+  return `**QuakeLens Japan 防災AIアシスタント**です。京都市のPLATEAU建物データ${countLabel}とJ-SHIS 2024年版ハザード・地盤V4、気象庁地震情報を **Function Calling** でリアルタイム照会・数値検証しながら解説します。\n\n上の「現在エリアをAI診断」または質問チップを押してみてください。`;
+}
+
 const INITIAL_MESSAGE: ChatTurn = {
   id: "welcome",
   role: "assistant",
-  content:
-    "**QuakeLens Japan 防災AIアシスタント**です。京都市のPLATEAU建物データ（513,815棟）とJ-SHIS 2024年版ハザード・地盤V4、気象庁地震情報を **Function Calling** でリアルタイム照会しながら解説します。\n\n上の「現在エリアをAI診断」または質問チップを押してみてください。",
+  content: "",
 };
 
 type AiModelId = "gemini-3.5-flash-lite" | "gemini-4-hydrogen" | "gemini-4-argon";
@@ -81,6 +91,7 @@ type AiModelId = "gemini-3.5-flash-lite" | "gemini-4-hydrogen" | "gemini-4-argon
 export function AiAssistantPanel({
   geminiConfigured,
   aiProtection,
+  totalBuildings,
   onRefreshHealth,
   selectedWard,
   ageCategories,
@@ -207,6 +218,25 @@ export function AiAssistantPanel({
                     : m
                 )
               );
+            } else if (ev.type === "reset_draft") {
+              setMessages((prev) =>
+                prev.map((m) => (m.id === assistantId ? { ...m, content: "" } : m))
+              );
+            } else if (ev.type === "verification") {
+              const verificationPayload: GroundingVerification = {
+                status: ev.status,
+                tool_count: ev.tool_count,
+                checked_claims_count: ev.checked_claims_count,
+                verified_claims: ev.verified_claims,
+                unverified_claims: ev.unverified_claims,
+                unverified_urls: ev.unverified_urls,
+                note: ev.note,
+              };
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, verification: verificationPayload } : m
+                )
+              );
             } else if (ev.type === "done") {
               receivedTerminal = true;
               receivedSuccessDone = true;
@@ -226,6 +256,7 @@ export function AiAssistantPanel({
                         mapActions: ev.map_actions || [],
                         model: ev.model,
                         incomplete: Boolean(ev.incomplete),
+                        verification: ev.verification ?? m.verification,
                         error: undefined,
                       }
                     : m
@@ -333,6 +364,7 @@ export function AiAssistantPanel({
                         mapActions: res.map_actions || [],
                         model: res.model,
                         incomplete: Boolean(res.incomplete),
+                        verification: res.verification,
                         error: undefined,
                       }
                     : m
@@ -597,12 +629,63 @@ export function AiAssistantPanel({
                     </div>
                   )}
 
-                  {m.content ? (
-                    <MarkdownLite text={m.content} />
-                  ) : (
-                    m.streaming && (
-                      <div className="text-[11px] text-slate-400">回答を生成しています...</div>
-                    )
+                  {(() => {
+                    const displayText =
+                      m.id === "welcome" ? buildWelcomeText(totalBuildings) : m.content;
+                    if (displayText) {
+                      return <MarkdownLite text={displayText} />;
+                    }
+                    if (m.streaming) {
+                      return (
+                        <div className="text-[11px] text-slate-400">回答を生成しています...</div>
+                      );
+                    }
+                    return null;
+                  })()}
+
+                  {m.verification && !m.streaming && (
+                    <div
+                      className={`mt-2 rounded-md border px-2 py-1.5 text-[10px] ${
+                        m.verification.status === "verified"
+                          ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-200"
+                          : m.verification.status === "no_numeric_claims"
+                            ? "border-slate-700 bg-slate-900/70 text-slate-300"
+                            : "border-amber-500/50 bg-amber-500/10 text-amber-200"
+                      }`}
+                    >
+                      <div className="flex items-start gap-1.5">
+                        {m.verification.status === "verified" ? (
+                          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                        ) : (
+                          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+                        )}
+                        <div>
+                          <div className="font-medium">{m.verification.note}</div>
+                          {(m.verification.unverified_claims.length > 0 ||
+                            m.verification.unverified_urls.length > 0) && (
+                            <div className="mt-1 text-[10px] text-amber-300">
+                              未照合項目:{" "}
+                              {[
+                                ...m.verification.unverified_claims,
+                                ...m.verification.unverified_urls,
+                              ].join(" / ")}
+                            </div>
+                          )}
+                          {traceOpen && m.verification.verified_claims.length > 0 && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {m.verification.verified_claims.map((c) => (
+                                <span
+                                  key={c}
+                                  className="rounded border border-emerald-500/30 bg-emerald-950/60 px-1 py-0.5 font-mono text-[9px] text-emerald-300"
+                                >
+                                  ✓ {c}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   )}
 
                   {m.incomplete && !m.streaming && (
