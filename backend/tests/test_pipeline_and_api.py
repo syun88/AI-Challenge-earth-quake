@@ -298,9 +298,10 @@ def test_api_endpoints_with_store(synthetic_store: QuakeLensDataStore, monkeypat
 def test_ai_tools_compare_wards_earthquakes_and_map_actions(synthetic_store: QuakeLensDataStore) -> None:
     from app.ai_assistant import _execute_tool, _extract_map_actions, _resolve_model
 
-    assert _resolve_model(None) == "gemini-4-hydrogen"
+    assert _resolve_model(None) == "gemini-3.5-flash-lite"
+    assert _resolve_model("gemini-4-hydrogen") == "gemini-4-hydrogen"
     assert _resolve_model("gemini-4-argon") == "gemini-4-argon"
-    assert _resolve_model("unknown-model") == "gemini-4-hydrogen"
+    assert _resolve_model("unknown-model") == "gemini-3.5-flash-lite"
 
     ward_cmp = _execute_tool(synthetic_store, "compare_wards", {"usage_group": "all"})
     assert len(ward_cmp["wards"]) >= 1

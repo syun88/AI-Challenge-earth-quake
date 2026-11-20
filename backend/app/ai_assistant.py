@@ -12,8 +12,8 @@ from google import genai
 from app.constants import OFFICIAL_RETROFIT_PROGRAMS, WARD_NAMES
 from app.data_store import QuakeLensDataStore
 
-DEFAULT_MODEL = "gemini-4-hydrogen"
-ALLOWED_MODELS = {"gemini-4-hydrogen", "gemini-4-argon"}
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
+ALLOWED_MODELS = {"gemini-3.5-flash-lite", "gemini-4-hydrogen", "gemini-4-argon"}
 
 SYSTEM_INSTRUCTION = """あなたは「QuakeLens Japan」の防災データ解説AIアシスタントです。
 対象地域は京都市全域（Project PLATEAU 2025年度版 + J-SHIS 2024年版地震ハザード・表層地盤V4）です。
@@ -522,7 +522,7 @@ def ask_quakelens_ai(
 
     chosen_model = _resolve_model(model)
     prompt = _build_contextual_prompt(message, context)
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options={"timeout": 120000})
     tool_trace: list[dict[str, Any]] = []
     map_actions: list[dict[str, Any]] = []
 
@@ -599,7 +599,7 @@ def stream_quakelens_ai(
 
     chosen_model = _resolve_model(model)
     prompt = _build_contextual_prompt(message, context)
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options={"timeout": 120000})
 
     tool_trace: list[dict[str, Any]] = []
     map_actions: list[dict[str, Any]] = []
@@ -621,21 +621,43 @@ def stream_quakelens_ai(
             kwargs["previous_interaction_id"] = prev_id
 
         completed_interaction = None
+        fc_by_index: dict[int, dict[str, Any]] = {}
+
         for event in client.interactions.create(**kwargs):
             ev_type = getattr(event, "event_type", None)
+            ev_idx = getattr(event, "index", None)
             if ev_type == "step.start":
                 step = getattr(event, "step", None)
-                if getattr(step, "type", None) == "function_call":
+                st_type = getattr(step, "type", None)
+                if st_type == "thought":
+                    yield {"type": "status", "message": f"{chosen_model} が質問内容と必要なツールを分析中..."}
+                elif st_type == "function_call":
+                    fn_name = getattr(step, "name", "")
+                    init_args = getattr(step, "arguments", None)
+                    key = ev_idx if ev_idx is not None else len(fc_by_index)
+                    fc_by_index[key] = {
+                        "id": getattr(step, "id", ""),
+                        "name": fn_name,
+                        "arguments": dict(init_args) if isinstance(init_args, dict) else {},
+                        "arg_chunks": [],
+                    }
                     yield {
                         "type": "tool_start",
-                        "name": getattr(step, "name", ""),
+                        "name": fn_name,
                     }
             elif ev_type == "step.delta":
                 delta = getattr(event, "delta", None)
-                if getattr(delta, "type", None) == "text" and getattr(delta, "text", None):
+                d_type = getattr(delta, "type", None)
+                if d_type == "text" and getattr(delta, "text", None):
                     chunk = delta.text
                     full_text_parts.append(chunk)
                     yield {"type": "text_delta", "delta": chunk}
+                elif ev_idx in fc_by_index and getattr(delta, "arguments", None) is not None:
+                    arg_val = delta.arguments
+                    if isinstance(arg_val, str):
+                        fc_by_index[ev_idx]["arg_chunks"].append(arg_val)
+                    elif isinstance(arg_val, dict):
+                        fc_by_index[ev_idx]["arguments"].update(arg_val)
             elif ev_type == "interaction.completed":
                 completed_interaction = getattr(event, "interaction", None)
 
@@ -643,12 +665,36 @@ def stream_quakelens_ai(
             break
 
         prev_id = completed_interaction.id
-        fc_steps = [
-            s
-            for s in (completed_interaction.steps or [])
-            if getattr(s, "type", None) == "function_call"
-        ]
-        if not fc_steps:
+
+        # Build unified function calls list from streamed steps (with fallback to completed.steps)
+        fc_calls: list[dict[str, Any]] = []
+        if fc_by_index:
+            for _, fc_raw in sorted(fc_by_index.items()):
+                merged_args = dict(fc_raw["arguments"])
+                if fc_raw["arg_chunks"]:
+                    raw_str = "".join(fc_raw["arg_chunks"]).strip()
+                    if raw_str:
+                        try:
+                            parsed = json.loads(raw_str)
+                            if isinstance(parsed, dict):
+                                merged_args.update(parsed)
+                        except json.JSONDecodeError:
+                            pass
+                fc_calls.append({
+                    "id": fc_raw["id"],
+                    "name": fc_raw["name"],
+                    "arguments": merged_args,
+                })
+        elif getattr(completed_interaction, "steps", None):
+            for s in completed_interaction.steps:
+                if getattr(s, "type", None) == "function_call":
+                    fc_calls.append({
+                        "id": getattr(s, "id", ""),
+                        "name": getattr(s, "name", ""),
+                        "arguments": dict(s.arguments) if getattr(s, "arguments", None) else {},
+                    })
+
+        if not fc_calls:
             answer = "".join(full_text_parts).strip() or (
                 getattr(completed_interaction, "output_text", None) or "回答を生成できませんでした。"
             )
@@ -664,9 +710,9 @@ def stream_quakelens_ai(
             return
 
         fn_results = []
-        for fc in fc_steps:
-            fn_name = fc.name
-            fn_args = dict(fc.arguments) if fc.arguments else {}
+        for fc in fc_calls:
+            fn_name = fc["name"]
+            fn_args = fc["arguments"]
             result_data = _execute_tool(store, fn_name, fn_args, earthquakes_cache=earthquakes_cache)
             summary = _summarize_tool_call(fn_name, fn_args, result_data)
             map_actions.extend(_extract_map_actions(fn_name, result_data))
@@ -680,7 +726,7 @@ def stream_quakelens_ai(
             fn_results.append({
                 "type": "function_result",
                 "name": fn_name,
-                "call_id": fc.id,
+                "call_id": fc["id"],
                 "result": [{"type": "text", "text": json.dumps(result_data, ensure_ascii=False)}],
             })
 

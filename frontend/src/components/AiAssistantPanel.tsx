@@ -16,7 +16,7 @@ import {
   Compass,
   CheckCircle2,
 } from "lucide-react";
-import { streamChatMessage } from "@/lib/api";
+import { sendChatMessage, streamChatMessage } from "@/lib/api";
 import { MarkdownLite } from "@/components/MarkdownLite";
 import {
   AgeCategory,
@@ -69,6 +69,8 @@ const INITIAL_MESSAGE: ChatTurn = {
     "**QuakeLens Japan 防災AIアシスタント**です。京都市のPLATEAU建物データ（513,815棟）とJ-SHIS 2024年版ハザード・地盤V4、気象庁地震情報を **Function Calling** でリアルタイム照会しながら解説します。\n\n上の「現在エリアをAI診断」または質問チップを押してみてください。",
 };
 
+type AiModelId = "gemini-3.5-flash-lite" | "gemini-4-hydrogen" | "gemini-4-argon";
+
 export function AiAssistantPanel({
   geminiConfigured,
   selectedWard,
@@ -86,7 +88,7 @@ export function AiAssistantPanel({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [interactionId, setInteractionId] = useState<string | null>(null);
-  const [model, setModel] = useState<"gemini-4-hydrogen" | "gemini-4-argon">("gemini-4-hydrogen");
+  const [model, setModel] = useState<AiModelId>("gemini-3.5-flash-lite");
   const [tempApiKey, setTempApiKey] = useState("");
   const [showKeyBox, setShowKeyBox] = useState(false);
   const [expandedTraces, setExpandedTraces] = useState<Record<string, boolean>>({});
@@ -132,20 +134,22 @@ export function AiAssistantPanel({
 
       const controller = new AbortController();
       abortRef.current = controller;
+      const contextPayload = {
+        ward: selectedWard,
+        usage_group: usageGroup,
+        age_categories: ageCategories,
+        hazard_tiers: hazardTiers,
+        selected_meshcode: selectedMesh?.meshcode ?? null,
+        selected_building_id: selectedBuilding?.building_id ?? null,
+        is_3d: is3D,
+      };
+      let receivedDone = false;
 
       try {
         await streamChatMessage(
           {
             message: q,
-            context: {
-              ward: selectedWard,
-              usage_group: usageGroup,
-              age_categories: ageCategories,
-              hazard_tiers: hazardTiers,
-              selected_meshcode: selectedMesh?.meshcode ?? null,
-              selected_building_id: selectedBuilding?.building_id ?? null,
-              is_3d: is3D,
-            },
+            context: contextPayload,
             previous_interaction_id: interactionId,
             model,
           },
@@ -193,6 +197,7 @@ export function AiAssistantPanel({
                 )
               );
             } else if (ev.type === "done") {
+              receivedDone = true;
               if (ev.interaction_id) setInteractionId(ev.interaction_id);
               setMessages((prev) =>
                 prev.map((m) =>
@@ -211,6 +216,7 @@ export function AiAssistantPanel({
                 )
               );
             } else if (ev.type === "error") {
+              receivedDone = true;
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
@@ -228,6 +234,10 @@ export function AiAssistantPanel({
           tempApiKey,
           controller.signal
         );
+
+        if (!receivedDone && !controller.signal.aborted) {
+          throw new Error("ストリーミング応答が完了前に終了しました");
+        }
       } catch (err) {
         if ((err as Error)?.name === "AbortError") {
           setMessages((prev) =>
@@ -242,21 +252,66 @@ export function AiAssistantPanel({
                 : m
             )
           );
-        } else {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                    ...m,
-                    streaming: false,
-                    statusMessage: undefined,
-                    content: `エラーが発生しました: ${
-                      err instanceof Error ? err.message : "通信エラー"
-                    }`,
-                  }
-                : m
-            )
-          );
+        } else if (!receivedDone) {
+          // Automatic fallback to unary /api/chat if streaming transport drops (e.g. Safari "Load failed")
+          try {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, statusMessage: "通常通信にフォールバックして再試行中..." }
+                  : m
+              )
+            );
+            const res = await sendChatMessage(
+              {
+                message: q,
+                context: contextPayload,
+                previous_interaction_id: interactionId,
+                model,
+              },
+              tempApiKey
+            );
+            if (res.interaction_id) setInteractionId(res.interaction_id);
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      streaming: false,
+                      statusMessage: undefined,
+                      configured: res.configured,
+                      content: res.answer,
+                      toolCalls: res.tool_calls,
+                      mapActions: res.map_actions || [],
+                      model: res.model,
+                    }
+                  : m
+              )
+            );
+          } catch (fallbackErr) {
+            const rawMsg =
+              fallbackErr instanceof Error
+                ? fallbackErr.message
+                : err instanceof Error
+                  ? err.message
+                  : "通信エラー";
+            const hint =
+              rawMsg === "Load failed" || rawMsg === "Failed to fetch"
+                ? `${rawMsg}（バックエンドとの通信がタイムアウトまたは中断されました。高速な Gemini 3.5 Flash-Lite をお試しいただくか、バックエンド起動状態をご確認ください）`
+                : rawMsg;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      streaming: false,
+                      statusMessage: undefined,
+                      content: `エラーが発生しました: ${hint}`,
+                    }
+                  : m
+              )
+            );
+          }
         }
       } finally {
         setSending(false);
@@ -283,8 +338,11 @@ export function AiAssistantPanel({
   useEffect(() => {
     if (!queuedPrompt) return;
     const text = queuedPrompt.text;
-    onConsumeQueuedPrompt();
-    handleSend(text);
+    const timer = window.setTimeout(() => {
+      onConsumeQueuedPrompt();
+      void handleSend(text);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [queuedPrompt, onConsumeQueuedPrompt, handleSend]);
 
   const handleBriefing = () => {
@@ -317,12 +375,13 @@ export function AiAssistantPanel({
           <div className="flex items-center gap-1.5">
             <select
               value={model}
-              onChange={(e) => setModel(e.target.value as "gemini-4-hydrogen" | "gemini-4-argon")}
+              onChange={(e) => setModel(e.target.value as AiModelId)}
               aria-label="Geminiモデル選択"
               className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] font-medium text-emerald-300 focus:border-emerald-500 focus:outline-none"
             >
-              <option value="gemini-4-hydrogen">Gemini 4 Hydrogen（標準・高速）</option>
-              <option value="gemini-4-argon">Gemini 4 Argon（詳細分析）</option>
+              <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite（高速・標準）</option>
+              <option value="gemini-4-hydrogen">Gemini 4 Hydrogen（高精度・じっくり）</option>
+              <option value="gemini-4-argon">Gemini 4 Argon（深層推論）</option>
             </select>
             {!hasAnyKey && (
               <button

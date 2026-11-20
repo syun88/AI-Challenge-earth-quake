@@ -193,10 +193,13 @@ export async function streamChatMessage(
 
   while (true) {
     const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+    if (value) {
+      buffer += decoder.decode(value, { stream: !done });
+    } else if (done) {
+      buffer += decoder.decode();
+    }
     const chunks = buffer.split("\n\n");
-    buffer = chunks.pop() || "";
+    buffer = done ? "" : chunks.pop() || "";
 
     for (const chunk of chunks) {
       for (const line of chunk.split("\n")) {
@@ -212,5 +215,6 @@ export async function streamChatMessage(
         }
       }
     }
+    if (done) break;
   }
 }

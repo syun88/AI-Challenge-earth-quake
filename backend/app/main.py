@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -299,20 +301,43 @@ def chat_stream(
         raise HTTPException(status_code=400, detail="message must not be empty")
 
     def event_generator():
+        q: queue.Queue[dict[str, Any] | None] = queue.Queue()
+        stop_flag = threading.Event()
+
+        def worker() -> None:
+            try:
+                for ev in stream_quakelens_ai(
+                    store=s,
+                    message=req.message.strip(),
+                    context=req.context,
+                    previous_interaction_id=req.previous_interaction_id,
+                    model=req.model,
+                    api_key_override=x_gemini_api_key,
+                    earthquakes_cache=_quake_cache.get("data"),
+                ):
+                    if stop_flag.is_set():
+                        break
+                    q.put(ev)
+            except Exception as exc:
+                q.put({"type": "error", "message": f"AI解説の生成中にエラーが発生しました: {exc}"})
+            finally:
+                q.put(None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
         try:
-            for ev in stream_quakelens_ai(
-                store=s,
-                message=req.message.strip(),
-                context=req.context,
-                previous_interaction_id=req.previous_interaction_id,
-                model=req.model,
-                api_key_override=x_gemini_api_key,
-                earthquakes_cache=_quake_cache.get("data"),
-            ):
-                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
-        except Exception as exc:
-            err_ev = {"type": "error", "message": f"AI解説の生成中にエラーが発生しました: {exc}"}
-            yield f"data: {json.dumps(err_ev, ensure_ascii=False)}\n\n"
+            while True:
+                try:
+                    item = q.get(timeout=4.0)
+                except queue.Empty:
+                    # Keep HTTP chunked connection alive across proxies while Gemini is thinking
+                    yield ": keepalive\n\n"
+                    continue
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+        finally:
+            stop_flag.set()
 
     return StreamingResponse(
         event_generator(),
