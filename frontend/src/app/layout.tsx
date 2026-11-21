@@ -14,9 +14,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "QuakeLens Japan | 建物築年 × 地震ハザード 防災可視化ダッシュボード",
+  title: "QuakeLens Japan | 京都 統合防災・被害把握・AI状況分析プラットフォーム",
   description:
-    "Project PLATEAUの建物データとJ-SHIS地震ハザード・表層地盤情報を統合し、Gemini AIが地域の防災特徴を解説するWebアプリケーション",
+    "Project PLATEAU建物データ・J-SHIS地震ハザード・災害用伝言板・被害状況報告を統合し、Gemini AIが状況を分析する防災プラットフォーム",
 };
 
 export default function RootLayout({

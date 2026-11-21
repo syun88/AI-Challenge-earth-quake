@@ -7,6 +7,7 @@ import {
   Loader2,
   Wrench,
   AlertCircle,
+  AlertTriangle,
   MapPin,
   RotateCcw,
   KeyRound,
@@ -16,8 +17,10 @@ import {
   Compass,
   CheckCircle2,
   Shield,
+  Download,
+  FileSpreadsheet,
 } from "lucide-react";
-import { sendChatMessage, streamChatMessage } from "@/lib/api";
+import { API_BASE, sendChatMessage, streamChatMessage } from "@/lib/api";
 import { MarkdownLite } from "@/components/MarkdownLite";
 import {
   AgeCategory,
@@ -65,11 +68,12 @@ interface AiAssistantPanelProps {
 }
 
 const DEMO_PROMPTS = [
-  "この地域には1981年以前の古い建物が何棟ありますか？",
+  "伏見区の現在の被害報告と建物リスクをまとめて",
+  "道路損壊・通行止めが報告されている地域は？",
+  "支援が必要という報告を地域別に整理して",
+  "現在の地域の災害状況をCSVにまとめて",
   "伏見区と東山区で地震ハザードや古い建物の分布を比較して",
   "1981年以前の建物が多い優先確認エリアを教えて",
-  "この地図の数値（震度6弱+確率やARV）は何を意味していますか？",
-  "京都市の耐震診断や補助制度はありますか？",
 ];
 
 function buildWelcomeText(totalBuildings?: number | null): string {
@@ -77,7 +81,7 @@ function buildWelcomeText(totalBuildings?: number | null): string {
     totalBuildings && totalBuildings > 0
       ? `（${totalBuildings.toLocaleString("ja-JP")}棟）`
       : "";
-  return `**QuakeLens Japan 防災AIアシスタント**です。京都市のPLATEAU建物データ${countLabel}とJ-SHIS 2024年版ハザード・地盤V4、気象庁地震情報を **Function Calling** でリアルタイム照会・数値検証しながら解説します。\n\n上の「現在エリアをAI診断」または質問チップを押してみてください。`;
+  return `**QuakeLens Japan 統合防災AIアシスタント**です。京都市のPLATEAU建物データ${countLabel}・J-SHIS 2024ハザードに加え、**災害用伝言板（安否）**と**被害状況報告**を **Function Calling** で横断分析します。\n\n※ 市民投稿は「未確認情報」、訓練データは「訓練サンプル」として区別して集計し、CSV／Excel出力にも対応します。`;
 }
 
 const INITIAL_MESSAGE: ChatTurn = {
@@ -683,6 +687,22 @@ export function AiAssistantPanel({
                               ))}
                             </div>
                           )}
+                          {(m.verification.contains_unverified_reports ||
+                            m.verification.contains_sample_data) && (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[9px]">
+                              {m.verification.contains_unverified_reports && (
+                                <span className="inline-flex items-center gap-1 rounded border border-dashed border-amber-400/70 bg-amber-500/15 px-1.5 py-0.5 font-semibold text-amber-200">
+                                  <AlertTriangle className="h-2.5 w-2.5" />
+                                  未確認の市民報告を含むため参考情報としてご確認ください
+                                </span>
+                              )}
+                              {m.verification.contains_sample_data && (
+                                <span className="rounded border border-dotted border-slate-500 bg-slate-800 px-1.5 py-0.5 text-slate-300">
+                                  訓練用サンプルを含む集計
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -709,25 +729,41 @@ export function AiAssistantPanel({
                     </div>
                   )}
 
-                  {/* Clickable Map Action Chips */}
+                  {/* Clickable Map & Export Action Chips */}
                   {m.mapActions && m.mapActions.length > 0 && (
                     <div className="mt-2.5 border-t border-slate-800/80 pt-2">
                       <div className="mb-1 flex items-center gap-1 text-[10px] font-medium text-sky-300">
                         <MapPin className="h-3 w-3" />
-                        <span>地図で確認（クリックで移動）:</span>
+                        <span>関連アクション（地図移動・データ出力）:</span>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
-                        {m.mapActions.map((act) => (
-                          <button
-                            key={act.key}
-                            type="button"
-                            onClick={() => onExecuteMapAction(act)}
-                            className="inline-flex items-center gap-1 rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-[10px] font-medium text-sky-200 transition hover:border-sky-400 hover:bg-sky-500/20"
-                          >
-                            <MapPin className="h-2.5 w-2.5 shrink-0 text-sky-400" />
-                            <span>{act.label}</span>
-                          </button>
-                        ))}
+                        {m.mapActions.map((act) =>
+                          act.type === "download_export" && act.url ? (
+                            <a
+                              key={act.key}
+                              href={`${API_BASE}${act.url}`}
+                              download
+                              className="inline-flex items-center gap-1 rounded-md border border-emerald-500/50 bg-emerald-500/15 px-2 py-1 text-[10px] font-semibold text-emerald-200 transition hover:bg-emerald-500/25"
+                            >
+                              {act.format === "xlsx" ? (
+                                <FileSpreadsheet className="h-3 w-3 shrink-0" />
+                              ) : (
+                                <Download className="h-3 w-3 shrink-0" />
+                              )}
+                              <span>{act.label}</span>
+                            </a>
+                          ) : (
+                            <button
+                              key={act.key}
+                              type="button"
+                              onClick={() => onExecuteMapAction(act)}
+                              className="inline-flex items-center gap-1 rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-[10px] font-medium text-sky-200 transition hover:border-sky-400 hover:bg-sky-500/20"
+                            >
+                              <MapPin className="h-2.5 w-2.5 shrink-0 text-sky-400" />
+                              <span>{act.label}</span>
+                            </button>
+                          )
+                        )}
                       </div>
                     </div>
                   )}

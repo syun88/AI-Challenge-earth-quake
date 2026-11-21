@@ -17,31 +17,48 @@ import {
   ExternalLink,
   Navigation,
   ShieldCheck,
+  MessageSquareHeart,
+  AlertTriangle,
+  Download,
+  FileSpreadsheet,
+  MapPin,
+  PlusCircle,
 } from "lucide-react";
 import {
   AGE_COLORS,
   AGE_LABELS,
   HAZARD_COLORS,
   HAZARD_SHORT_LABELS,
+  REPORT_CATEGORY_META,
+  REPORT_SEVERITY_META,
 } from "@/lib/colors";
+import { buildDisasterCsvUrl, buildDisasterXlsxUrl } from "@/lib/api";
 import { AiAssistantPanel } from "@/components/AiAssistantPanel";
+import { DamageReportPanel, VerificationBadge } from "@/components/DamageReportPanel";
+import { DisasterBoard } from "@/components/DisasterBoard";
+import { RouteSimulatorCard } from "@/components/RouteSimulatorCard";
 import {
   AgeCategory,
   AiProtectionStatus,
+  BoardSummaryResponse,
   BuildingDetail,
+  DamageReport,
+  DamageReportSummaryResponse,
   HazardTier,
   MapAction,
   MeshDetail,
   PriorityArea,
+  RouteSimulationResponse,
   StatsResponse,
   UsageGroup,
 } from "@/types/quakelens";
 
-export type RightTab = "stats" | "detail" | "ai";
+export type RightTab = "stats" | "safety" | "reports" | "detail" | "ai";
 
 interface RightPanelProps {
   activeTab: RightTab;
   onChangeTab: (tab: RightTab) => void;
+  wards: string[];
   stats: StatsResponse | null;
   priorityAreas: PriorityArea[];
   sortBy: string;
@@ -49,8 +66,10 @@ interface RightPanelProps {
   onSelectPriorityArea: (area: PriorityArea) => void;
   selectedBuilding: BuildingDetail | null;
   selectedMesh: MeshDetail | null;
+  selectedReport: DamageReport | null;
   selectedMeshcode?: string | null;
   selectedWard: string;
+  onSelectWard: (ward: string) => void;
   ageCategories: AgeCategory[];
   hazardTiers: HazardTier[];
   usageGroup: UsageGroup;
@@ -65,6 +84,22 @@ interface RightPanelProps {
   onExecuteMapAction: (action: MapAction) => void;
   onToggleAgeCategory: (cat: AgeCategory) => void;
   onToggleHazardTier: (tier: HazardTier) => void;
+  // Integrated Safety & Damage props
+  boardSummary: BoardSummaryResponse | null;
+  reports: DamageReport[];
+  reportSummary: DamageReportSummaryResponse | null;
+  includeSamples: boolean;
+  onToggleIncludeSamples: (next: boolean) => void;
+  onFocusBoardArea: (wardName: string, meshcode: string | null) => void;
+  onFocusReport: (report: DamageReport) => void;
+  onDisasterDataChanged: () => void;
+  pickedCoords: { lat: number; lon: number } | null;
+  isPickingLocation: boolean;
+  onStartPickLocation: () => void;
+  onCancelPickLocation: () => void;
+  onClearPickedLocation: () => void;
+  routeResult: RouteSimulationResponse | null;
+  onChangeRouteResult: (res: RouteSimulationResponse | null) => void;
 }
 
 const ALL_AGE_CATS: AgeCategory[] = ["pre_1981", "1982_2000", "post_2001", "unknown"];
@@ -73,6 +108,7 @@ const ALL_HAZARD_TIERS: HazardTier[] = ["very_high", "elevated", "moderate", "lo
 export function RightPanel({
   activeTab,
   onChangeTab,
+  wards,
   stats,
   priorityAreas,
   sortBy,
@@ -80,8 +116,10 @@ export function RightPanel({
   onSelectPriorityArea,
   selectedBuilding,
   selectedMesh,
+  selectedReport,
   selectedMeshcode,
   selectedWard,
+  onSelectWard,
   ageCategories,
   hazardTiers,
   usageGroup,
@@ -96,6 +134,21 @@ export function RightPanel({
   onExecuteMapAction,
   onToggleAgeCategory,
   onToggleHazardTier,
+  boardSummary,
+  reports,
+  reportSummary,
+  includeSamples,
+  onToggleIncludeSamples,
+  onFocusBoardArea,
+  onFocusReport,
+  onDisasterDataChanged,
+  pickedCoords,
+  isPickingLocation,
+  onStartPickLocation,
+  onCancelPickLocation,
+  onClearPickedLocation,
+  routeResult,
+  onChangeRouteResult,
 }: RightPanelProps) {
   const ageData = stats?.age_breakdown ?? [];
   const crossData = (stats?.cross_tab ?? [])
@@ -107,39 +160,125 @@ export function RightPanel({
 
   const isAgeFiltered = ageCategories.length < ALL_AGE_CATS.length;
   const isHazardFiltered = hazardTiers.length < ALL_HAZARD_TIERS.length;
+  const fullHeightTab = activeTab === "ai" || activeTab === "safety" || activeTab === "reports";
 
   return (
     <aside className="flex h-full flex-col border-l border-slate-800 bg-slate-900/95">
-      {/* Tabs */}
-      <div className="grid shrink-0 grid-cols-3 border-b border-slate-800 bg-slate-950/60">
+      {/* 5-Tab Unified Platform Navigation */}
+      <div className="grid shrink-0 grid-cols-5 border-b border-slate-800 bg-slate-950/70" role="tablist">
         <TabButton
+          testId="tab-stats"
           active={activeTab === "stats"}
           onClick={() => onChangeTab("stats")}
           icon={<BarChart3 className="h-3.5 w-3.5" />}
-          label="統計・エリア"
+          label="概要"
         />
         <TabButton
+          testId="tab-safety"
+          active={activeTab === "safety"}
+          onClick={() => onChangeTab("safety")}
+          icon={<MessageSquareHeart className="h-3.5 w-3.5 text-sky-400" />}
+          label="安否"
+          badge={boardSummary ? boardSummary.total_entries : undefined}
+        />
+        <TabButton
+          testId="tab-reports"
+          active={activeTab === "reports"}
+          onClick={() => onChangeTab("reports")}
+          icon={<AlertTriangle className="h-3.5 w-3.5 text-amber-400" />}
+          label="被害報告"
+          badge={reportSummary ? reportSummary.total_reports : undefined}
+        />
+        <TabButton
+          testId="tab-detail"
           active={activeTab === "detail"}
           onClick={() => onChangeTab("detail")}
-          icon={<Building className="h-3.5 w-3.5" />}
-          label="詳細・補助"
+          icon={<Building className="h-3.5 w-3.5 text-fuchsia-400" />}
+          label="詳細・経路"
         />
         <TabButton
+          testId="tab-ai"
           active={activeTab === "ai"}
           onClick={() => onChangeTab("ai")}
           icon={<Sparkles className="h-3.5 w-3.5 text-emerald-400" />}
-          label="AI防災解説"
+          label="AI分析"
         />
       </div>
 
       {/* Tab Content */}
       <div
         className={`flex-1 min-h-0 ${
-          activeTab === "ai" ? "overflow-hidden p-3" : "overflow-y-auto p-3.5"
+          fullHeightTab ? "overflow-hidden" : "overflow-y-auto p-3.5"
         }`}
       >
         {activeTab === "stats" && (
           <div className="space-y-4">
+            {/* Unified Live Disaster Response Situation + Export Strip */}
+            <div className="rounded-xl border border-slate-800 bg-slate-950/85 p-3 text-xs space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-white">
+                  リアルタイム防災・被害状況（{selectedWard === "all" ? "京都市全域" : selectedWard}）
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <a
+                    href={buildDisasterCsvUrl({
+                      scope: "overview",
+                      ward: selectedWard,
+                      includeSamples,
+                    })}
+                    download
+                    className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-sky-300 hover:border-sky-500/60"
+                  >
+                    <Download className="h-2.5 w-2.5" /> CSV
+                  </a>
+                  <a
+                    href={buildDisasterXlsxUrl({
+                      ward: selectedWard,
+                      includeSamples,
+                    })}
+                    download
+                    className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 hover:border-emerald-500/60"
+                  >
+                    <FileSpreadsheet className="h-2.5 w-2.5" /> Excel
+                  </a>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => onChangeTab("safety")}
+                  className="rounded-lg border border-sky-500/35 bg-sky-500/10 p-2 text-left transition hover:bg-sky-500/20"
+                >
+                  <div className="flex items-center justify-between text-[10px] text-sky-300">
+                    <span>災害用伝言板（安否）</span>
+                    <MessageSquareHeart className="h-3 w-3" />
+                  </div>
+                  <div className="mt-0.5 font-mono text-sm font-bold text-white">
+                    {boardSummary?.total_entries ?? 0}件
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    市民 {boardSummary?.user_entries_count ?? 0} / サンプル {boardSummary?.sample_entries_count ?? 0}
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangeTab("reports")}
+                  className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-left transition hover:bg-amber-500/20"
+                >
+                  <div className="flex items-center justify-between text-[10px] text-amber-300">
+                    <span>被害状況報告（継続中）</span>
+                    <AlertTriangle className="h-3 w-3" />
+                  </div>
+                  <div className="mt-0.5 font-mono text-sm font-bold text-white">
+                    {reportSummary?.total_reports ?? 0}件
+                  </div>
+                  <div className="text-[10px] text-amber-200/90">
+                    未確認 {reportSummary?.unverified_count ?? 0} / サンプル {reportSummary?.demo_sample_count ?? 0}
+                  </div>
+                </button>
+              </div>
+            </div>
             {/* Denominator & Missingness Box */}
             {stats && (
               <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs">
@@ -457,12 +596,105 @@ export function RightPanel({
           </div>
         )}
 
+        {activeTab === "safety" && (
+          <DisasterBoard
+            embedded
+            wards={wards}
+            defaultWard={selectedWard}
+            defaultMeshcode={selectedMeshcode}
+            includeSamples={includeSamples}
+            onToggleIncludeSamples={onToggleIncludeSamples}
+            onFocusArea={onFocusBoardArea}
+            onSelectWardFilter={onSelectWard}
+            onDataMutated={onDisasterDataChanged}
+          />
+        )}
+
+        {activeTab === "reports" && (
+          <DamageReportPanel
+            wards={wards}
+            selectedWard={selectedWard}
+            selectedMeshcode={selectedMeshcode ?? null}
+            reports={reports}
+            summary={reportSummary}
+            includeSamples={includeSamples}
+            onToggleIncludeSamples={onToggleIncludeSamples}
+            pickedCoords={pickedCoords}
+            isPickingLocation={isPickingLocation}
+            onStartPickLocation={onStartPickLocation}
+            onCancelPickLocation={onCancelPickLocation}
+            onClearPickedLocation={onClearPickedLocation}
+            onFocusReport={onFocusReport}
+            onReportsChanged={onDisasterDataChanged}
+            onOpenRouteSimulator={() => onChangeTab("detail")}
+          />
+        )}
+
         {activeTab === "detail" && (
           <div className="space-y-4 text-xs">
-            {!selectedBuilding && !selectedMesh && (
-              <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950/50 p-5 text-center text-slate-400">
-                <Navigation className="mx-auto mb-2 h-6 w-6 text-slate-500" />
-                地図上の建物ポリゴンまたは250mメッシュをクリックすると、建築年・構造・地盤・地震ハザード・公式補助制度の詳細が表示されます。
+            {/* Training-only Alternative Route Simulator */}
+            <RouteSimulatorCard
+              routeResult={routeResult}
+              onChangeRouteResult={onChangeRouteResult}
+              includeSamples={includeSamples}
+            />
+
+            {/* Selected Damage Report Inspector */}
+            {selectedReport && (
+              <div className="rounded-xl border border-amber-500/40 bg-slate-950/90 p-3.5 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-slate-800 pb-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <VerificationBadge status={selectedReport.verification_status} />
+                    <span
+                      className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${REPORT_CATEGORY_META[selectedReport.category].badgeClass}`}
+                    >
+                      {selectedReport.category_label}
+                    </span>
+                    <span
+                      className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${REPORT_SEVERITY_META[selectedReport.severity].badgeClass}`}
+                    >
+                      {selectedReport.severity_label}
+                    </span>
+                  </div>
+                  <span className="font-mono text-[10px] text-slate-400">{selectedReport.id}</span>
+                </div>
+                <h3 className="text-sm font-bold text-white">{selectedReport.title}</h3>
+                <p className="rounded-lg bg-slate-900 p-2 text-[11px] text-slate-200">
+                  {selectedReport.description}
+                </p>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-400">
+                  <span>
+                    {selectedReport.ward_name}
+                    {selectedReport.meshcode ? ` / メッシュ ${selectedReport.meshcode}` : ""}
+                  </span>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => onChangeTab("reports")}
+                      className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-semibold text-amber-200 hover:bg-amber-500/20"
+                    >
+                      被害報告一覧で操作
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onRequestAiExplain(
+                          `被害報告 ${selectedReport.id}（${selectedReport.ward_name} / ${selectedReport.category_label} / ${selectedReport.verification_label}）周辺の建物地震リスクと関連注意点を分析してください。`
+                        )
+                      }
+                      className="rounded border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 font-semibold text-emerald-200"
+                    >
+                      AIで周辺リスク分析
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!selectedBuilding && !selectedMesh && !selectedReport && (
+              <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950/50 p-4 text-center text-slate-400">
+                <Navigation className="mx-auto mb-1.5 h-5 w-5 text-slate-500" />
+                地図上の建物・250mメッシュ・被害報告ピンをクリックすると、詳細属性と地域連携アクションが表示されます。
               </div>
             )}
 
@@ -578,17 +810,35 @@ export function RightPanel({
                   />
                 </div>
 
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onRequestAiExplain(
+                        `現在選択中の250mメッシュ（コード: ${selectedMesh.meshcode}、${selectedMesh.ward_name}）の統計、1981年以前建築の傾向、表層地盤（${selectedMesh.jname}・ARV ${selectedMesh.arv ?? "不明"}）、震度6弱+確率、及び京都市の補助制度について詳しく解説してください。`
+                      )
+                    }
+                    className="flex items-center justify-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-2 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/25"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+                    AIでメッシュ解説
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onChangeTab("safety")}
+                    className="flex items-center justify-center gap-1 rounded-lg border border-sky-500/40 bg-sky-500/15 px-2.5 py-2 text-[11px] font-semibold text-sky-200 transition hover:bg-sky-500/25"
+                  >
+                    <MapPin className="h-3.5 w-3.5 text-sky-400" />
+                    この区の安否確認
+                  </button>
+                </div>
                 <button
                   type="button"
-                  onClick={() =>
-                    onRequestAiExplain(
-                      `現在選択中の250mメッシュ（コード: ${selectedMesh.meshcode}、${selectedMesh.ward_name}）の統計、1981年以前建築の傾向、表層地盤（${selectedMesh.jname}・ARV ${selectedMesh.arv ?? "不明"}）、震度6弱+確率、及び京都市の補助制度について詳しく解説してください。`
-                    )
-                  }
-                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-400/60 hover:bg-emerald-500/25"
+                  onClick={() => onChangeTab("reports")}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-[11px] font-semibold text-rose-200 hover:bg-rose-500/20"
                 >
-                  <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
-                  このメッシュをAIで詳しく解説
+                  <PlusCircle className="h-3.5 w-3.5" />
+                  このメッシュ・区で被害状況を報告
                 </button>
               </div>
             )}
@@ -625,22 +875,24 @@ export function RightPanel({
         )}
 
         {activeTab === "ai" && (
-          <AiAssistantPanel
-            geminiConfigured={geminiConfigured}
-            aiProtection={aiProtection}
-            totalBuildings={totalBuildings}
-            onRefreshHealth={onRefreshHealth}
-            selectedWard={selectedWard}
-            ageCategories={ageCategories}
-            hazardTiers={hazardTiers}
-            usageGroup={usageGroup}
-            is3D={is3D}
-            selectedBuilding={selectedBuilding}
-            selectedMesh={selectedMesh}
-            queuedPrompt={queuedAiPrompt}
-            onConsumeQueuedPrompt={onConsumeQueuedAiPrompt}
-            onExecuteMapAction={onExecuteMapAction}
-          />
+          <div className="h-full p-3">
+            <AiAssistantPanel
+              geminiConfigured={geminiConfigured}
+              aiProtection={aiProtection}
+              totalBuildings={totalBuildings}
+              onRefreshHealth={onRefreshHealth}
+              selectedWard={selectedWard}
+              ageCategories={ageCategories}
+              hazardTiers={hazardTiers}
+              usageGroup={usageGroup}
+              is3D={is3D}
+              selectedBuilding={selectedBuilding}
+              selectedMesh={selectedMesh}
+              queuedPrompt={queuedAiPrompt}
+              onConsumeQueuedPrompt={onConsumeQueuedAiPrompt}
+              onExecuteMapAction={onExecuteMapAction}
+            />
+          </div>
         )}
       </div>
     </aside>
@@ -648,28 +900,42 @@ export function RightPanel({
 }
 
 function TabButton({
+  testId,
   active,
   onClick,
   icon,
   label,
+  badge,
 }: {
+  testId?: string;
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  badge?: number;
 }) {
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
+      data-testid={testId}
       onClick={onClick}
-      className={`flex items-center justify-center gap-1.5 border-b-2 py-2.5 text-xs font-semibold transition ${
+      className={`relative flex flex-col items-center justify-center gap-0.5 border-b-2 px-1 py-2 text-[10px] font-semibold transition ${
         active
           ? "border-sky-400 bg-slate-900 text-white"
           : "border-transparent text-slate-400 hover:bg-slate-900/50 hover:text-slate-200"
       }`}
     >
-      {icon}
-      <span>{label}</span>
+      <div className="flex items-center gap-1">
+        {icon}
+        {badge !== undefined && badge > 0 && (
+          <span className="rounded-full bg-slate-800 px-1 font-mono text-[9px] text-sky-300">
+            {badge}
+          </span>
+        )}
+      </div>
+      <span className="truncate max-w-full">{label}</span>
     </button>
   );
 }

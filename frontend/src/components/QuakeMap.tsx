@@ -2,14 +2,33 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import * as maplibregl from "maplibre-gl";
-import { Loader2, ZoomIn, Box, Activity, RotateCcw } from "lucide-react";
-import { AGE_COLORS, HAZARD_COLORS } from "@/lib/colors";
+import {
+  Loader2,
+  ZoomIn,
+  Box,
+  Activity,
+  RotateCcw,
+  MapPin,
+  Layers,
+  AlertTriangle,
+  MessageSquareHeart,
+  X,
+} from "lucide-react";
+import {
+  AGE_COLORS,
+  HAZARD_COLORS,
+  REPORT_CATEGORY_META,
+  VERIFICATION_META,
+} from "@/lib/colors";
 import { API_BASE, getBuildingsCountInBbox } from "@/lib/api";
 import {
   AgeCategory,
+  BoardSummaryResponse,
+  DamageReport,
   EarthquakeEvent,
   HazardTier,
   MeshOverlayMode,
+  RouteSimulationResponse,
   UsageGroup,
 } from "@/types/quakelens";
 
@@ -47,21 +66,37 @@ const AGE_MESH_PROP_MAP: Record<AgeCategory, string> = {
 interface QuakeMapProps {
   meshesGeoJson: GeoJSON.FeatureCollection | null;
   earthquakes: EarthquakeEvent[];
+  reports: DamageReport[];
+  boardSummary: BoardSummaryResponse | null;
+  routeResult: RouteSimulationResponse | null;
   selectedWard: string;
   ageCategories: AgeCategory[];
   hazardTiers: HazardTier[];
   usageGroup: UsageGroup;
   showBuildings: boolean;
+  onToggleBuildings: () => void;
   showHazardMesh: boolean;
+  onToggleHazardMesh: () => void;
   meshOverlayMode: MeshOverlayMode;
   showEarthquakes: boolean;
+  onToggleEarthquakes: () => void;
+  showReports: boolean;
+  onToggleReports: () => void;
+  showSafetyLayer: boolean;
+  onToggleSafetyLayer: () => void;
   is3D: boolean;
   onToggle3D: () => void;
   selectedBuildingId: string | null;
   selectedMeshcode: string | null;
   flyToTarget: { lon: number; lat: number; zoom: number; ts: number } | null;
+  isPickingLocation: boolean;
+  pickedCoords: { lat: number; lon: number } | null;
+  onPickLocation: (coords: { lat: number; lon: number }) => void;
+  onCancelPickLocation: () => void;
   onSelectBuilding: (buildingId: string) => void;
   onSelectMesh: (meshcode: string) => void;
+  onSelectReport: (report: DamageReport) => void;
+  onSelectSafetyWard: (wardName: string) => void;
 }
 
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
@@ -69,21 +104,37 @@ const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", feature
 export function QuakeMap({
   meshesGeoJson,
   earthquakes,
+  reports,
+  boardSummary,
+  routeResult,
   selectedWard,
   ageCategories,
   hazardTiers,
   usageGroup,
   showBuildings,
+  onToggleBuildings,
   showHazardMesh,
+  onToggleHazardMesh,
   meshOverlayMode,
   showEarthquakes,
+  onToggleEarthquakes,
+  showReports,
+  onToggleReports,
+  showSafetyLayer,
+  onToggleSafetyLayer,
   is3D,
   onToggle3D,
   selectedBuildingId,
   selectedMeshcode,
   flyToTarget,
+  isPickingLocation,
+  pickedCoords,
+  onPickLocation,
+  onCancelPickLocation,
   onSelectBuilding,
   onSelectMesh,
+  onSelectReport,
+  onSelectSafetyWard,
 }: QuakeMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -117,10 +168,36 @@ export function QuakeMap({
     };
   }, [selectedWard, ageCategories, hazardTiers, usageGroup, showBuildings]);
 
-  const callbacksRef = useRef({ onSelectBuilding, onSelectMesh });
+  const callbacksRef = useRef({
+    onSelectBuilding,
+    onSelectMesh,
+    onPickLocation,
+    onSelectReport,
+    onSelectSafetyWard,
+  });
   useEffect(() => {
-    callbacksRef.current = { onSelectBuilding, onSelectMesh };
-  }, [onSelectBuilding, onSelectMesh]);
+    callbacksRef.current = {
+      onSelectBuilding,
+      onSelectMesh,
+      onPickLocation,
+      onSelectReport,
+      onSelectSafetyWard,
+    };
+  }, [onSelectBuilding, onSelectMesh, onPickLocation, onSelectReport, onSelectSafetyWard]);
+
+  const pickingRef = useRef(isPickingLocation);
+  useEffect(() => {
+    pickingRef.current = isPickingLocation;
+    const map = mapRef.current;
+    if (map) {
+      map.getCanvas().style.cursor = isPickingLocation ? "crosshair" : "";
+    }
+  }, [isPickingLocation]);
+
+  const reportMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const safetyMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const routeMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const pickMarkerRef = useRef<maplibregl.Marker | null>(null);
 
   const meshesRef = useRef<GeoJSON.FeatureCollection | null>(meshesGeoJson);
   useEffect(() => {
@@ -416,8 +493,55 @@ export function QuakeMap({
         },
       });
 
+      // Route simulation sources & layers (training-only corridor model)
+      map.addSource("route-baseline", { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: "route-baseline-line",
+        type: "line",
+        source: "route-baseline",
+        paint: {
+          "line-color": "#94a3b8",
+          "line-width": 3.5,
+          "line-dasharray": [2, 2],
+          "line-opacity": 0.75,
+        },
+      });
+
+      map.addSource("route-blocked", { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: "route-blocked-line",
+        type: "line",
+        source: "route-blocked",
+        paint: {
+          "line-color": "#f43f5e",
+          "line-width": 5,
+          "line-dasharray": [1.5, 1.5],
+          "line-opacity": 0.9,
+        },
+      });
+
+      map.addSource("route-alternative", { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: "route-alternative-line",
+        type: "line",
+        source: "route-alternative",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#10b981",
+          "line-width": 5,
+          "line-opacity": 0.95,
+        },
+      });
+
       // Interactions
       map.on("click", (e) => {
+        if (pickingRef.current) {
+          callbacksRef.current.onPickLocation({
+            lat: Number(e.lngLat.lat.toFixed(5)),
+            lon: Number(e.lngLat.lng.toFixed(5)),
+          });
+          return;
+        }
         const eqHits = map.queryRenderedFeatures(e.point, { layers: ["earthquakes-circle"] });
         if (eqHits.length > 0) {
           const p = eqHits[0].properties || {};
@@ -754,8 +878,217 @@ export function QuakeMap({
     });
   }, [flyToTarget, mapReady]);
 
+  // Render Damage Report DOM Markers (unverified vs official vs sample clearly distinguished by border & symbol)
+  useEffect(() => {
+    const map = mapRef.current;
+    reportMarkersRef.current.forEach((m) => m.remove());
+    reportMarkersRef.current = [];
+    if (!map || !mapReady || !showReports) return;
+
+    const meshLookup = new Map<string, [number, number]>();
+    if (meshesGeoJson?.features) {
+      for (const f of meshesGeoJson.features) {
+        const p = f.properties as { meshcode?: string; centroid_lon?: number; centroid_lat?: number } | null;
+        if (p?.meshcode && p.centroid_lon != null && p.centroid_lat != null) {
+          meshLookup.set(p.meshcode, [p.centroid_lon, p.centroid_lat]);
+        }
+      }
+    }
+
+    for (const rep of reports) {
+      if (rep.resolved) continue;
+      if (selectedWard !== "all" && rep.ward_name !== selectedWard && rep.ward_name !== "京都市全域") {
+        continue;
+      }
+      let coords: [number, number] | null =
+        rep.lon != null && rep.lat != null ? [rep.lon, rep.lat] : null;
+      if (!coords && rep.meshcode) {
+        coords = meshLookup.get(rep.meshcode) ?? null;
+      }
+      if (!coords) continue;
+
+      const catMeta = REPORT_CATEGORY_META[rep.category];
+      const verMeta = VERIFICATION_META[rep.verification_status];
+
+      const el = document.createElement("button");
+      el.type = "button";
+      el.title = `[${verMeta.label}] ${rep.ward_name} - ${rep.title}`;
+      const borderStyle =
+        rep.verification_status === "unverified"
+          ? "border-dashed border-amber-300"
+          : rep.verification_status === "demo_sample"
+            ? "border-dotted border-slate-300 opacity-85"
+            : "border-solid border-cyan-300";
+
+      el.className = `group flex items-center gap-1 rounded-full border-2 ${borderStyle} bg-slate-950/95 px-2 py-0.5 text-[10px] font-bold text-white shadow-lg transition hover:scale-105 cursor-pointer`;
+      el.innerHTML = `<span style="background:${catMeta.color}" class="inline-flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-extrabold text-slate-950">${catMeta.symbol}</span><span class="max-w-[90px] truncate">${verMeta.short}</span>`;
+
+      el.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        callbacksRef.current.onSelectReport(rep);
+      });
+
+      const marker = new maplibregl.Marker({ element: el, anchor: "center" })
+        .setLngLat(coords)
+        .addTo(map);
+      reportMarkersRef.current.push(marker);
+    }
+
+    return () => {
+      reportMarkersRef.current.forEach((m) => m.remove());
+      reportMarkersRef.current = [];
+    };
+  }, [reports, showReports, selectedWard, meshesGeoJson, mapReady]);
+
+  // Render Regional Safety Aggregation Pills by Ward
+  useEffect(() => {
+    const map = mapRef.current;
+    safetyMarkersRef.current.forEach((m) => m.remove());
+    safetyMarkersRef.current = [];
+    if (!map || !mapReady || !showSafetyLayer || !boardSummary?.by_ward) return;
+
+    for (const w of boardSummary.by_ward) {
+      if (w.ward_name === "京都市全域" || w.ward_name === "京都市外") continue;
+      if (selectedWard !== "all" && w.ward_name !== selectedWard) continue;
+
+      const el = document.createElement("button");
+      el.type = "button";
+      el.title = `${w.ward_name} 災害用伝言板: 計${w.total_count}件（支援要/待ち ${w.support_needed_count}件）`;
+      const alertClass =
+        w.support_needed_count > 0
+          ? "border-amber-400 bg-amber-950/95 text-amber-100"
+          : "border-sky-400 bg-slate-900/95 text-sky-100";
+      el.className = `flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-semibold shadow-lg transition hover:scale-105 cursor-pointer ${alertClass}`;
+      el.innerHTML = `<span>安否:${w.ward_name}</span><span class="rounded bg-white/15 px-1 font-mono font-bold">${w.total_count}</span>`;
+      el.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        callbacksRef.current.onSelectSafetyWard(w.ward_name);
+      });
+
+      const marker = new maplibregl.Marker({
+        element: el,
+        anchor: "bottom",
+        offset: [0, -28],
+      })
+        .setLngLat([w.lon, w.lat])
+        .addTo(map);
+      safetyMarkersRef.current.push(marker);
+    }
+
+    return () => {
+      safetyMarkersRef.current.forEach((m) => m.remove());
+      safetyMarkersRef.current = [];
+    };
+  }, [boardSummary, showSafetyLayer, selectedWard, mapReady]);
+
+  // Render Picked Coordinates Pin
+  useEffect(() => {
+    const map = mapRef.current;
+    if (pickMarkerRef.current) {
+      pickMarkerRef.current.remove();
+      pickMarkerRef.current = null;
+    }
+    if (!map || !mapReady || !pickedCoords) return;
+    const el = document.createElement("div");
+    el.className =
+      "flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-rose-600 text-[10px] font-bold text-white shadow-xl animate-pulse";
+    el.textContent = "📍";
+    pickMarkerRef.current = new maplibregl.Marker({ element: el, anchor: "center" })
+      .setLngLat([pickedCoords.lon, pickedCoords.lat])
+      .addTo(map);
+    return () => {
+      pickMarkerRef.current?.remove();
+      pickMarkerRef.current = null;
+    };
+  }, [pickedCoords, mapReady]);
+
+  // Render Route Simulation GeoJSON lines + origin/dest markers
+  useEffect(() => {
+    const map = mapRef.current;
+    routeMarkersRef.current.forEach((m) => m.remove());
+    routeMarkersRef.current = [];
+    if (!map || !mapReady) return;
+
+    const baseSrc = map.getSource("route-baseline") as maplibregl.GeoJSONSource | undefined;
+    const blkSrc = map.getSource("route-blocked") as maplibregl.GeoJSONSource | undefined;
+    const altSrc = map.getSource("route-alternative") as maplibregl.GeoJSONSource | undefined;
+    if (!baseSrc || !blkSrc || !altSrc) return;
+
+    if (!routeResult) {
+      baseSrc.setData(EMPTY_FC);
+      blkSrc.setData(EMPTY_FC);
+      altSrc.setData(EMPTY_FC);
+      return;
+    }
+
+    baseSrc.setData({
+      type: "FeatureCollection",
+      features:
+        routeResult.baseline_route.coordinates.length >= 2
+          ? [
+              {
+                type: "Feature",
+                geometry: { type: "LineString", coordinates: routeResult.baseline_route.coordinates },
+                properties: {},
+              },
+            ]
+          : [],
+    });
+
+    blkSrc.setData({
+      type: "FeatureCollection",
+      features: routeResult.blocked_segments.map((seg) => ({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: seg.coordinates },
+        properties: { label: seg.label },
+      })),
+    });
+
+    altSrc.setData({
+      type: "FeatureCollection",
+      features:
+        routeResult.alternative_route.coordinates.length >= 2
+          ? [
+              {
+                type: "Feature",
+                geometry: { type: "LineString", coordinates: routeResult.alternative_route.coordinates },
+                properties: {},
+              },
+            ]
+          : [],
+    });
+
+    const makeHubEl = (tag: string, bg: string) => {
+      const el = document.createElement("div");
+      el.className = `rounded-full border border-white ${bg} px-2 py-0.5 text-[10px] font-bold text-white shadow-lg`;
+      el.textContent = tag;
+      return el;
+    };
+    const m1 = new maplibregl.Marker({ element: makeHubEl(`発: ${routeResult.origin.ward}`, "bg-sky-600") })
+      .setLngLat([routeResult.origin.lon, routeResult.origin.lat])
+      .addTo(map);
+    const m2 = new maplibregl.Marker({ element: makeHubEl(`着: ${routeResult.destination.ward}`, "bg-emerald-600") })
+      .setLngLat([routeResult.destination.lon, routeResult.destination.lat])
+      .addTo(map);
+    routeMarkersRef.current = [m1, m2];
+
+    const coords = [
+      ...routeResult.baseline_route.coordinates,
+      ...routeResult.alternative_route.coordinates,
+    ];
+    if (coords.length >= 2) {
+      const bounds = new maplibregl.LngLatBounds(coords[0], coords[0]);
+      for (const c of coords) bounds.extend(c);
+      map.fitBounds(bounds, {
+        padding: { top: 112, bottom: 78, left: 56, right: 56 },
+        duration: 800,
+        maxZoom: 15.2,
+      });
+    }
+  }, [routeResult, mapReady]);
+
   return (
-    <div className="relative h-full w-full min-h-[420px] bg-slate-950">
+    <div className="relative h-full w-full min-h-[380px] bg-slate-950">
       <div
         ref={containerRef}
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
@@ -769,13 +1102,85 @@ export function QuakeMap({
         </div>
       )}
 
-      {/* Top-left floating status pills */}
-      <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-col gap-1.5">
+      {/* Top-left floating quick controls + operational status pills */}
+      <div className="pointer-events-none absolute left-3 top-3 z-10 flex max-w-[82%] flex-col gap-1.5">
+        {isPickingLocation && (
+          <div className="pointer-events-auto flex items-center gap-2 rounded-xl border-2 border-rose-400 bg-rose-950/95 px-3 py-2 text-xs font-bold text-rose-100 shadow-2xl">
+            <MapPin className="h-4 w-4 animate-bounce text-rose-300" />
+            <span>地図上の被害・通行止め地点をクリックしてください</span>
+            <button
+              type="button"
+              onClick={onCancelPickLocation}
+              className="ml-1 inline-flex items-center gap-0.5 rounded bg-rose-800 px-2 py-0.5 text-[10px] text-white hover:bg-rose-700"
+            >
+              <X className="h-3 w-3" /> 中止
+            </button>
+          </div>
+        )}
+
+        {/* Quick Layer Bar directly on Map */}
+        <div className="pointer-events-auto flex flex-wrap items-center gap-1 rounded-xl border border-slate-700/80 bg-slate-950/85 p-1 text-[10px] shadow-lg backdrop-blur">
+          <button
+            type="button"
+            onClick={onToggleBuildings}
+            className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 font-semibold transition ${
+              showBuildings ? "bg-sky-500/25 text-sky-200" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <Layers className="h-3 w-3" /> 建物
+          </button>
+          <button
+            type="button"
+            onClick={onToggle3D}
+            className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 font-semibold transition ${
+              is3D ? "bg-amber-500/30 text-amber-200" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <Box className="h-3 w-3" /> 3D
+          </button>
+          <button
+            type="button"
+            onClick={onToggleHazardMesh}
+            className={`rounded-lg px-2 py-1 font-semibold transition ${
+              showHazardMesh ? "bg-fuchsia-500/25 text-fuchsia-200" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            250mメッシュ
+          </button>
+          <button
+            type="button"
+            onClick={onToggleSafetyLayer}
+            className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 font-semibold transition ${
+              showSafetyLayer ? "bg-emerald-500/25 text-emerald-200" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <MessageSquareHeart className="h-3 w-3" /> 安否集計
+          </button>
+          <button
+            type="button"
+            onClick={onToggleReports}
+            className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 font-semibold transition ${
+              showReports ? "bg-rose-500/25 text-rose-200" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <AlertTriangle className="h-3 w-3" /> 被害報告
+          </button>
+          <button
+            type="button"
+            onClick={onToggleEarthquakes}
+            className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 font-semibold transition ${
+              showEarthquakes ? "bg-rose-600/30 text-rose-200" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <Activity className="h-3 w-3" /> 地震履歴
+          </button>
+        </div>
+
         {zoom < 13.5 && showBuildings && (
           <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 text-xs text-slate-200 shadow-lg backdrop-blur">
             <ZoomIn className="h-3.5 w-3.5 text-sky-400" />
             <span>
-              現在ズーム z{zoom.toFixed(1)}（250mメッシュ表示中）
+              現在ズーム z{zoom.toFixed(1)}（250mメッシュ・報告表示中）
             </span>
             <button
               type="button"
@@ -801,20 +1206,8 @@ export function QuakeMap({
               <strong className="font-mono text-white">
                 {buildingStatus.total.toLocaleString("ja-JP")}
               </strong>
-              棟（全件表示・制限なし）
+              棟（全件表示）
             </span>
-            <button
-              type="button"
-              onClick={onToggle3D}
-              className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] font-semibold transition ${
-                is3D
-                  ? "border-amber-500/60 bg-amber-600/30 text-amber-200 hover:bg-amber-600/40"
-                  : "border-slate-600 bg-slate-800 text-slate-200 hover:bg-slate-700"
-              }`}
-            >
-              <Box className="h-3 w-3" />
-              {is3D ? "2Dに戻す" : "3D表示"}
-            </button>
             <button
               type="button"
               onClick={() => {
@@ -869,8 +1262,32 @@ export function QuakeMap({
         )}
       </div>
 
-      {/* Bottom-left hover bar & Mesh legends */}
-      <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex flex-col gap-2 max-w-[85%]">
+      {/* Bottom-left hover bar & legends */}
+      <div className="pointer-events-none absolute bottom-8 left-3 z-10 flex max-w-[88%] flex-col gap-1.5">
+        {showReports && (
+          <div className="rounded-lg border border-slate-700/80 bg-slate-950/90 px-2.5 py-1.5 text-[10px] text-slate-200 shadow-lg backdrop-blur">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2.5 w-4 rounded-full border-2 border-dashed border-amber-300" />
+                未確認(市民)
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2.5 w-4 rounded-full border-2 border-solid border-cyan-300" />
+                確認済/公式
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2.5 w-4 rounded-full border-2 border-dotted border-slate-300" />
+                訓練サンプル
+              </span>
+              {routeResult && (
+                <span className="inline-flex items-center gap-1 text-emerald-300">
+                  <span className="h-0.5 w-4 bg-emerald-400" />
+                  回避ルート(訓練)
+                </span>
+              )}
+            </div>
+          </div>
+        )}
         {showHazardMesh && meshOverlayMode === "arv" && (
           <div className="rounded-lg border border-slate-700 bg-slate-900/90 px-3 py-2 text-[11px] text-slate-200 shadow-lg backdrop-blur">
             <div className="mb-1 font-semibold text-teal-300">表層地盤 最大速度増幅率（ARV）</div>

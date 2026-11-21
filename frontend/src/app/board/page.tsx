@@ -9,7 +9,7 @@ export default function DisasterBoardPage() {
 
   return (
     <main className="flex min-h-screen w-screen items-center justify-center bg-slate-950 p-3 sm:p-6">
-      <div className="h-[calc(100vh-1.5rem)] max-h-[780px] w-full max-w-md">
+      <div className="h-[calc(100dvh-1.5rem)] max-h-[820px] w-full max-w-xl">
         <DisasterBoard onBack={() => router.push("/")} />
       </div>
     </main>

@@ -17,6 +17,10 @@ async function forwardProxyRequest(
   if (contentTypeIn) {
     forwardHeaders["Content-Type"] = contentTypeIn;
   }
+  const geminiKey = req.headers.get("x-gemini-api-key");
+  if (geminiKey) forwardHeaders["X-Gemini-Api-Key"] = geminiKey;
+  const accessCode = req.headers.get("x-ai-access-code");
+  if (accessCode) forwardHeaders["X-Ai-Access-Code"] = accessCode;
 
   let body: string | undefined;
   if (req.method !== "GET" && req.method !== "HEAD") {
@@ -45,6 +49,8 @@ async function forwardProxyRequest(
   if (contentType) headers.set("Content-Type", contentType);
   const cacheControl = upstream.headers.get("cache-control");
   if (cacheControl) headers.set("Cache-Control", cacheControl);
+  const contentDisposition = upstream.headers.get("content-disposition");
+  if (contentDisposition) headers.set("Content-Disposition", contentDisposition);
 
   return new Response(upstream.body, {
     status: upstream.status,
@@ -60,6 +66,20 @@ export async function GET(
 }
 
 export async function POST(
+  req: NextRequest,
+  context: { params: Promise<{ path: string[] }> }
+) {
+  return forwardProxyRequest(req, context);
+}
+
+export async function PATCH(
+  req: NextRequest,
+  context: { params: Promise<{ path: string[] }> }
+) {
+  return forwardProxyRequest(req, context);
+}
+
+export async function PUT(
   req: NextRequest,
   context: { params: Promise<{ path: string[] }> }
 ) {

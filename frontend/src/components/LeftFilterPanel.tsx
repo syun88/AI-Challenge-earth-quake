@@ -9,6 +9,8 @@ import {
   AlertTriangle,
   Activity,
   Box,
+  MessageSquareHeart,
+  Flag,
 } from "lucide-react";
 import {
   AGE_COLORS,
@@ -43,6 +45,12 @@ interface LeftFilterPanelProps {
   onChangeMeshOverlayMode: (mode: MeshOverlayMode) => void;
   showEarthquakes: boolean;
   onToggleEarthquakes: () => void;
+  showSafetyLayer: boolean;
+  onToggleSafetyLayer: () => void;
+  showReports: boolean;
+  onToggleReports: () => void;
+  includeSamples: boolean;
+  onToggleIncludeSamples: () => void;
   is3D: boolean;
   onChangeIs3D: (v: boolean) => void;
   onResetFilters: () => void;
@@ -74,6 +82,12 @@ export function LeftFilterPanel({
   onChangeMeshOverlayMode,
   showEarthquakes,
   onToggleEarthquakes,
+  showSafetyLayer,
+  onToggleSafetyLayer,
+  showReports,
+  onToggleReports,
+  includeSamples,
+  onToggleIncludeSamples,
   is3D,
   onChangeIs3D,
   onResetFilters,
@@ -196,39 +210,39 @@ export function LeftFilterPanel({
             </label>
             {showHazardMesh && (
               <div className="mt-2 grid grid-cols-3 gap-1">
-                <button
-                  type="button"
-                  onClick={() => onChangeMeshOverlayMode("hazard")}
-                  className={`rounded px-1.5 py-1 text-[10px] font-medium transition ${
-                    meshOverlayMode === "hazard"
-                      ? "bg-fuchsia-600/30 text-fuchsia-200 border border-fuchsia-500/60"
-                      : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200"
-                  }`}
-                >
-                  震度6弱+確率
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onChangeMeshOverlayMode("arv")}
-                  className={`rounded px-1.5 py-1 text-[10px] font-medium transition ${
-                    meshOverlayMode === "arv"
-                      ? "bg-teal-600/30 text-teal-200 border border-teal-500/60"
-                      : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200"
-                  }`}
-                >
-                  表層地盤ARV
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onChangeMeshOverlayMode("pre1981")}
-                  className={`rounded px-1.5 py-1 text-[10px] font-medium transition ${
-                    meshOverlayMode === "pre1981"
-                      ? "bg-orange-600/30 text-orange-200 border border-orange-500/60"
-                      : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200"
-                  }`}
-                >
-                  1981以前率
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => onChangeMeshOverlayMode("hazard")}
+                    className={`rounded px-1 py-1 text-[10px] font-medium transition whitespace-nowrap ${
+                      meshOverlayMode === "hazard"
+                        ? "bg-fuchsia-600/30 text-fuchsia-200 border border-fuchsia-500/60"
+                        : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200"
+                    }`}
+                  >
+                    震度6弱+
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onChangeMeshOverlayMode("arv")}
+                    className={`rounded px-1 py-1 text-[10px] font-medium transition whitespace-nowrap ${
+                      meshOverlayMode === "arv"
+                        ? "bg-teal-600/30 text-teal-200 border border-teal-500/60"
+                        : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200"
+                    }`}
+                  >
+                    地盤ARV
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onChangeMeshOverlayMode("pre1981")}
+                    className={`rounded px-1 py-1 text-[10px] font-medium transition whitespace-nowrap ${
+                      meshOverlayMode === "pre1981"
+                        ? "bg-orange-600/30 text-orange-200 border border-orange-500/60"
+                        : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200"
+                    }`}
+                  >
+                    1981以前率
+                  </button>
               </div>
             )}
           </div>
@@ -243,6 +257,45 @@ export function LeftFilterPanel({
               checked={showEarthquakes}
               onChange={onToggleEarthquakes}
               className="h-4 w-4 accent-rose-500"
+            />
+          </label>
+
+          <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 hover:border-slate-700">
+            <span className="flex items-center gap-1.5 text-slate-200">
+              <MessageSquareHeart className="h-3.5 w-3.5 text-emerald-400" />
+              地域別 安否集計バッジ
+            </span>
+            <input
+              type="checkbox"
+              checked={showSafetyLayer}
+              onChange={onToggleSafetyLayer}
+              className="h-4 w-4 accent-emerald-500"
+            />
+          </label>
+
+          <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 hover:border-slate-700">
+            <span className="flex items-center gap-1.5 text-slate-200">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
+              被害・災害報告ピン
+            </span>
+            <input
+              type="checkbox"
+              checked={showReports}
+              onChange={onToggleReports}
+              className="h-4 w-4 accent-amber-500"
+            />
+          </label>
+
+          <label className="flex cursor-pointer items-center justify-between rounded-lg border border-dotted border-slate-700 bg-slate-950/40 px-2.5 py-1.5 hover:border-slate-600">
+            <span className="flex items-center gap-1.5 text-[11px] text-slate-300">
+              <Flag className="h-3 w-3 text-slate-400" />
+              訓練用サンプルを含める
+            </span>
+            <input
+              type="checkbox"
+              checked={includeSamples}
+              onChange={onToggleIncludeSamples}
+              className="h-3.5 w-3.5 accent-slate-400"
             />
           </label>
         </div>

@@ -3,14 +3,24 @@ import {
   BoardEntry,
   BoardListResponse,
   BoardStatus,
+  BoardSummaryResponse,
   BuildingDetail,
   ChatResponse,
   ChatStreamEvent,
+  DamageReport,
+  DamageReportListResponse,
+  DamageReportSummaryResponse,
+  DisasterOverviewResponse,
   EarthquakeEvent,
   MeshDetail,
   MetadataResponse,
   PriorityArea,
+  ReportCategory,
+  ReportSeverity,
+  RouteNode,
+  RouteSimulationResponse,
   StatsResponse,
+  VerificationStatus,
 } from "@/types/quakelens";
 
 export const API_BASE =
@@ -291,6 +301,9 @@ export function getBoardEntries(params?: {
   phone?: string;
   q?: string;
   ward?: string;
+  meshcode?: string;
+  status?: BoardStatus | "all";
+  includeSamples?: boolean;
   ids?: string[];
   limit?: number;
 }) {
@@ -298,10 +311,21 @@ export function getBoardEntries(params?: {
   if (params?.phone?.trim()) sp.set("phone", params.phone.trim());
   if (params?.q?.trim()) sp.set("q", params.q.trim());
   if (params?.ward && params.ward !== "all") sp.set("ward", params.ward);
+  if (params?.meshcode?.trim()) sp.set("meshcode", params.meshcode.trim());
+  if (params?.status && params.status !== "all") sp.set("status", params.status);
+  if (params?.includeSamples === false) sp.set("include_samples", "false");
   if (params?.ids && params.ids.length > 0) sp.set("ids", params.ids.join(","));
   if (params?.limit) sp.set("limit", String(params.limit));
   const qs = sp.toString();
   return fetchJson<BoardListResponse>(`/api/board${qs ? `?${qs}` : ""}`);
+}
+
+export function getBoardSummary(params?: { ward?: string; includeSamples?: boolean }) {
+  const sp = new URLSearchParams();
+  if (params?.ward && params.ward !== "all") sp.set("ward", params.ward);
+  if (params?.includeSamples === false) sp.set("include_samples", "false");
+  const qs = sp.toString();
+  return fetchJson<BoardSummaryResponse>(`/api/board/summary${qs ? `?${qs}` : ""}`);
 }
 
 export function createBoardEntry(body: {
@@ -311,10 +335,28 @@ export function createBoardEntry(body: {
   message: string;
   ward_name: string;
   meshcode?: string | null;
+  location_consent?: boolean;
   passcode?: string;
 }) {
   return fetchJson<{ entry: BoardEntry }>("/api/board", {
     method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateBoardEntry(
+  entryId: string,
+  body: {
+    passcode?: string;
+    status?: BoardStatus;
+    message?: string;
+    ward_name?: string;
+    meshcode?: string | null;
+    location_consent?: boolean;
+  }
+) {
+  return fetchJson<{ entry: BoardEntry }>(`/api/board/${encodeURIComponent(entryId)}`, {
+    method: "PATCH",
     body: JSON.stringify(body),
   });
 }
@@ -325,4 +367,177 @@ export function deleteBoardEntry(entryId: string, passcode?: string) {
     `/api/board/${encodeURIComponent(entryId)}${qs}`,
     { method: "DELETE" }
   );
+}
+
+export function getDamageReports(params?: {
+  ward?: string;
+  category?: ReportCategory | "all";
+  severity?: ReportSeverity | "all";
+  verificationStatus?: VerificationStatus | "all";
+  meshcode?: string | null;
+  q?: string;
+  includeSamples?: boolean;
+  includeResolved?: boolean;
+  limit?: number;
+}) {
+  const sp = new URLSearchParams();
+  if (params?.ward && params.ward !== "all") sp.set("ward", params.ward);
+  if (params?.category && params.category !== "all") sp.set("category", params.category);
+  if (params?.severity && params.severity !== "all") sp.set("severity", params.severity);
+  if (params?.verificationStatus && params.verificationStatus !== "all") {
+    sp.set("verification_status", params.verificationStatus);
+  }
+  if (params?.meshcode) sp.set("meshcode", params.meshcode);
+  if (params?.q?.trim()) sp.set("q", params.q.trim());
+  if (params?.includeSamples === false) sp.set("include_samples", "false");
+  if (params?.includeResolved === false) sp.set("include_resolved", "false");
+  if (params?.limit) sp.set("limit", String(params.limit));
+  const qs = sp.toString();
+  return fetchJson<DamageReportListResponse>(`/api/reports${qs ? `?${qs}` : ""}`);
+}
+
+export function getDamageReportsSummary(params?: {
+  ward?: string;
+  category?: ReportCategory | "all";
+  includeSamples?: boolean;
+  includeResolved?: boolean;
+}) {
+  const sp = new URLSearchParams();
+  if (params?.ward && params.ward !== "all") sp.set("ward", params.ward);
+  if (params?.category && params.category !== "all") sp.set("category", params.category);
+  if (params?.includeSamples === false) sp.set("include_samples", "false");
+  if (params?.includeResolved === true) sp.set("include_resolved", "true");
+  const qs = sp.toString();
+  return fetchJson<DamageReportSummaryResponse>(`/api/reports/summary${qs ? `?${qs}` : ""}`);
+}
+
+export function checkSimilarDamageReports(body: {
+  ward_name: string;
+  category: ReportCategory;
+  title?: string;
+  description?: string;
+  meshcode?: string | null;
+  lat?: number | null;
+  lon?: number | null;
+}) {
+  return fetchJson<{ count: number; similar_reports: DamageReport[] }>("/api/reports/similar", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function createDamageReport(body: {
+  category: ReportCategory;
+  severity: ReportSeverity;
+  title: string;
+  description: string;
+  ward_name: string;
+  meshcode?: string | null;
+  location_label?: string | null;
+  lat?: number | null;
+  lon?: number | null;
+  location_consent: boolean;
+  reporter_alias?: string;
+  passcode?: string;
+  reported_at?: string;
+  force_duplicate?: boolean;
+}) {
+  return fetchJson<{ report: DamageReport; similar_reports: DamageReport[] }>("/api/reports", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function confirmDamageReport(reportId: string) {
+  return fetchJson<{ report: DamageReport }>(
+    `/api/reports/${encodeURIComponent(reportId)}/confirm`,
+    { method: "POST" }
+  );
+}
+
+export function updateDamageReport(
+  reportId: string,
+  body: {
+    passcode?: string;
+    severity?: ReportSeverity;
+    title?: string;
+    description?: string;
+    resolved?: boolean;
+    ward_name?: string;
+  }
+) {
+  return fetchJson<{ report: DamageReport }>(`/api/reports/${encodeURIComponent(reportId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteDamageReport(reportId: string, passcode?: string) {
+  const qs = passcode?.trim() ? `?passcode=${encodeURIComponent(passcode.trim())}` : "";
+  return fetchJson<{ deleted: boolean; id: string }>(
+    `/api/reports/${encodeURIComponent(reportId)}${qs}`,
+    { method: "DELETE" }
+  );
+}
+
+export function getDisasterOverview(params?: { ward?: string; includeSamples?: boolean }) {
+  const sp = new URLSearchParams();
+  if (params?.ward && params.ward !== "all") sp.set("ward", params.ward);
+  if (params?.includeSamples === false) sp.set("include_samples", "false");
+  const qs = sp.toString();
+  return fetchJson<DisasterOverviewResponse>(`/api/disaster-overview${qs ? `?${qs}` : ""}`);
+}
+
+export function buildDisasterCsvUrl(params?: {
+  scope?: "overview" | "wards" | "reports" | "board";
+  ward?: string;
+  category?: string;
+  verificationStatus?: string;
+  includeSamples?: boolean;
+}): string {
+  const sp = new URLSearchParams();
+  sp.set("scope", params?.scope ?? "overview");
+  if (params?.ward && params.ward !== "all") sp.set("ward", params.ward);
+  if (params?.category && params.category !== "all") sp.set("category", params.category);
+  if (params?.verificationStatus && params.verificationStatus !== "all") {
+    sp.set("verification_status", params.verificationStatus);
+  }
+  if (params?.includeSamples === false) sp.set("include_samples", "false");
+  return `${API_BASE}/api/exports/disaster-summary.csv?${sp.toString()}`;
+}
+
+export function buildDisasterXlsxUrl(params?: {
+  ward?: string;
+  category?: string;
+  verificationStatus?: string;
+  includeSamples?: boolean;
+}): string {
+  const sp = new URLSearchParams();
+  if (params?.ward && params.ward !== "all") sp.set("ward", params.ward);
+  if (params?.category && params.category !== "all") sp.set("category", params.category);
+  if (params?.verificationStatus && params.verificationStatus !== "all") {
+    sp.set("verification_status", params.verificationStatus);
+  }
+  if (params?.includeSamples === false) sp.set("include_samples", "false");
+  const qs = sp.toString();
+  return `${API_BASE}/api/exports/disaster-summary.xlsx${qs ? `?${qs}` : ""}`;
+}
+
+export function getRouteNodes() {
+  return fetchJson<{ is_simulation: boolean; nodes: RouteNode[] }>("/api/routes/nodes");
+}
+
+export function simulateRoute(params: {
+  originId: string;
+  destinationId: string;
+  includeSamples?: boolean;
+  avoidUnverified?: boolean;
+}) {
+  const sp = new URLSearchParams({
+    origin_id: params.originId,
+    destination_id: params.destinationId,
+    include_samples: params.includeSamples === false ? "false" : "true",
+    avoid_unverified: params.avoidUnverified === false ? "false" : "true",
+  });
+  return fetchJson<RouteSimulationResponse>(`/api/routes/simulate?${sp.toString()}`);
 }

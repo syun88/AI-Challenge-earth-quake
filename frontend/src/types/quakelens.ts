@@ -232,12 +232,23 @@ export interface ToolCallTrace {
 }
 
 export interface MapAction {
-  type: "fly_to_mesh" | "fly_to_ward" | "focus_building";
+  type:
+    | "fly_to_mesh"
+    | "fly_to_ward"
+    | "focus_building"
+    | "focus_report"
+    | "download_export"
+    | "show_route_simulation";
   key: string;
   label: string;
   meshcode?: string;
   ward?: string;
   building_id?: string;
+  report_id?: string;
+  url?: string;
+  format?: "csv" | "xlsx";
+  origin_id?: string;
+  destination_id?: string;
   lon?: number;
   lat?: number;
   zoom?: number;
@@ -261,6 +272,8 @@ export interface GroundingVerification {
   verified_claims: string[];
   unverified_claims: string[];
   unverified_urls: string[];
+  contains_unverified_reports?: boolean;
+  contains_sample_data?: boolean;
   note: string;
 }
 
@@ -295,14 +308,194 @@ export interface BoardEntry {
   status_label: string;
   ward_name: string;
   meshcode: string | null;
+  location_consent?: boolean;
   message: string;
   has_passcode: boolean;
   is_sample: boolean;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface BoardListResponse {
   count: number;
   status_labels: Record<string, string>;
   entries: BoardEntry[];
+}
+
+export interface BoardWardSummary {
+  ward_name: string;
+  lon: number;
+  lat: number;
+  total_count: number;
+  user_count: number;
+  sample_count: number;
+  support_needed_count: number;
+  status_counts: Record<BoardStatus, number>;
+  latest_at: string;
+}
+
+export interface BoardMeshSummary {
+  meshcode: string;
+  ward_name: string;
+  centroid_lon: number | null;
+  centroid_lat: number | null;
+  total_count: number;
+  user_count: number;
+  sample_count: number;
+  status_counts: Record<BoardStatus, number>;
+}
+
+export interface BoardSummaryResponse {
+  scope: { ward: string; include_samples: boolean };
+  total_entries: number;
+  user_entries_count: number;
+  sample_entries_count: number;
+  status_labels: Record<string, string>;
+  status_counts: Record<BoardStatus, number>;
+  user_status_counts: Record<BoardStatus, number>;
+  by_ward: BoardWardSummary[];
+  by_mesh: BoardMeshSummary[];
+  privacy_note: string;
+}
+
+export type ReportCategory =
+  | "building_damage"
+  | "road_blocked"
+  | "shelter_status"
+  | "rescue_support"
+  | "other_disaster";
+
+export type ReportSeverity = "critical" | "high" | "moderate" | "info";
+
+export type VerificationStatus = "unverified" | "verified" | "official" | "demo_sample";
+
+export interface DamageReport {
+  id: string;
+  category: ReportCategory;
+  category_label: string;
+  severity: ReportSeverity;
+  severity_label: string;
+  verification_status: VerificationStatus;
+  verification_label: string;
+  title: string;
+  description: string;
+  ward_name: string;
+  meshcode: string | null;
+  location_label: string | null;
+  lat: number | null;
+  lon: number | null;
+  location_consent: boolean;
+  reporter_alias: string;
+  corroborations: number;
+  is_sample: boolean;
+  resolved: boolean;
+  has_passcode: boolean;
+  reported_at: string;
+  created_at: string;
+  updated_at: string;
+  duplicate_reasons?: string[];
+}
+
+export interface DamageReportListResponse {
+  count: number;
+  category_labels: Record<ReportCategory, string>;
+  severity_labels: Record<ReportSeverity, string>;
+  verification_labels: Record<VerificationStatus, string>;
+  reports: DamageReport[];
+}
+
+export interface DamageReportWardSummary {
+  ward_name: string;
+  lon: number;
+  lat: number;
+  total_count: number;
+  unverified_count: number;
+  verified_or_official_count: number;
+  sample_count: number;
+  critical_or_high_count: number;
+  by_category: Record<ReportCategory, number>;
+}
+
+export interface DamageReportSummaryResponse {
+  scope: {
+    ward: string;
+    category: string;
+    include_samples: boolean;
+    include_resolved: boolean;
+  };
+  total_reports: number;
+  unverified_count: number;
+  verified_count: number;
+  official_count: number;
+  demo_sample_count: number;
+  by_category: Array<{ key: ReportCategory; label: string; count: number }>;
+  by_severity: Array<{ key: ReportSeverity; label: string; count: number }>;
+  by_verification_status: Array<{ key: VerificationStatus; label: string; count: number }>;
+  by_ward: DamageReportWardSummary[];
+  linked_mesh_risks: Array<{
+    meshcode: string;
+    ward_name: string;
+    pre_1981_count: number;
+    t30_i55_ps: number | null;
+    arv: number | null;
+  }>;
+  verification_notice: string;
+}
+
+export interface DisasterOverviewResponse {
+  ward: string;
+  include_samples: boolean;
+  board_summary: BoardSummaryResponse;
+  report_summary: DamageReportSummaryResponse;
+}
+
+export interface RouteNode {
+  id: string;
+  name: string;
+  ward: string;
+  lon: number;
+  lat: number;
+}
+
+export interface RoutePathResult {
+  reachable: boolean;
+  node_ids: string[];
+  node_names: string[];
+  segments: string[];
+  coordinates: [number, number][];
+  distance_km: number | null;
+}
+
+export interface RouteBlockedSegment {
+  from_id: string;
+  to_id: string;
+  label: string;
+  distance_km: number;
+  coordinates: [[number, number], [number, number]];
+  triggered_by: Array<{
+    report_id: string;
+    title: string;
+    verification_status: VerificationStatus;
+    verification_label: string;
+    is_sample: boolean;
+    distance_m: number;
+  }>;
+}
+
+export interface RouteSimulationResponse {
+  is_simulation: boolean;
+  simulation_disclaimer: string;
+  origin: RouteNode;
+  destination: RouteNode;
+  settings: {
+    include_samples: boolean;
+    avoid_unverified: boolean;
+    block_radius_m: number;
+    active_road_hazard_points: number;
+  };
+  blocked_segments: RouteBlockedSegment[];
+  rerouted: boolean;
+  detour_delta_km: number | null;
+  baseline_route: RoutePathResult;
+  alternative_route: RoutePathResult;
 }
