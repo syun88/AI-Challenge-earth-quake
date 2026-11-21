@@ -13,6 +13,7 @@ import heapq
 import json
 import math
 import threading
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -373,6 +374,7 @@ class KyotoRoadNetwork:
                 "coordinates": full_coords,
                 "distance_km": round(max(0.01, dist_km), 2),
                 "weighted_cost": dist_km,
+                "edge_ids": [start.edge_idx],
             }
 
         goal_lon, goal_lat = goal.snap_lon, goal.snap_lat
@@ -427,6 +429,7 @@ class KyotoRoadNetwork:
                 "coordinates": [],
                 "distance_km": None,
                 "weighted_cost": float("inf"),
+                "edge_ids": [],
             }
 
         # Reconstruct chain
@@ -477,6 +480,7 @@ class KyotoRoadNetwork:
         final_coords = _attach_curb_pins(street_coords, start_pin, end_pin)
         merged_steps = _summarize_street_steps(step_parts)
 
+        route_edge_ids = list(dict.fromkeys([start.edge_idx, *edge_chain, goal.edge_idx]))
         return {
             "reachable": True,
             "node_ids": [f"r{n}" for n in node_chain],
@@ -485,6 +489,7 @@ class KyotoRoadNetwork:
             "coordinates": final_coords,
             "distance_km": round(max(0.01, dist_km), 2),
             "weighted_cost": best_total_cost,
+            "edge_ids": route_edge_ids,
         }
 
 
@@ -611,6 +616,22 @@ def _evaluate_network(
             continue
         if r.get("verification_status") == "unverified" and not avoid_unverified:
             continue
+
+        raw_explicit = r.get("blocked_edge_ids")
+        explicit_edges: list[int] = []
+        if isinstance(raw_explicit, list):
+            n_edges = len(_ROAD_NET.edges)
+            explicit_edges = list(
+                dict.fromkeys(
+                    int(e) for e in raw_explicit if isinstance(e, (int, float)) and 0 <= int(e) < n_edges
+                )
+            )
+        if (lon is None or lat is None) and explicit_edges:
+            mid_e = _ROAD_NET.edges[explicit_edges[len(explicit_edges) // 2]]
+            lon = mid_e.mid_lon
+            lat = mid_e.mid_lat
+            coord_source = "explicit_edge"
+
         if lon is None or lat is None:
             continue
 
@@ -623,12 +644,34 @@ def _evaluate_network(
             "lon": float(lon),
             "lat": float(lat),
             "coord_source": coord_source,
+            "blocked_edge_ids": explicit_edges,
         })
 
     blocked_edge_hits: dict[int, list[dict[str, Any]]] = {}
     closure_markers: list[dict[str, Any]] = []
 
     for hp in hazard_points:
+        explicit_ids: list[int] = hp.get("blocked_edge_ids") or []
+        hp_meta = {k: v for k, v in hp.items() if k != "blocked_edge_ids"}
+        if explicit_ids:
+            mid_edge = _ROAD_NET.edges[explicit_ids[len(explicit_ids) // 2]]
+            base_name = mid_edge.name or HIGHWAY_JP_LABELS.get(mid_edge.highway, "通行止め街路")
+            label = (
+                f"{base_name} ほか{len(explicit_ids) - 1}区間"
+                if len(explicit_ids) > 1
+                else (mid_edge.name or f"{hp['title'][:18]}")
+            )
+            closure_markers.append({
+                "id": hp["report_id"],
+                "label": label,
+                "mid_lon": mid_edge.mid_lon,
+                "mid_lat": mid_edge.mid_lat,
+                "triggered_by": [hp_meta],
+            })
+            for eidx in explicit_ids:
+                blocked_edge_hits.setdefault(eidx, []).append({**hp_meta, "distance_m": 0.0})
+            continue
+
         matches = _ROAD_NET.find_edges_for_closure(
             hp["lon"], hp["lat"], radius_m=eff_radius_m, fallback_nearest_m=180.0
         )
@@ -641,10 +684,10 @@ def _evaluate_network(
             "label": primary_edge.name or f"{hp['title'][:18]}付近道路",
             "mid_lon": p_lon,
             "mid_lat": p_lat,
-            "triggered_by": [hp],
+            "triggered_by": [hp_meta],
         })
         for eidx, d_m, _, _ in matches:
-            blocked_edge_hits.setdefault(eidx, []).append({**hp, "distance_m": round(d_m, 1)})
+            blocked_edge_hits.setdefault(eidx, []).append({**hp_meta, "distance_m": round(d_m, 1)})
 
     blocked_edge_ids = set(blocked_edge_hits.keys())
     blocked_segments: list[dict[str, Any]] = []
@@ -655,6 +698,7 @@ def _evaluate_network(
         hits = blocked_edge_hits[eidx]
         label = edge.name or "通行止め街路区間"
         blocked_segments.append({
+            "edge_id": eidx,
             "from_id": f"r{edge.u}",
             "to_id": f"r{edge.v}",
             "label": label,
@@ -663,6 +707,7 @@ def _evaluate_network(
             "triggered_by": hits,
         })
         edge_features.append({
+            "edge_id": eidx,
             "from_id": f"r{edge.u}",
             "to_id": f"r{edge.v}",
             "label": label,
@@ -761,6 +806,8 @@ def snap_road_info(lat: float, lon: float, store: Any | None = None) -> dict[str
         ward_name, meshcode = _infer_ward_mesh(float(lat), float(lon), store=store)
         return {
             "matched": False,
+            "edge_id": None,
+            "edge_ids": [],
             "road_name": "地図上の指定地点周辺",
             "highway": "unknown",
             "highway_label": "周辺地点",
@@ -779,6 +826,8 @@ def snap_road_info(lat: float, lon: float, store: Any | None = None) -> dict[str
     ward_name, meshcode = _infer_ward_mesh(p_lat, p_lon, store=store)
     return {
         "matched": True,
+        "edge_id": primary_eidx,
+        "edge_ids": [m[0] for m in matches],
         "road_name": road_name,
         "highway": primary_edge.highway,
         "highway_label": HIGHWAY_JP_LABELS.get(primary_edge.highway, "一般道路"),
@@ -790,6 +839,202 @@ def snap_road_info(lat: float, lon: float, store: Any | None = None) -> dict[str
         "coordinates": primary_edge.coords,
         "preview_segments": [_ROAD_NET.edges[m[0]].coords for m in matches],
     }
+
+
+def _build_selection_summary(
+    edge_ids: list[int],
+    *,
+    fallback_lat: float,
+    fallback_lon: float,
+    store: Any | None = None,
+) -> dict[str, Any]:
+    """Summarize matched Kyoto street edges into GeoJSON-ready preview, ward, mesh, and label."""
+    if not edge_ids:
+        ward_name, meshcode = _infer_ward_mesh(fallback_lat, fallback_lon, store=store)
+        return {
+            "matched": False,
+            "edge_ids": [],
+            "road_name": "対象道路が見つかりませんでした",
+            "ward_name": ward_name,
+            "meshcode": meshcode,
+            "snap_lat": round(fallback_lat, 5),
+            "snap_lon": round(fallback_lon, 5),
+            "length_km": 0.0,
+            "preview_segments": [],
+        }
+
+    mid_edge = _ROAD_NET.edges[edge_ids[len(edge_ids) // 2]]
+    named = [_ROAD_NET.edges[e].name for e in edge_ids if _ROAD_NET.edges[e].name]
+    if named:
+        primary_name = Counter(named).most_common(1)[0][0]
+        road_name = f"{primary_name}（{len(edge_ids)}区間）" if len(edge_ids) > 1 else primary_name
+    else:
+        base_lbl = HIGHWAY_JP_LABELS.get(mid_edge.highway, "京都市街路")
+        road_name = f"{base_lbl}（{len(edge_ids)}区間）" if len(edge_ids) > 1 else base_lbl
+
+    ward_name, meshcode = _infer_ward_mesh(mid_edge.mid_lat, mid_edge.mid_lon, store=store)
+    total_km = round(sum(_ROAD_NET.edges[e].length_km for e in edge_ids), 2)
+    return {
+        "matched": True,
+        "edge_ids": edge_ids,
+        "road_name": road_name,
+        "ward_name": ward_name,
+        "meshcode": meshcode,
+        "snap_lat": round(mid_edge.mid_lat, 5),
+        "snap_lon": round(mid_edge.mid_lon, 5),
+        "length_km": total_km,
+        "preview_segments": [_ROAD_NET.edges[e].coords for e in edge_ids],
+    }
+
+
+def get_roads_in_bbox(
+    *,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    blocked_edge_ids: set[int] | None = None,
+    limit: int = 2200,
+) -> dict[str, Any]:
+    """Return real Kyoto street segments inside a viewport bbox as GeoJSON for interactive hover/click."""
+    _ROAD_NET.ensure_loaded()
+    blocked = blocked_edge_ids or set()
+    cx0 = int(math.floor(min_lon / GRID_DEG)) - 1
+    cx1 = int(math.floor(max_lon / GRID_DEG)) + 1
+    cy0 = int(math.floor(min_lat / GRID_DEG)) - 1
+    cy1 = int(math.floor(max_lat / GRID_DEG)) + 1
+
+    cand_ids: set[int] = set()
+    for cx in range(cx0, cx1 + 1):
+        for cy in range(cy0, cy1 + 1):
+            cell = _ROAD_NET.grid.get((cx, cy))
+            if cell:
+                cand_ids.update(cell)
+
+    in_box: list[RoadEdge] = []
+    for eidx in cand_ids:
+        edge = _ROAD_NET.edges[eidx]
+        if (min_lon - 0.002) <= edge.mid_lon <= (max_lon + 0.002) and (min_lat - 0.002) <= edge.mid_lat <= (max_lat + 0.002):
+            in_box.append(edge)
+
+    if len(in_box) > limit:
+        in_box.sort(
+            key=lambda e: (
+                0 if e.idx in blocked else 1,
+                HIGHWAY_WEIGHT_FACTORS.get(e.highway, 1.35),
+                -e.length_km,
+            )
+        )
+        in_box = in_box[:limit]
+
+    features: list[dict[str, Any]] = []
+    for edge in in_box:
+        features.append({
+            "type": "Feature",
+            "id": edge.idx,
+            "properties": {
+                "edge_id": edge.idx,
+                "name": edge.name or HIGHWAY_JP_LABELS.get(edge.highway, "京都市街路"),
+                "highway": edge.highway,
+                "highway_label": HIGHWAY_JP_LABELS.get(edge.highway, "一般道路"),
+                "length_m": max(1, round(edge.length_km * 1000)),
+                "status": "blocked" if edge.idx in blocked else "open",
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": edge.coords,
+            },
+        })
+
+    return {
+        "type": "FeatureCollection",
+        "count": len(features),
+        "features": features,
+    }
+
+
+def resolve_road_corridor(
+    *,
+    start_lat: float,
+    start_lon: float,
+    end_lat: float,
+    end_lon: float,
+    store: Any | None = None,
+) -> dict[str, Any]:
+    """Resolve all real street edge IDs along the corridor from Start point to End point."""
+    _ROAD_NET.ensure_loaded()
+    s_pt = _ROAD_NET.snap_point(start_lat, start_lon, blocked_edges=None, prefer_clear=False)
+    g_pt = _ROAD_NET.snap_point(end_lat, end_lon, blocked_edges=None, prefer_clear=False)
+    res = _ROAD_NET.route_between(s_pt, g_pt, blocked_edges=set())
+    edge_ids: list[int] = list(res.get("edge_ids") or [])
+    if not res["reachable"] or not edge_ids:
+        edge_ids = list(dict.fromkeys([s_pt.edge_idx, g_pt.edge_idx]))
+    if len(edge_ids) > 400:
+        raise HTTPException(
+            status_code=400,
+            detail="選択区間が長すぎます（道路400区間以内になるよう始点と終点を近づけてください）。",
+        )
+    return _build_selection_summary(
+        edge_ids,
+        fallback_lat=(start_lat + end_lat) / 2.0,
+        fallback_lon=(start_lon + end_lon) / 2.0,
+        store=store,
+    )
+
+
+def resolve_road_stroke(
+    *,
+    points: list[tuple[float, float]],
+    store: Any | None = None,
+) -> dict[str, Any]:
+    """Resolve real street edge IDs touched by a freehand canvas brush stroke of (lon, lat) points."""
+    _ROAD_NET.ensure_loaded()
+    if not points:
+        raise HTTPException(status_code=400, detail="なぞり軌跡の座標が空です。")
+
+    sampled: list[tuple[float, float]] = [points[0]]
+    for lon, lat in points[1:]:
+        p_lon, p_lat = sampled[-1]
+        d_m = _dist_km(p_lon, p_lat, lon, lat) * 1000.0
+        if d_m > 18.0:
+            steps = min(40, max(1, int(d_m // 18.0)))
+            for s in range(1, steps + 1):
+                t = s / (steps + 1)
+                sampled.append((p_lon + (lon - p_lon) * t, p_lat + (lat - p_lat) * t))
+        sampled.append((lon, lat))
+        if len(sampled) >= 600:
+            break
+
+    matched_order: list[int] = []
+    seen: set[int] = set()
+    search_deg = 52.0 / 90000.0
+    for lon, lat in sampled:
+        cands = _ROAD_NET._candidate_edges_near(lon, lat, search_deg)
+        for eidx in cands:
+            if eidx in seen:
+                continue
+            d_m, _, _, _ = _project_to_polyline(lon, lat, _ROAD_NET.edges[eidx].coords)
+            if d_m <= 28.0:
+                seen.add(eidx)
+                matched_order.append(eidx)
+                if len(matched_order) >= 400:
+                    break
+        if len(matched_order) >= 400:
+            break
+
+    mid_lon, mid_lat = sampled[len(sampled) // 2]
+    if not matched_order:
+        fallback = _ROAD_NET.find_edges_for_closure(
+            mid_lon, mid_lat, radius_m=48.0, fallback_nearest_m=140.0
+        )
+        matched_order = [m[0] for m in fallback]
+
+    return _build_selection_summary(
+        matched_order,
+        fallback_lat=mid_lat,
+        fallback_lon=mid_lon,
+        store=store,
+    )
 
 
 def get_network_status(

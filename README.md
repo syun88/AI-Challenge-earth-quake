@@ -63,8 +63,9 @@ Google AI Challenge 2026 応募作品として開発された、平時の建物�
    - AIが未確認報告や訓練サンプルを参照した場合は、回答下部の検証カードに **「未確認の市民報告を含む／訓練サンプルを含む集計」** 警告を自動表示し、確定事実と混同しない設計
    - チャットからの指示（例：「この地域の災害状況をCSVにまとめて」）や「統計・リスク」「被害報告」ドロワーから **UTF-8 BOM付CSV（数式インジェクション対策済）** および **マルチシートExcel（`.xlsx`）** を即時出力
    - `GEMINI_API_KEY` 未設定時もダミー回答を行わず、バックエンド実データ照会ツールを実行して正確な集計・CSVダウンロード導線を提示
-5. **実道路ネットワークに基づく 双方向 避難・救援ナビ（訓練・研究用プロトタイプ）**
-   - OpenStreetMap 由来の京都市実道路ネットワーク（`kyoto_roads.json.gz`: **41,813交差点 / 58,360街路エッジ**）上で、`road_blocked` 報告周辺の実際の街路ポリラインを赤色通行止めとして除外・描画し、実際の通り・交差点・橋梁に沿った **① 現在地→最寄り避難拠点（`evacuate`）**、**② 最寄り拠点→要救助・被害現場への救援出動（`rescue`）**、**③ 任意2拠点迂回比較（`custom`）** をA\*探索で算出・描画
+5. **実道路ネットワークに基づく 双方向 避難・救援ナビ＆直感的 道路被害ペイント（訓練・研究用プロトタイプ）**
+   - OpenStreetMap 由来の京都市実道路ネットワーク（`kyoto_roads.json.gz`: **41,813交差点 / 58,360街路エッジ**）上で、`road_blocked` 報告の実際の街路ポリラインを赤色通行止めとして除外・描画し、実際の通り・交差点・橋梁に沿った **① 現在地→最寄り避難拠点（`evacuate`）**、**② 最寄り拠点→要救助・被害現場への救援出動（`rescue`）**、**③ 任意2拠点迂回比較（`custom`）** をA\*探索で算出・描画
+   - 地図上のフローティングツールバー（`道路を描く・選択`）から **① 水色に光る道路の1クリック即時通行止め／解除**、**② 始点→終点クリックによる区間一括閉鎖**、**③ Canvasフリーハンドなぞり描画による複数道路一括閉鎖**（`Undo`対応）を実行でき、設定と同時に表示中の経路も自動再計算されます
    - 実際の被災状況・車両規制や実避難所開設は反映されない訓練モデルのため、API・UI・凡例のすべてで **「訓練・研究用シミュレーション専用（実災害での道路安全性・実避難所開設保証なし）」** と明記
 6. **Map-First 統合UI（全画面地図 × 切替式左ドロワー × モバイルボトムドック）**
    - 画面全体を覆う広い地図キャンバスの上部にスリムなフローティングヘッダー（`被害報告` / `安否確認` / `避難・救援ナビ` / `AI分析` / `統計・リスク` ＋ `表示設定` ポップオーバー）を配置
@@ -100,7 +101,7 @@ Google AI Challenge 2026 応募作品として開発された、平時の建物�
 │   │   └── processed/                    # 前処理済み空間データ（buildings.parquet, meshes.geojson, kyoto_roads.json.gz, summary.json）
 │   └── tests/
 │       ├── test_pipeline_and_api.py      # 空間データ・API・AIセキュリティ・根拠検証・伝言板テスト（10件）
-│       └── test_disaster_platform.py     # 安否更新/集計・被害報告・重複・CSV/Excel・AI・迂回経路テスト（4件）
+│       └── test_disaster_platform.py     # 安否更新/集計・被害報告・重複・CSV/Excel・AI・迂回経路・道路ペイントテスト（5件）
 └── frontend/
     └── src/
         ├── app/
@@ -112,7 +113,8 @@ Google AI Challenge 2026 応募作品として開発された、平時の建物�
         └── components/
             ├── FloatingHeader.tsx        # 上部スリムナビバー＆モバイルボトムドック
             ├── MapDisplayPopover.tsx     # 地図表示テーマ（災害対応/建物リスク）・レイヤー・絞込設定
-            ├── QuakeMap.tsx              # MapLibre 2D/3D + 通行止道路 + 避難拠点 + 倒壊建物ハイライト
+            ├── QuakeMap.tsx              # MapLibre 2D/3D + ハイライト街路 + Canvas描画 + 通行止道路 + 倒壊建物
+            ├── RoadDamageToolbar.tsx     # 道路クリック／始点→終点／Canvasなぞり フローティングツールバー
             ├── SelectedFeatureCard.tsx   # 地図選択中オブジェクトカード＆ルート案内HUD
             ├── DisasterBoard.tsx         # 災害用伝言板（集計・検索・登録・更新・削除・web171案内）
             ├── DamageReportPanel.tsx     # 3ステップ被害状況報告（建物連携・未確認区別・重複照合・CSV/Excel）
@@ -134,7 +136,8 @@ Google AI Challenge 2026 応募作品として開発された、平時の建物�
 | `POST` | `/api/reports/similar`, `/api/reports/{id}/confirm` | 類似/重複報告事前チェック・既存報告への `+1 同種確認` |
 | `GET` | `/api/disaster-overview` | 安否伝言板と被害状況報告の統合サマリー取得 |
 | `GET` | `/api/exports/disaster-summary.csv`, `.xlsx` | 統合状況／報告一覧の CSV（UTF-8 BOM）・Excel（`.xlsx`）ダウンロード |
-| `GET` | `/api/network/status`, `/api/network/snap-road`, `/api/routes/navigate`, `/api/routes/simulate` | 実道路スナップ・通行止め設定連動・双方向避難/救援ルート案内（訓練用） |
+| `GET / POST` | `/api/network/status`, `/api/network/roads`, `/api/network/snap-road`, `/api/network/corridor`, `/api/network/stroke` | 実道路ハイライト取得・1クリック/区間/なぞり道路選択・閉鎖状況（訓練用） |
+| `GET` | `/api/routes/navigate`, `/api/routes/simulate` | 通行止め区間回避・双方向避難/救援ルート案内（訓練用） |
 | `POST` | `/api/chat`, `/api/chat/stream` | Gemini AI 状況分析（REST / SSEストリーミング） |
 
 ---
@@ -268,7 +271,7 @@ npm run dev
 ## 9. テスト・ビルド実行
 
 ```bash
-# バックエンド単体・結合テスト（全14件：空間結合・API・セキュリティ・根拠検証・伝言板・被害報告・CSV/Excel・代替経路）
+# バックエンド単体・結合テスト（全15件：空間結合・API・セキュリティ・根拠検証・伝言板・被害報告・CSV/Excel・AI・迂回経路・道路ペイント）
 cd backend
 uv run pytest -v
 
@@ -281,7 +284,7 @@ npm run lint && npm run build
 
 ## 10. 今後の制約事項・発展余地
 
-- **道路ネットワーク精緻化**：現在の代替経路シミュレーションは主要幹線ノード間の簡易グラフ（訓練・研究用）です。実運用へ近づけるには、OpenStreetMap / 緊急輸送道路データおよび幅員・橋梁耐震データの統合が必要です。
+- **道路ネットワーク精緻化**：現在の代替経路シミュレーションは OpenStreetMap（41,813ノード・58,360エッジ）を用いた訓練・研究用モデルです。実運用へ近づけるには、自治体指定の緊急輸送道路規制・幅員・信号/標高・橋梁耐震点検データのリアルタイム統合が必要です。
 - **公的フィード連携・本人確認**：現在は市民報告をすべて `unverified` として分離管理していますが、自治体の防災情報XML / Lアラート等と連携する公式取り込みチャネルを追加することで、`official` / `verified` 区分をより充実できます。
 - **複数自治体展開**：`fetch_and_build.py` の対象自治体コードを差し替えることで、建築年整備済み他都市への横展開が可能です。
 

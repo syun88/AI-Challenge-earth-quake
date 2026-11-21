@@ -31,8 +31,12 @@ from app.data_store import QuakeLensDataStore
 from app.export_utils import generate_disaster_csv, generate_disaster_xlsx
 from app.reports_store import DamageReportStore
 from app.route_sim import (
+    _evaluate_network,
     get_network_status,
+    get_roads_in_bbox,
     list_route_nodes,
+    resolve_road_corridor,
+    resolve_road_stroke,
     simulate_alternative_route,
     simulate_navigation,
     snap_road_info,
@@ -456,6 +460,7 @@ class DamageReportCreateRequest(BaseModel):
     lat: float | None = None
     lon: float | None = None
     location_consent: bool = False
+    blocked_edge_ids: list[int] | None = None
     reporter_alias: str | None = None
     passcode: str | None = None
     reported_at: str | None = None
@@ -558,6 +563,7 @@ def create_damage_report(req: DamageReportCreateRequest) -> dict[str, Any]:
         lat=req.lat,
         lon=req.lon,
         location_consent=req.location_consent,
+        blocked_edge_ids=req.blocked_edge_ids,
         reporter_alias=req.reporter_alias,
         passcode=req.passcode,
         reported_at=req.reported_at,
@@ -710,6 +716,81 @@ def snap_road_endpoint(
     lon: float = Query(..., ge=135.42, le=135.95),
 ) -> dict[str, Any]:
     return snap_road_info(lat=lat, lon=lon, store=store if store.loaded else None)
+
+
+class RoadCorridorRequest(BaseModel):
+    start_lat: float
+    start_lon: float
+    end_lat: float
+    end_lon: float
+
+
+class StrokePoint(BaseModel):
+    lat: float
+    lon: float
+
+
+class RoadStrokeRequest(BaseModel):
+    points: list[StrokePoint]
+
+
+@app.get("/api/network/roads")
+def read_roads_in_bbox(
+    bbox: str = Query(..., description="min_lon,min_lat,max_lon,max_lat"),
+    include_samples: bool = Query(default=True),
+    avoid_unverified: bool = Query(default=True),
+    block_radius_m: float = Query(default=48.0, ge=20.0, le=500.0),
+) -> dict[str, Any]:
+    parts = [p.strip() for p in bbox.split(",")]
+    if len(parts) != 4:
+        raise HTTPException(status_code=400, detail="bbox must be min_lon,min_lat,max_lon,max_lat")
+    try:
+        min_lon, min_lat, max_lon, max_lat = (float(p) for p in parts)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid numeric values in bbox") from exc
+    if min_lon >= max_lon or min_lat >= max_lat:
+        raise HTTPException(status_code=400, detail="Invalid bbox ordering")
+    reports = reports_store.list_reports(
+        category="road_blocked",
+        include_samples=include_samples,
+        include_resolved=False,
+        limit=300,
+    )
+    ev = _evaluate_network(
+        reports=reports,
+        include_samples=include_samples,
+        avoid_unverified=avoid_unverified,
+        block_radius_m=block_radius_m,
+        store=store if store.loaded else None,
+    )
+    return get_roads_in_bbox(
+        min_lon=min_lon,
+        min_lat=min_lat,
+        max_lon=max_lon,
+        max_lat=max_lat,
+        blocked_edge_ids=ev["blocked_edge_ids"],
+    )
+
+
+@app.post("/api/network/corridor")
+def resolve_corridor_endpoint(req: RoadCorridorRequest) -> dict[str, Any]:
+    return resolve_road_corridor(
+        start_lat=req.start_lat,
+        start_lon=req.start_lon,
+        end_lat=req.end_lat,
+        end_lon=req.end_lon,
+        store=store if store.loaded else None,
+    )
+
+
+@app.post("/api/network/stroke")
+def resolve_stroke_endpoint(req: RoadStrokeRequest) -> dict[str, Any]:
+    if len(req.points) > 1500:
+        raise HTTPException(status_code=400, detail="stroke points count must be <= 1500")
+    return resolve_road_stroke(
+        points=[(pt.lon, pt.lat) for pt in req.points],
+        store=store if store.loaded else None,
+    )
 
 
 @app.get("/api/network/status")

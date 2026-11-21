@@ -12,12 +12,14 @@ import {
   DamageReportSummaryResponse,
   DisasterOverviewResponse,
   EarthquakeEvent,
+  InteractiveRoadsGeoJSON,
   MeshDetail,
   MetadataResponse,
   NetworkStatusResponse,
   PriorityArea,
   ReportCategory,
   ReportSeverity,
+  RoadSelectionResult,
   RouteNode,
   RouteSimulationResponse,
   SnappedRoadInfo,
@@ -440,6 +442,7 @@ export function createDamageReport(body: {
   lat?: number | null;
   lon?: number | null;
   location_consent: boolean;
+  blocked_edge_ids?: number[] | null;
   reporter_alias?: string;
   passcode?: string;
   reported_at?: string;
@@ -547,6 +550,43 @@ export function snapRoadInfo(lat: number, lon: number) {
     lon: String(lon),
   });
   return fetchJson<SnappedRoadInfo>(`/api/network/snap-road?${sp.toString()}`);
+}
+
+export function getRoadsInBbox(params: {
+  bbox: [number, number, number, number];
+  includeSamples?: boolean;
+  avoidUnverified?: boolean;
+}) {
+  const sp = new URLSearchParams({
+    bbox: params.bbox.map((n) => n.toFixed(5)).join(","),
+    include_samples: params.includeSamples === false ? "false" : "true",
+    avoid_unverified: params.avoidUnverified === false ? "false" : "true",
+  });
+  return fetchJson<InteractiveRoadsGeoJSON>(`/api/network/roads?${sp.toString()}`);
+}
+
+export function resolveRoadCorridor(params: {
+  startLat: number;
+  startLon: number;
+  endLat: number;
+  endLon: number;
+}) {
+  return fetchJson<RoadSelectionResult>("/api/network/corridor", {
+    method: "POST",
+    body: JSON.stringify({
+      start_lat: params.startLat,
+      start_lon: params.startLon,
+      end_lat: params.endLat,
+      end_lon: params.endLon,
+    }),
+  });
+}
+
+export function resolveRoadStroke(points: Array<{ lat: number; lon: number }>) {
+  return fetchJson<RoadSelectionResult>("/api/network/stroke", {
+    method: "POST",
+    body: JSON.stringify({ points }),
+  });
 }
 
 export function simulateRoute(params: {

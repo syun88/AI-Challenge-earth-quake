@@ -382,6 +382,7 @@ export interface DamageReport {
   ward_name: string;
   meshcode: string | null;
   building_id?: string | null;
+  blocked_edge_ids?: number[] | null;
   location_label: string | null;
   lat: number | null;
   lon: number | null;
@@ -561,8 +562,12 @@ export interface RouteSimulationResponse {
   alternative_route: RoutePathResult;
 }
 
+export type RoadPaintTool = "none" | "click" | "corridor" | "brush";
+
 export interface SnappedRoadInfo {
   matched: boolean;
+  edge_id?: number | null;
+  edge_ids?: number[];
   road_name: string;
   highway: string;
   highway_label: string;
@@ -573,4 +578,37 @@ export interface SnappedRoadInfo {
   distance_m: number | null;
   coordinates: [number, number][];
   preview_segments: [number, number][][];
+}
+
+export interface RoadSelectionResult {
+  matched: boolean;
+  edge_ids: number[];
+  road_name: string;
+  ward_name: string;
+  meshcode: string | null;
+  snap_lat: number;
+  snap_lon: number;
+  length_km: number;
+  preview_segments: [number, number][][];
+}
+
+export interface InteractiveRoadsGeoJSON {
+  type: "FeatureCollection";
+  count: number;
+  features: Array<{
+    type: "Feature";
+    id: number;
+    properties: {
+      edge_id: number;
+      name: string;
+      highway: string;
+      highway_label: string;
+      length_m: number;
+      status: "open" | "blocked";
+    };
+    geometry: {
+      type: "LineString";
+      coordinates: [number, number][];
+    };
+  }>;
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import math
 import re
 import secrets
@@ -123,6 +124,8 @@ class DamageReportStore:
                 }
                 if "building_id" not in existing_cols:
                     conn.execute("ALTER TABLE damage_reports ADD COLUMN building_id TEXT")
+                if "blocked_edge_ids_json" not in existing_cols:
+                    conn.execute("ALTER TABLE damage_reports ADD COLUMN blocked_edge_ids_json TEXT")
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_reports_ward ON damage_reports (ward_name)"
                 )
@@ -284,6 +287,17 @@ class DamageReportStore:
         ver = str(row["verification_status"])
         keys = row.keys()
         building_id = str(row["building_id"]) if ("building_id" in keys and row["building_id"]) else None
+        blocked_edge_ids: list[int] | None = None
+        raw_edges = row["blocked_edge_ids_json"] if "blocked_edge_ids_json" in keys else None
+        if raw_edges:
+            try:
+                parsed_edges = json.loads(str(raw_edges))
+                if isinstance(parsed_edges, list):
+                    blocked_edge_ids = [
+                        int(e) for e in parsed_edges if isinstance(e, (int, float)) and int(e) >= 0
+                    ]
+            except Exception:
+                blocked_edge_ids = None
         return {
             "id": str(row["id"]),
             "category": cat,
@@ -297,6 +311,7 @@ class DamageReportStore:
             "ward_name": str(row["ward_name"]),
             "meshcode": str(row["meshcode"]) if row["meshcode"] else None,
             "building_id": building_id,
+            "blocked_edge_ids": blocked_edge_ids,
             "location_label": str(row["location_label"]) if row["location_label"] else None,
             "lat": float(row["lat"]) if row["lat"] is not None else None,
             "lon": float(row["lon"]) if row["lon"] is not None else None,
@@ -465,6 +480,7 @@ class DamageReportStore:
         lat: float | None = None,
         lon: float | None = None,
         location_consent: bool = False,
+        blocked_edge_ids: list[int] | None = None,
         reporter_alias: str | None = None,
         passcode: str | None = None,
         reported_at: str | None = None,
@@ -490,7 +506,21 @@ class DamageReportStore:
         )
 
         clean_loc_label = location_label.strip()[:80] if location_label and location_label.strip() else None
-        clean_bldg_id = building_id.strip()[:64] if (building_id and building_id.strip() and location_consent) else None
+        clean_bldg_id = building_id.strip()[:64] if (building_id and building_id.strip() and consent_bool) else None
+        clean_edge_json: str | None = None
+        if blocked_edge_ids and not consent_bool:
+            raise HTTPException(
+                status_code=400,
+                detail="地図上の道路閉鎖区間を登録するには、位置情報提供への明示的な同意（location_consent=true）が必要です。",
+            )
+        if blocked_edge_ids and consent_bool:
+            unique_edges = list(
+                dict.fromkeys(int(e) for e in blocked_edge_ids if isinstance(e, int) and 0 <= int(e) < 200000)
+            )
+            if len(unique_edges) > 400:
+                unique_edges = unique_edges[:400]
+            if unique_edges:
+                clean_edge_json = json.dumps(unique_edges)
         clean_alias = (reporter_alias or "匿名市民").strip()[:32] or "匿名市民"
 
         clean_pass = (passcode or "").strip()
@@ -529,10 +559,10 @@ class DamageReportStore:
                 """
                 INSERT INTO damage_reports (
                     id, category, severity, verification_status, title, description,
-                    ward_name, meshcode, building_id, location_label, lat, lon, location_consent,
+                    ward_name, meshcode, building_id, blocked_edge_ids_json, location_label, lat, lon, location_consent,
                     reporter_alias, corroborations, is_sample, resolved,
                     passcode_salt, passcode_hash, reported_at, created_at, updated_at
-                ) VALUES (?, ?, ?, 'unverified', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, 'unverified', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     report_id,
@@ -543,6 +573,7 @@ class DamageReportStore:
                     clean_ward,
                     clean_mesh,
                     clean_bldg_id,
+                    clean_edge_json,
                     clean_loc_label,
                     clean_lat,
                     clean_lon,

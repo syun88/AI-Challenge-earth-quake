@@ -5,12 +5,15 @@ import {
   AlertTriangle,
   Ambulance,
   Ban,
+  Brush,
   Building2,
   CheckCircle2,
   Compass,
   Construction,
+  GitCommitHorizontal,
   Loader2,
   MapPin,
+  MousePointerClick,
   Navigation,
   Route as RouteIcon,
   ShieldAlert,
@@ -27,10 +30,11 @@ import {
 } from "@/lib/api";
 import { REPORT_CATEGORY_META, VERIFICATION_META } from "@/lib/colors";
 import { readLocalReportAuth, saveLocalReportAuth } from "@/lib/reportAuth";
+import { ROAD_CAUSE_PRESETS } from "@/components/RoadDamageToolbar";
 import {
   DamageReport,
   NetworkStatusResponse,
-  ReportSeverity,
+  RoadPaintTool,
   RouteNode,
   RouteSimulationResponse,
   ShelterHub,
@@ -38,34 +42,6 @@ import {
 } from "@/types/quakelens";
 
 export type NavMode = "evacuate" | "rescue" | "custom";
-
-const ROAD_CAUSE_PRESETS: Array<{ label: string; desc: string; severity: ReportSeverity }> = [
-  {
-    label: "路面陥没・段差",
-    desc: "道路の亀裂・段差・陥没により車両の通行ができない状態です。",
-    severity: "critical",
-  },
-  {
-    label: "倒壊建物・塀による閉塞",
-    desc: "沿道のブロック塀や建物の崩落物により道路が塞がれています。",
-    severity: "critical",
-  },
-  {
-    label: "電柱傾斜・倒木",
-    desc: "電柱の傾斜や倒木・垂下線により通行危険（迂回必要）な状態です。",
-    severity: "high",
-  },
-  {
-    label: "橋梁・高架の損傷危険",
-    desc: "橋梁や跨線橋に段差・破損が見られ、通行止めとなっています。",
-    severity: "critical",
-  },
-  {
-    label: "冠水・土砂流出",
-    desc: "水道管破損による冠水または土砂流出のため通行困難です。",
-    severity: "high",
-  },
-];
 
 interface NavigationPanelProps {
   reports: DamageReport[];
@@ -81,6 +57,7 @@ interface NavigationPanelProps {
   onStartPickEvacuate: () => void;
   onStartPickRescue: () => void;
   onStartPickRoadBlock: () => void;
+  onOpenRoadPaintMode?: (tool: Exclude<RoadPaintTool, "none">) => void;
   onClearRoadBlockTarget: () => void;
   onCancelPick: () => void;
   onChangeRouteResult: (
@@ -107,6 +84,7 @@ export function NavigationPanel({
   onStartPickEvacuate,
   onStartPickRescue,
   onStartPickRoadBlock,
+  onOpenRoadPaintMode,
   onClearRoadBlockTarget,
   onCancelPick,
   onChangeRouteResult,
@@ -343,20 +321,52 @@ export function NavigationPanel({
           </span>
         </div>
 
+        {onOpenRoadPaintMode && (
+          <div className="grid grid-cols-3 gap-1.5">
+            <button
+              type="button"
+              data-testid="nav-paint-click-btn"
+              onClick={() => onOpenRoadPaintMode("click")}
+              className="flex items-center justify-center gap-1 rounded-xl border border-cyan-500/50 bg-cyan-500/15 px-2 py-2 text-[11px] font-bold text-cyan-100 hover:bg-cyan-500/25"
+            >
+              <MousePointerClick className="h-3.5 w-3.5 text-cyan-300 shrink-0" />
+              <span className="truncate">道路クリック</span>
+            </button>
+            <button
+              type="button"
+              data-testid="nav-paint-corridor-btn"
+              onClick={() => onOpenRoadPaintMode("corridor")}
+              className="flex items-center justify-center gap-1 rounded-xl border border-amber-500/50 bg-amber-500/15 px-2 py-2 text-[11px] font-bold text-amber-100 hover:bg-amber-500/25"
+            >
+              <GitCommitHorizontal className="h-3.5 w-3.5 text-amber-300 shrink-0" />
+              <span className="truncate">始点→終点</span>
+            </button>
+            <button
+              type="button"
+              data-testid="nav-paint-brush-btn"
+              onClick={() => onOpenRoadPaintMode("brush")}
+              className="flex items-center justify-center gap-1 rounded-xl border border-rose-500/50 bg-rose-500/20 px-2 py-2 text-[11px] font-bold text-rose-100 hover:bg-rose-500/30"
+            >
+              <Brush className="h-3.5 w-3.5 text-rose-300 shrink-0" />
+              <span className="truncate">Canvasなぞり</span>
+            </button>
+          </div>
+        )}
+
         <button
           type="button"
           data-testid="nav-pick-road-block-btn"
           onClick={isPickingRoadBlock ? onCancelPick : onStartPickRoadBlock}
-          className={`flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-bold transition ${
+          className={`flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2 text-[11px] font-semibold transition ${
             isPickingRoadBlock
               ? "border-amber-400 bg-amber-500/25 text-amber-100"
-              : "border-rose-500/60 bg-rose-500/20 text-rose-100 hover:bg-rose-500/30"
+              : "border-slate-700 bg-slate-900/80 text-slate-300 hover:border-slate-500"
           }`}
         >
-          <Ban className="h-4 w-4 text-rose-300" />
+          <Ban className="h-3.5 w-3.5 text-rose-300" />
           {isPickingRoadBlock
             ? "地図上の道路をクリックしてください（押下で中止）"
-            : "地図上の道路をクリックして通行止めを追加"}
+            : "メモを添えて1地点を指定する"}
         </button>
 
         {snappedRoadTarget && (

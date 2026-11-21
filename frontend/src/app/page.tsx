@@ -24,11 +24,14 @@ import {
   VisualPreset,
 } from "@/components/QuakeMap";
 import { RiskStatsDrawer } from "@/components/RiskStatsDrawer";
+import { ROAD_CAUSE_PRESETS, RoadDamageToolbar } from "@/components/RoadDamageToolbar";
 import { SelectedFeatureCard } from "@/components/SelectedFeatureCard";
 import { SourcesModal } from "@/components/SourcesModal";
 import { WARD_CENTERS } from "@/lib/colors";
-import { readLocalReportAuth } from "@/lib/reportAuth";
+import { readLocalReportAuth, saveLocalReportAuth } from "@/lib/reportAuth";
 import {
+  createDamageReport,
+  deleteDamageReport,
   getBoardSummary,
   getBuildingDetail,
   getDamageReports,
@@ -41,6 +44,8 @@ import {
   getNetworkStatus,
   getPriorityAreas,
   getStats,
+  resolveRoadCorridor,
+  resolveRoadStroke,
   simulateNavigation,
   simulateRoute,
   snapRoadInfo,
@@ -62,6 +67,7 @@ import {
   NetworkEdgeFeature,
   NetworkStatusResponse,
   PriorityArea,
+  RoadPaintTool,
   RouteSimulationResponse,
   ShelterHub,
   SnappedRoadInfo,
@@ -145,6 +151,24 @@ export default function HomePage() {
   } | null>(null);
   const [queuedAiPrompt, setQueuedAiPrompt] = useState<{ text: string; ts: number } | null>(null);
   const [reportCreateTrigger, setReportCreateTrigger] = useState(0);
+
+  // Interactive Road Paint / Glow / Corridor / Canvas Brush state
+  const [roadPaintTool, setRoadPaintTool] = useState<RoadPaintTool>("none");
+  const [paintCauseIdx, setPaintCauseIdx] = useState(0);
+  const [paintConsent, setPaintConsent] = useState(false);
+  const [paintConsentHighlight, setPaintConsentHighlight] = useState(false);
+  const [corridorStart, setCorridorStart] = useState<{
+    lat: number;
+    lon: number;
+    label?: string;
+  } | null>(null);
+  const [paintUndoStack, setPaintUndoStack] = useState<
+    Array<{ id: string; passcode: string; title: string }>
+  >([]);
+  const [paintBusy, setPaintBusy] = useState(false);
+  const [paintStatusText, setPaintStatusText] = useState<string | null>(null);
+  const [paintErrorText, setPaintErrorText] = useState<string | null>(null);
+  const [currentMapZoom, setCurrentMapZoom] = useState(12.6);
 
   // Initial load: health, metadata, meshes, earthquakes
   useEffect(() => {
@@ -478,6 +502,247 @@ export default function HomePage() {
     [clearSelections, handleRoadClosuresChanged]
   );
 
+  const openRoadPaintMode = useCallback(
+    (tool: Exclude<RoadPaintTool, "none">) => {
+      clearSelections();
+      setMapPickMode("none");
+      setSnappedRoadTarget(null);
+      setShowRoadClosures(true);
+      setCorridorStart(null);
+      setPaintErrorText(null);
+      setPaintStatusText(null);
+      setRoadPaintTool(tool);
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        setActivePanel("none");
+      }
+    },
+    [clearSelections]
+  );
+
+  const requirePaintConsent = useCallback(() => {
+    if (paintConsent) return true;
+    setPaintConsentHighlight(true);
+    setPaintErrorText("先に右側の「未確認の市民報告として公開（位置同意）」にチェックを入れてください。");
+    return false;
+  }, [paintConsent]);
+
+  const saveRoadClosureSelection = useCallback(
+    async (params: {
+      edgeIds: number[];
+      roadName: string;
+      wardName: string;
+      meshcode: string | null;
+      lat: number;
+      lon: number;
+      sourceTag: string;
+    }) => {
+      const preset = ROAD_CAUSE_PRESETS[paintCauseIdx] ?? ROAD_CAUSE_PRESETS[0];
+      const pass = String(Math.floor(1000 + Math.random() * 9000));
+      const res = await createDamageReport({
+        category: "road_blocked",
+        severity: preset.severity,
+        title: `${params.roadName}（${preset.label}）`,
+        description: `${preset.desc} [${params.sourceTag}]`,
+        ward_name: params.wardName,
+        meshcode: params.meshcode,
+        location_label: params.roadName,
+        lat: params.lat,
+        lon: params.lon,
+        location_consent: true,
+        blocked_edge_ids: params.edgeIds,
+        passcode: pass,
+        force_duplicate: true,
+      });
+      saveLocalReportAuth(res.report.id, pass);
+      setPaintUndoStack((prev) => [
+        ...prev,
+        { id: res.report.id, passcode: pass, title: res.report.title },
+      ]);
+      await handleRoadClosuresChanged();
+      setPaintErrorText(null);
+      setPaintStatusText(
+        `✓ ${params.roadName} を通行止めに反映しました（${params.edgeIds.length}区間・管理番号:${pass}）`
+      );
+    },
+    [paintCauseIdx, handleRoadClosuresChanged]
+  );
+
+  const handleClickRoadFeatureInPaint = useCallback(
+    async (hit: {
+      edgeId: number | null;
+      roadName: string;
+      lat: number;
+      lon: number;
+      isBlocked: boolean;
+    }) => {
+      if (paintBusy) return;
+      if (roadPaintTool === "click" && hit.isBlocked && hit.edgeId != null) {
+        const authMap = readLocalReportAuth();
+        const owned = reports.find(
+          (r) =>
+            !r.resolved &&
+            !r.is_sample &&
+            r.category === "road_blocked" &&
+            Boolean(authMap[r.id]) &&
+            Array.isArray(r.blocked_edge_ids) &&
+            r.blocked_edge_ids.includes(hit.edgeId!)
+        );
+        if (owned) {
+          setPaintBusy(true);
+          try {
+            await deleteDamageReport(owned.id, authMap[owned.id]);
+            setPaintUndoStack((prev) => prev.filter((item) => item.id !== owned.id));
+            await handleRoadClosuresChanged();
+            setPaintErrorText(null);
+            setPaintStatusText(`🔓 通行止めを解除しました: ${hit.roadName}`);
+          } catch (err) {
+            setPaintErrorText(
+              err instanceof Error ? err.message : "通行止めの解除に失敗しました。"
+            );
+          } finally {
+            setPaintBusy(false);
+          }
+          return;
+        }
+        setPaintErrorText(
+          `${hit.roadName} は既存または訓練用サンプルの通行止めです（「戻す」または地図の赤マーカーから確認/解除できます）。`
+        );
+        return;
+      }
+
+      if (!requirePaintConsent()) return;
+
+      if (roadPaintTool === "corridor") {
+        if (!corridorStart) {
+          setCorridorStart({ lat: hit.lat, lon: hit.lon, label: hit.roadName });
+          setPaintErrorText(null);
+          setPaintStatusText(`始点(S)を設定: ${hit.roadName} → 終点の道路をクリックしてください`);
+          return;
+        }
+        setPaintBusy(true);
+        setPaintErrorText(null);
+        try {
+          const corr = await resolveRoadCorridor({
+            startLat: corridorStart.lat,
+            startLon: corridorStart.lon,
+            endLat: hit.lat,
+            endLon: hit.lon,
+          });
+          setCorridorStart(null);
+          if (!corr.matched || corr.edge_ids.length === 0) {
+            setPaintErrorText("始点〜終点間の道路区間を取得できませんでした。近づけてやり直してください。");
+            return;
+          }
+          await saveRoadClosureSelection({
+            edgeIds: corr.edge_ids,
+            roadName: corr.road_name,
+            wardName: corr.ward_name,
+            meshcode: corr.meshcode,
+            lat: corr.snap_lat,
+            lon: corr.snap_lon,
+            sourceTag: "始点→終点区間選択",
+          });
+        } catch (err) {
+          setCorridorStart(null);
+          setPaintErrorText(
+            err instanceof Error ? err.message : "区間通行止めの設定に失敗しました。"
+          );
+        } finally {
+          setPaintBusy(false);
+        }
+        return;
+      }
+
+      // Single-click instant road block ("click")
+      setPaintBusy(true);
+      setPaintErrorText(null);
+      try {
+        const snapped = await snapRoadInfo(hit.lat, hit.lon);
+        const exactIds =
+          hit.edgeId != null
+            ? [hit.edgeId]
+            : snapped.edge_id != null
+              ? [snapped.edge_id]
+              : snapped.edge_ids ?? [];
+        if (exactIds.length === 0) {
+          setPaintErrorText("水色に光る道路の上をクリックしてください。");
+          return;
+        }
+        await saveRoadClosureSelection({
+          edgeIds: exactIds,
+          roadName: snapped.matched ? snapped.road_name : hit.roadName,
+          wardName: snapped.ward_name,
+          meshcode: snapped.meshcode,
+          lat: snapped.snap_lat,
+          lon: snapped.snap_lon,
+          sourceTag: "道路クリック選択",
+        });
+      } catch (err) {
+        setPaintErrorText(err instanceof Error ? err.message : "道路通行止めの設定に失敗しました。");
+      } finally {
+        setPaintBusy(false);
+      }
+    },
+    [
+      paintBusy,
+      roadPaintTool,
+      reports,
+      corridorStart,
+      requirePaintConsent,
+      saveRoadClosureSelection,
+      handleRoadClosuresChanged,
+    ]
+  );
+
+  const handlePaintRoadStroke = useCallback(
+    async (points: Array<{ lat: number; lon: number }>) => {
+      if (paintBusy || points.length === 0) return;
+      if (!requirePaintConsent()) return;
+      setPaintBusy(true);
+      setPaintErrorText(null);
+      try {
+        const strokeRes = await resolveRoadStroke(points);
+        if (!strokeRes.matched || strokeRes.edge_ids.length === 0) {
+          setPaintErrorText("なぞった線の近くに道路が見つかりませんでした。もう少し大きく拡大してなぞってください。");
+          return;
+        }
+        await saveRoadClosureSelection({
+          edgeIds: strokeRes.edge_ids,
+          roadName: strokeRes.road_name,
+          wardName: strokeRes.ward_name,
+          meshcode: strokeRes.meshcode,
+          lat: strokeRes.snap_lat,
+          lon: strokeRes.snap_lon,
+          sourceTag: "Canvasなぞり選択",
+        });
+      } catch (err) {
+        setPaintErrorText(
+          err instanceof Error ? err.message : "なぞり描画による通行止め設定に失敗しました。"
+        );
+      } finally {
+        setPaintBusy(false);
+      }
+    },
+    [paintBusy, requirePaintConsent, saveRoadClosureSelection]
+  );
+
+  const handleUndoLastPaintedClosure = useCallback(async () => {
+    if (paintBusy || paintUndoStack.length === 0) return;
+    const last = paintUndoStack[paintUndoStack.length - 1];
+    setPaintBusy(true);
+    try {
+      await deleteDamageReport(last.id, last.passcode);
+      setPaintUndoStack((prev) => prev.slice(0, -1));
+      await handleRoadClosuresChanged();
+      setPaintErrorText(null);
+      setPaintStatusText(`↩ 直前の通行止めを取り消しました: ${last.title}`);
+    } catch (err) {
+      setPaintErrorText(err instanceof Error ? err.message : "取り消しに失敗しました。");
+    } finally {
+      setPaintBusy(false);
+    }
+  }, [paintBusy, paintUndoStack, handleRoadClosuresChanged]);
+
   const handleReportBuilding = useCallback((building: BuildingDetail) => {
     setPickedReportTarget({
       lat: building.centroid_lat,
@@ -791,8 +1056,15 @@ export default function HomePage() {
         mapPickMode={mapPickMode}
         pickedCoords={pickedReportTarget}
         previewRoadSegments={snappedRoadTarget?.preview_segments ?? null}
+        roadPaintTool={roadPaintTool}
+        corridorStart={corridorStart}
+        avoidUnverifiedRoads={true}
+        includeSampleReports={includeSamples}
         onCancelPickMode={() => setMapPickMode("none")}
         onMapPicked={(target) => void handleMapPicked(target)}
+        onClickRoadFeature={(hit) => void handleClickRoadFeatureInPaint(hit)}
+        onPaintRoadStroke={(pts) => void handlePaintRoadStroke(pts)}
+        onZoomChange={(z) => setCurrentMapZoom(z)}
         onSelectBuilding={(id) => void handleSelectBuilding(id)}
         onSelectMesh={(mc) => void handleSelectMesh(mc)}
         onSelectReport={handleSelectReportFromMap}
@@ -975,8 +1247,10 @@ export default function HomePage() {
                 onStartPickRoadBlock={() => {
                   setShowRoadClosures(true);
                   setSnappedRoadTarget(null);
+                  setRoadPaintTool("none");
                   setMapPickMode("road_block");
                 }}
+                onOpenRoadPaintMode={openRoadPaintMode}
                 onClearRoadBlockTarget={() => setSnappedRoadTarget(null)}
                 onCancelPick={() => setMapPickMode("none")}
                 onChangeRouteResult={(res, params) => {
@@ -1085,15 +1359,11 @@ export default function HomePage() {
               <button
                 type="button"
                 data-testid="summary-road-block-btn"
-                onClick={() => {
-                  setShowRoadClosures(true);
-                  setSnappedRoadTarget(null);
-                  setMapPickMode("road_block");
-                }}
-                className="inline-flex items-center gap-1 rounded-lg border border-rose-500/50 bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-100 hover:bg-rose-500/35"
+                onClick={() => openRoadPaintMode("click")}
+                className="inline-flex items-center gap-1 rounded-lg border border-cyan-500/50 bg-cyan-500/20 px-2.5 py-1 text-[11px] font-bold text-cyan-100 hover:bg-cyan-500/35"
               >
                 <Ban className="h-3 w-3 text-rose-300" />
-                道路被害設定
+                道路を描く・選択
               </button>
               <button
                 type="button"
@@ -1154,6 +1424,55 @@ export default function HomePage() {
         onOpenReportForMesh={handleOpenReportForMesh}
         onRequestAiExplain={handleRequestAiExplain}
       />
+
+      {/* Floating Interactive Road Damage Paint Toolbar */}
+      {roadPaintTool !== "none" && (
+        <RoadDamageToolbar
+          tool={roadPaintTool}
+          onChangeTool={(nextTool) => {
+            setCorridorStart(null);
+            setPaintErrorText(null);
+            setRoadPaintTool(nextTool);
+          }}
+          causeIdx={paintCauseIdx}
+          onChangeCauseIdx={setPaintCauseIdx}
+          locationConsent={paintConsent}
+          onChangeConsent={(val) => {
+            setPaintConsent(val);
+            if (val) {
+              setPaintConsentHighlight(false);
+              setPaintErrorText(null);
+            }
+          }}
+          consentHighlight={paintConsentHighlight}
+          corridorStart={corridorStart}
+          onClearCorridorStart={() => {
+            setCorridorStart(null);
+            setPaintStatusText(null);
+          }}
+          undoCount={paintUndoStack.length}
+          onUndoLastClosure={() => void handleUndoLastPaintedClosure()}
+          busy={paintBusy}
+          statusText={paintStatusText}
+          errorText={paintErrorText}
+          mapZoom={currentMapZoom}
+          drawerOpen={activePanel !== "none"}
+          onZoomIn={() => {
+            const center =
+              corridorStart ||
+              (selectedWard !== "all" && WARD_CENTERS[selectedWard]) || {
+                lat: 34.974,
+                lon: 135.762,
+              };
+            setFlyToTarget({ lon: center.lon, lat: center.lat, zoom: 14.5, ts: Date.now() });
+          }}
+          onClose={() => {
+            setRoadPaintTool("none");
+            setCorridorStart(null);
+            setPaintErrorText(null);
+          }}
+        />
+      )}
 
       {/* Sources Modal */}
       <SourcesModal open={sourcesOpen} onClose={() => setSourcesOpen(false)} metadata={metadata} />

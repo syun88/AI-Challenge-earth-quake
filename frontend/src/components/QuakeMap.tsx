@@ -9,7 +9,7 @@ import {
   REPORT_CATEGORY_META,
   VERIFICATION_META,
 } from "@/lib/colors";
-import { API_BASE, getBuildingsCountInBbox } from "@/lib/api";
+import { API_BASE, getBuildingsCountInBbox, getRoadsInBbox } from "@/lib/api";
 import {
   AgeCategory,
   BoardSummaryResponse,
@@ -19,6 +19,7 @@ import {
   MeshOverlayMode,
   NetworkEdgeFeature,
   NetworkStatusResponse,
+  RoadPaintTool,
   RouteSimulationResponse,
   ShelterHub,
   UsageGroup,
@@ -97,8 +98,20 @@ interface QuakeMapProps {
   mapPickMode: MapPickMode;
   pickedCoords: { lat: number; lon: number } | null;
   previewRoadSegments?: [number, number][][] | null;
+  roadPaintTool?: RoadPaintTool;
+  corridorStart?: { lat: number; lon: number; label?: string } | null;
+  avoidUnverifiedRoads?: boolean;
+  includeSampleReports?: boolean;
   onCancelPickMode: () => void;
   onMapPicked: (target: PickedMapTarget) => void;
+  onClickRoadFeature?: (hit: {
+    edgeId: number | null;
+    roadName: string;
+    lat: number;
+    lon: number;
+    isBlocked: boolean;
+  }) => void;
+  onPaintRoadStroke?: (points: Array<{ lat: number; lon: number }>) => void;
   onSelectBuilding: (buildingId: string) => void;
   onSelectMesh: (meshcode: string) => void;
   onSelectReport: (report: DamageReport) => void;
@@ -137,8 +150,14 @@ export function QuakeMap({
   mapPickMode,
   pickedCoords,
   previewRoadSegments,
+  roadPaintTool = "none",
+  corridorStart = null,
+  avoidUnverifiedRoads = true,
+  includeSampleReports = true,
   onCancelPickMode,
   onMapPicked,
+  onClickRoadFeature,
+  onPaintRoadStroke,
   onSelectBuilding,
   onSelectMesh,
   onSelectReport,
@@ -150,9 +169,14 @@ export function QuakeMap({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const countReqSeqRef = useRef(0);
+  const roadsReqSeqRef = useRef(0);
+  const hoverEdgeIdRef = useRef<number>(-1);
+  const brushCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const brushDrawingRef = useRef(false);
+  const brushPointsRef = useRef<Array<{ x: number; y: number }>>([]);
   const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(14.8);
+  const [zoom, setZoom] = useState(12.6);
   const [hoverInfo, setHoverInfo] = useState<string | null>(null);
 
   const damagedBuildingIds = useMemo(() => {
@@ -193,6 +217,8 @@ export function QuakeMap({
     onSelectBuilding,
     onSelectMesh,
     onMapPicked,
+    onClickRoadFeature,
+    onPaintRoadStroke,
     onSelectReport,
     onSelectBlockedRoad,
     onSelectShelterHub,
@@ -204,6 +230,8 @@ export function QuakeMap({
       onSelectBuilding,
       onSelectMesh,
       onMapPicked,
+      onClickRoadFeature,
+      onPaintRoadStroke,
       onSelectReport,
       onSelectBlockedRoad,
       onSelectShelterHub,
@@ -214,6 +242,8 @@ export function QuakeMap({
     onSelectBuilding,
     onSelectMesh,
     onMapPicked,
+    onClickRoadFeature,
+    onPaintRoadStroke,
     onSelectReport,
     onSelectBlockedRoad,
     onSelectShelterHub,
@@ -221,14 +251,36 @@ export function QuakeMap({
     onZoomChange,
   ]);
 
+  const roadPaintToolRef = useRef<RoadPaintTool>(roadPaintTool);
+  useEffect(() => {
+    const wasNone = roadPaintToolRef.current === "none";
+    roadPaintToolRef.current = roadPaintTool;
+    const map = mapRef.current;
+    if (map && wasNone && roadPaintTool !== "none" && map.getZoom() < 13.5) {
+      map.easeTo({ zoom: 14.4, duration: 480 });
+    }
+  }, [roadPaintTool]);
+
   const pickModeRef = useRef<MapPickMode>(mapPickMode);
   useEffect(() => {
     pickModeRef.current = mapPickMode;
     const map = mapRef.current;
     if (map) {
-      map.getCanvas().style.cursor = mapPickMode !== "none" ? "crosshair" : "";
+      map.getCanvas().style.cursor =
+        mapPickMode !== "none" || roadPaintToolRef.current !== "none" ? "crosshair" : "";
     }
   }, [mapPickMode]);
+
+  const paintQueryOptsRef = useRef({
+    avoidUnverified: avoidUnverifiedRoads,
+    includeSamples: includeSampleReports,
+  });
+  useEffect(() => {
+    paintQueryOptsRef.current = {
+      avoidUnverified: avoidUnverifiedRoads,
+      includeSamples: includeSampleReports,
+    };
+  }, [avoidUnverifiedRoads, includeSampleReports]);
 
   const meshesRef = useRef<GeoJSON.FeatureCollection | null>(meshesGeoJson);
   useEffect(() => {
@@ -246,6 +298,7 @@ export function QuakeMap({
   const safetyMarkersRef = useRef<maplibregl.Marker[]>([]);
   const routeMarkersRef = useRef<maplibregl.Marker[]>([]);
   const pickMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const corridorStartMarkerRef = useRef<maplibregl.Marker | null>(null);
 
   const fetchBuildingsForCurrentView = useCallback(async () => {
     const map = mapRef.current;
@@ -273,6 +326,30 @@ export function QuakeMap({
       );
       if (seq !== countReqSeqRef.current) return;
       callbacksRef.current.onZoomChange?.(currentZoom, res.total_matching);
+    } catch {
+      // ignore transient abort
+    }
+  }, []);
+
+  const fetchInteractiveRoadsForCurrentView = useCallback(async () => {
+    const map = mapRef.current;
+    if (!map || !map.getSource("interactive-roads")) return;
+    if (roadPaintToolRef.current === "none" || map.getZoom() < 12.2) {
+      const src = map.getSource("interactive-roads") as maplibregl.GeoJSONSource | undefined;
+      src?.setData(EMPTY_FC);
+      return;
+    }
+    const b = map.getBounds();
+    const seq = ++roadsReqSeqRef.current;
+    try {
+      const fc = await getRoadsInBbox({
+        bbox: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()],
+        includeSamples: paintQueryOptsRef.current.includeSamples,
+        avoidUnverified: paintQueryOptsRef.current.avoidUnverified,
+      });
+      if (seq !== roadsReqSeqRef.current) return;
+      const src = map.getSource("interactive-roads") as maplibregl.GeoJSONSource | undefined;
+      src?.setData(fc as unknown as GeoJSON.FeatureCollection);
     } catch {
       // ignore transient abort
     }
@@ -545,6 +622,36 @@ export function QuakeMap({
         },
       });
 
+      // Interactive selectable street highlight layers (glowing cyan when road-paint mode active)
+      map.addSource("interactive-roads", { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: "interactive-roads-hit",
+        type: "line",
+        source: "interactive-roads",
+        layout: { "line-join": "round", "line-cap": "round", visibility: "none" },
+        paint: {
+          "line-color": "#22d3ee",
+          "line-width": 18,
+          "line-opacity": 0.01,
+        },
+      });
+      map.addLayer({
+        id: "interactive-roads-base",
+        type: "line",
+        source: "interactive-roads",
+        layout: { "line-join": "round", "line-cap": "round", visibility: "none" },
+        paint: {
+          "line-color": [
+            "case",
+            ["==", ["get", "status"], "blocked"],
+            "#fb7185",
+            "#22d3ee",
+          ],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 13, 2.5, 16, 4.5],
+          "line-opacity": 0.65,
+        },
+      });
+
       // Real Kyoto street-segment road closure highlight layers
       map.addSource("network-blocked", { type: "geojson", data: EMPTY_FC });
       map.addLayer({
@@ -568,6 +675,32 @@ export function QuakeMap({
           "line-width": 2.4,
           "line-dasharray": [1.5, 1.5],
           "line-opacity": 0.95,
+        },
+      });
+
+      // Vivid gold hover glow when cursor moves over selectable streets
+      map.addLayer({
+        id: "interactive-roads-hover-glow",
+        type: "line",
+        source: "interactive-roads",
+        filter: ["==", ["get", "edge_id"], -1],
+        layout: { "line-join": "round", "line-cap": "round", visibility: "none" },
+        paint: {
+          "line-color": "#facc15",
+          "line-width": 13,
+          "line-opacity": 0.55,
+        },
+      });
+      map.addLayer({
+        id: "interactive-roads-hover-core",
+        type: "line",
+        source: "interactive-roads",
+        filter: ["==", ["get", "edge_id"], -1],
+        layout: { "line-join": "round", "line-cap": "round", visibility: "none" },
+        paint: {
+          "line-color": "#fef08a",
+          "line-width": 5,
+          "line-opacity": 1,
         },
       });
 
@@ -673,6 +806,21 @@ export function QuakeMap({
 
       // Unified Click Handler
       map.on("click", (e) => {
+        if (roadPaintToolRef.current === "click" || roadPaintToolRef.current === "corridor") {
+          const rHits = map.queryRenderedFeatures(e.point, {
+            layers: ["interactive-roads-hit", "interactive-roads-base"],
+          });
+          const rp = rHits[0]?.properties || null;
+          callbacksRef.current.onClickRoadFeature?.({
+            edgeId: rp?.edge_id != null ? Number(rp.edge_id) : null,
+            roadName: rp?.name ? String(rp.name) : "周辺道路",
+            lat: Number(e.lngLat.lat.toFixed(5)),
+            lon: Number(e.lngLat.lng.toFixed(5)),
+            isBlocked: rp?.status === "blocked",
+          });
+          return;
+        }
+
         if (pickModeRef.current !== "none") {
           const bHits = map.queryRenderedFeatures(e.point, {
             layers: ["buildings-fill", "buildings-outline", "buildings-3d"],
@@ -729,6 +877,35 @@ export function QuakeMap({
       });
 
       map.on("mousemove", (e) => {
+        if (roadPaintToolRef.current === "click" || roadPaintToolRef.current === "corridor") {
+          const rHits = map.queryRenderedFeatures(e.point, {
+            layers: ["interactive-roads-hit", "interactive-roads-base"],
+          });
+          const rp = rHits[0]?.properties || null;
+          const eid = rp?.edge_id != null ? Number(rp.edge_id) : -1;
+          if (hoverEdgeIdRef.current !== eid) {
+            hoverEdgeIdRef.current = eid;
+            if (map.getLayer("interactive-roads-hover-glow")) {
+              map.setFilter("interactive-roads-hover-glow", ["==", ["get", "edge_id"], eid]);
+            }
+            if (map.getLayer("interactive-roads-hover-core")) {
+              map.setFilter("interactive-roads-hover-core", ["==", ["get", "edge_id"], eid]);
+            }
+          }
+          map.getCanvas().style.cursor = eid >= 0 ? "pointer" : "crosshair";
+          if (rp && eid >= 0) {
+            const actionHint =
+              roadPaintToolRef.current === "corridor"
+                ? "クリックして始点/終点に指定"
+                : rp.status === "blocked"
+                  ? "通行止め中（クリックで状況確認/解除）"
+                  : "クリックで即・通行止めに設定";
+            setHoverInfo(`✨ ${rp.name || "京都市街路"} (${rp.length_m ?? "—"}m) — ${actionHint}`);
+          } else {
+            setHoverInfo("水色に光る道路の上にカーソルを合わせてクリックしてください");
+          }
+          return;
+        }
         if (pickModeRef.current !== "none") {
           map.getCanvas().style.cursor = "crosshair";
           return;
@@ -766,12 +943,18 @@ export function QuakeMap({
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
           fetchBuildingsForCurrentView();
+          if (roadPaintToolRef.current !== "none") {
+            fetchInteractiveRoadsForCurrentView();
+          }
         }, 150);
       });
 
       map.resize();
       setMapReady(true);
       fetchBuildingsForCurrentView();
+      if (roadPaintToolRef.current !== "none") {
+        fetchInteractiveRoadsForCurrentView();
+      }
     };
 
     map.on("error", (e) => {
@@ -802,7 +985,7 @@ export function QuakeMap({
       map.remove();
       mapRef.current = null;
     };
-  }, [fetchBuildingsForCurrentView]);
+  }, [fetchBuildingsForCurrentView, fetchInteractiveRoadsForCurrentView]);
 
   // Update 250m meshes
   useEffect(() => {
@@ -1337,6 +1520,91 @@ export function QuakeMap({
     });
   }, [previewRoadSegments, mapReady]);
 
+  // Interactive road paint visibility, hover reset, dragPan lock for Canvas brush & reload on road update
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+
+    const isInteractive = roadPaintTool !== "none";
+    const vis = isInteractive ? "visible" : "none";
+    for (const lid of [
+      "interactive-roads-hit",
+      "interactive-roads-base",
+      "interactive-roads-hover-glow",
+      "interactive-roads-hover-core",
+    ]) {
+      if (map.getLayer(lid)) {
+        map.setLayoutProperty(lid, "visibility", vis);
+      }
+    }
+
+    if (roadPaintTool === "brush") {
+      map.dragPan.disable();
+      map.doubleClickZoom.disable();
+    } else {
+      map.dragPan.enable();
+      map.doubleClickZoom.enable();
+    }
+
+    if (!isInteractive || roadPaintTool === "brush") {
+      hoverEdgeIdRef.current = -1;
+      if (map.getLayer("interactive-roads-hover-glow")) {
+        map.setFilter("interactive-roads-hover-glow", ["==", ["get", "edge_id"], -1]);
+      }
+      if (map.getLayer("interactive-roads-hover-core")) {
+        map.setFilter("interactive-roads-hover-core", ["==", ["get", "edge_id"], -1]);
+      }
+      if (!isInteractive) {
+        const src = map.getSource("interactive-roads") as maplibregl.GeoJSONSource | undefined;
+        src?.setData(EMPTY_FC);
+        map.getCanvas().style.cursor = pickModeRef.current !== "none" ? "crosshair" : "";
+        queueMicrotask(() => setHoverInfo(null));
+        return;
+      }
+    }
+
+    map.getCanvas().style.cursor = "crosshair";
+    fetchInteractiveRoadsForCurrentView();
+  }, [
+    roadPaintTool,
+    networkStatus,
+    avoidUnverifiedRoads,
+    includeSampleReports,
+    mapReady,
+    fetchInteractiveRoadsForCurrentView,
+  ]);
+
+  // Corridor Start point marker when using 2-step Start->End selection
+  useEffect(() => {
+    corridorStartMarkerRef.current?.remove();
+    corridorStartMarkerRef.current = null;
+    const map = mapRef.current;
+    if (!map || !mapReady || !corridorStart) return;
+    const el = document.createElement("div");
+    el.className =
+      "flex items-center gap-1 rounded-full border-2 border-white bg-amber-500 px-2 py-0.5 text-[11px] font-extrabold text-slate-950 shadow-xl animate-pulse";
+    el.textContent = "S 始点";
+    corridorStartMarkerRef.current = new maplibregl.Marker({ element: el, anchor: "center" })
+      .setLngLat([corridorStart.lon, corridorStart.lat])
+      .addTo(map);
+    return () => {
+      corridorStartMarkerRef.current?.remove();
+      corridorStartMarkerRef.current = null;
+    };
+  }, [corridorStart, mapReady]);
+
+  // Clear Canvas stroke if exiting brush mode
+  useEffect(() => {
+    if (roadPaintTool !== "brush" && brushCanvasRef.current) {
+      const ctx = brushCanvasRef.current.getContext("2d");
+      if (ctx) {
+        ctx.clearRect(0, 0, brushCanvasRef.current.width, brushCanvasRef.current.height);
+      }
+      brushDrawingRef.current = false;
+      brushPointsRef.current = [];
+    }
+  }, [roadPaintTool]);
+
   // Navigation Route Lines + Start/End Pins
   useEffect(() => {
     const map = mapRef.current;
@@ -1410,7 +1678,7 @@ export function QuakeMap({
       ...routeResult.baseline_route.coordinates,
       ...routeResult.alternative_route.coordinates,
     ];
-    if (coords.length >= 2) {
+    if (coords.length >= 2 && roadPaintToolRef.current === "none") {
       const bounds = new maplibregl.LngLatBounds(coords[0], coords[0]);
       for (const c of coords) bounds.extend(c);
       map.fitBounds(bounds, {
@@ -1425,6 +1693,104 @@ export function QuakeMap({
       });
     }
   }, [routeResult, mapReady]);
+
+  const drawBrushCanvasSegment = useCallback(
+    (from: { x: number; y: number }, to: { x: number; y: number }) => {
+      const canvas = brushCanvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = "rgba(239, 68, 68, 0.45)";
+      ctx.lineWidth = 22;
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(250, 204, 21, 0.95)";
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+    },
+    []
+  );
+
+  const handleBrushPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = brushCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const dpr = typeof window !== "undefined" ? Math.min(2, window.devicePixelRatio || 1) : 1;
+    const w = Math.max(1, Math.round(rect.width * dpr));
+    const h = Math.max(1, Math.round(rect.height * dpr));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, rect.width, rect.height);
+    }
+    const pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    brushDrawingRef.current = true;
+    brushPointsRef.current = [pt];
+    drawBrushCanvasSegment(pt, { x: pt.x + 0.5, y: pt.y + 0.5 });
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore synthetic events without active pointerId
+    }
+  }, [drawBrushCanvasSegment]);
+
+  const handleBrushPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!brushDrawingRef.current || !brushCanvasRef.current) return;
+    const rect = brushCanvasRef.current.getBoundingClientRect();
+    const pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const pts = brushPointsRef.current;
+    const prev = pts[pts.length - 1];
+    if (prev && Math.hypot(pt.x - prev.x, pt.y - prev.y) < 5) return;
+    pts.push(pt);
+    if (prev) drawBrushCanvasSegment(prev, pt);
+  }, [drawBrushCanvasSegment]);
+
+  const finishBrushStroke = useCallback(() => {
+    if (!brushDrawingRef.current) return;
+    brushDrawingRef.current = false;
+    const map = mapRef.current;
+    const rawPts = brushPointsRef.current;
+    brushPointsRef.current = [];
+    if (!map || rawPts.length === 0) return;
+
+    // Subsample evenly if stroke is very long
+    const step = rawPts.length > 220 ? Math.ceil(rawPts.length / 220) : 1;
+    const sampled: Array<{ lat: number; lon: number }> = [];
+    for (let i = 0; i < rawPts.length; i += step) {
+      const ll = map.unproject([rawPts[i].x, rawPts[i].y]);
+      sampled.push({ lat: Number(ll.lat.toFixed(6)), lon: Number(ll.lng.toFixed(6)) });
+    }
+    const last = rawPts[rawPts.length - 1];
+    const lastLl = map.unproject([last.x, last.y]);
+    if (
+      sampled.length === 0 ||
+      sampled[sampled.length - 1].lat !== Number(lastLl.lat.toFixed(6)) ||
+      sampled[sampled.length - 1].lon !== Number(lastLl.lng.toFixed(6))
+    ) {
+      sampled.push({ lat: Number(lastLl.lat.toFixed(6)), lon: Number(lastLl.lng.toFixed(6)) });
+    }
+    callbacksRef.current.onPaintRoadStroke?.(sampled);
+
+    const canvas = brushCanvasRef.current;
+    setTimeout(() => {
+      if (!brushDrawingRef.current && canvas) {
+        const ctx = canvas.getContext("2d");
+        ctx?.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }, 350);
+  }, []);
 
   const pickPrompt =
     mapPickMode === "road_block"
@@ -1443,6 +1809,18 @@ export function QuakeMap({
         ref={containerRef}
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
       />
+
+      {roadPaintTool === "brush" && (
+        <canvas
+          ref={brushCanvasRef}
+          data-testid="road-brush-canvas"
+          onPointerDown={handleBrushPointerDown}
+          onPointerMove={handleBrushPointerMove}
+          onPointerUp={finishBrushStroke}
+          onPointerCancel={finishBrushStroke}
+          className="absolute inset-0 z-20 h-full w-full cursor-crosshair touch-none"
+        />
+      )}
 
       {mapError && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/90 p-6 text-center text-sm text-rose-200">

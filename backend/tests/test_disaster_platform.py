@@ -545,3 +545,97 @@ def test_ai_aggregation_grounding_and_route_simulation(isolated_env, monkeypatch
     assert r_road_res.status_code == 200
     r_net_reopened = client.get("/api/network/status?include_samples=true")
     assert not any(cm["id"] == road_rep_id for cm in r_net_reopened.json().get("closure_markers", []))
+
+
+def test_interactive_roads_corridor_stroke_and_consent(isolated_env) -> None:
+    client, _, _, _ = isolated_env
+
+    # 1) Bbox road listing returns GeoJSON FeatureCollection with edge_id & status
+    r_bbox = client.get("/api/network/roads?bbox=135.752,34.930,135.764,34.940")
+    assert r_bbox.status_code == 200
+    bbox_fc = r_bbox.json()
+    assert bbox_fc["type"] == "FeatureCollection"
+    assert bbox_fc["count"] >= 20
+    first_feat = bbox_fc["features"][0]
+    assert "edge_id" in first_feat["properties"]
+    assert first_feat["properties"]["status"] in ("open", "blocked")
+    assert first_feat["geometry"]["type"] == "LineString"
+
+    # 2) Start->End corridor resolution & consent guard on blocked_edge_ids
+    r_corr = client.post(
+        "/api/network/corridor",
+        json={
+            "start_lat": 34.9352,
+            "start_lon": 135.7568,
+            "end_lat": 34.9395,
+            "end_lon": 135.7625,
+        },
+    )
+    assert r_corr.status_code == 200
+    corr = r_corr.json()
+    assert corr["matched"] is True
+    assert len(corr["edge_ids"]) >= 3
+    assert len(corr["preview_segments"]) == len(corr["edge_ids"])
+
+    # Submitting blocked_edge_ids without location_consent is rejected
+    r_denied = client.post(
+        "/api/reports",
+        json={
+            "category": "road_blocked",
+            "severity": "critical",
+            "title": "同意なし区間テスト",
+            "description": "同意なしで拒否されること",
+            "ward_name": corr["ward_name"],
+            "location_consent": False,
+            "blocked_edge_ids": corr["edge_ids"],
+        },
+    )
+    assert r_denied.status_code == 400
+
+    # With explicit location_consent=True, all edge_ids in the corridor become blocked
+    r_corr_rep = client.post(
+        "/api/reports",
+        json={
+            "category": "road_blocked",
+            "severity": "critical",
+            "title": f"{corr['road_name']} 区間通行止め",
+            "description": "始点・終点区間選択による道路閉鎖テスト",
+            "ward_name": corr["ward_name"],
+            "lat": corr["snap_lat"],
+            "lon": corr["snap_lon"],
+            "location_consent": True,
+            "blocked_edge_ids": corr["edge_ids"],
+            "passcode": "5544",
+            "force_duplicate": True,
+        },
+    )
+    assert r_corr_rep.status_code == 200
+    corr_rep = r_corr_rep.json()["report"]
+    assert corr_rep["verification_status"] == "unverified"
+    assert corr_rep["blocked_edge_ids"] == corr["edge_ids"]
+
+    r_status = client.get("/api/network/status?include_samples=true")
+    blocked_ids_in_status = {e["edge_id"] for e in r_status.json()["edges"]}
+    assert set(corr["edge_ids"]).issubset(blocked_ids_in_status)
+
+    # 3) Canvas freehand stroke resolution matches touched streets
+    r_stroke = client.post(
+        "/api/network/stroke",
+        json={
+            "points": [
+                {"lat": 34.9310, "lon": 135.7550},
+                {"lat": 34.9316, "lon": 135.7565},
+                {"lat": 34.9322, "lon": 135.7580},
+            ]
+        },
+    )
+    assert r_stroke.status_code == 200
+    stroke = r_stroke.json()
+    assert stroke["matched"] is True
+    assert len(stroke["edge_ids"]) >= 1
+    assert len(stroke["preview_segments"]) >= 1
+
+    # Delete corridor report restores clear state
+    assert client.delete(f"/api/reports/{corr_rep['id']}?passcode=5544").status_code == 200
+    r_status_clean = client.get("/api/network/status?include_samples=true")
+    assert not any(cm["id"] == corr_rep["id"] for cm in r_status_clean.json()["closure_markers"])
