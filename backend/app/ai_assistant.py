@@ -6,26 +6,38 @@ import json
 import os
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import urlencode
 
 from google import genai
 
-from app.constants import OFFICIAL_RETROFIT_PROGRAMS, WARD_NAMES
+from app.board_store import DisasterBoardStore
+from app.constants import (
+    OFFICIAL_RETROFIT_PROGRAMS,
+    REPORT_CATEGORY_LABELS,
+    ROUTE_SIMULATION_DISCLAIMER,
+    WARD_NAMES,
+)
 from app.data_store import QuakeLensDataStore
 from app.grounding import verify_grounded_response
+from app.reports_store import DamageReportStore
+from app.route_sim import ARTERIAL_NODES, simulate_alternative_route
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 ALLOWED_MODELS = {"gemini-3.5-flash-lite", "gemini-4-hydrogen", "gemini-4-argon"}
 
-SYSTEM_INSTRUCTION = """あなたは「QuakeLens Japan」の防災データ解説AIアシスタントです。
-対象地域は京都市全域（Project PLATEAU 2025年度版 + J-SHIS 2024年版地震ハザード・表層地盤V4）です。
+SYSTEM_INSTRUCTION = """あなたは「QuakeLens Japan」の統合防災・災害状況分析AIアシスタントです。
+対象地域は京都市全域（Project PLATEAU 2025年度版 + J-SHIS 2024年版地震ハザード・表層地盤V4 + 災害用伝言板 + 被害状況報告）です。
 
 【厳守事項】
-1. 建物棟数、割合、ハザード確率、増幅率(ARV)、メッシュコード、区別数値、地震履歴、公式補助制度URLを回答する際は、必ず事前に用意されたFunction Callingツールを呼び出し、返却された実データのみに基づいて回答してください。
-2. 実データにない数値・住所・確率・URLを絶対に推測・捏造しないでください。データが「不明」または欠損している場合は、その事実と不明件数・割合（分母）を明記してください。
-3. J-SHISの「今後30年間に震度6弱以上となる確率（T30_I55_PS）」等は地震動の確率であり、「建物の倒壊確率」「個別の耐震診断結果」「リアルタイムの地震予知」ではないことを明確に説明してください。
-4. PLATEAUの建築年は「年」単位のため、1981年6月1日（新耐震基準）や2000年6月1日（木造住宅接合部等の規定強化）の前後判定を築年数だけで断定しないでください。
-5. 任意の重み付けスコア等を「公式の危険度」として提示しないでください。
-6. 簡潔でわかりやすく、一般利用者にも直感的に理解できる日本語（見出し・箇条書き・表・太字を活用）で回答してください。
+1. 建物棟数、割合、ハザード確率、増幅率(ARV)、メッシュコード、区別数値、地震履歴、公式補助制度URL、災害用伝言板の安否件数、被害状況報告の件数・内容、代替経路計算結果を回答する際は、必ず事前に用意されたFunction Callingツールを呼び出し、返却された実データのみに基づいて回答してください。
+2. 実データにない数値・住所・確率・URL・報告IDを絶対に推測・捏造しないでください。データが「不明」または0件の場合は、その事実と分母をそのまま伝えてください。
+3. **未確認情報・訓練サンプルの区別（最重要）**:
+   - 市民投稿による被害報告（`verification_status == "unverified"`）は**「未確認の市民報告」**であり、確定事実や公式発表として絶対に断定しないでください。
+   - 訓練用データ（`is_sample == true` / `verification_status == "demo_sample"`）は**「訓練用サンプル」**として実報告と明確に分けて表記してください。
+4. 個人情報保護のため、安否伝言板の電話番号（常に伏せ字のまま）や個人の詳細位置を推測・公開しないでください。
+5. J-SHISの「今後30年間に震度6弱以上となる確率（T30_I55_PS）」等は地震動の確率であり、「建物の倒壊確率」「個別の耐震診断結果」「リアルタイムの地震予知」ではないことを明記してください。
+6. 代替経路シミュレーション結果を示す場合は、必ず「訓練・研究用の簡易幹線道路モデルであり、実際の通行可否を保証しない」旨を明記してください。
+7. 簡潔でわかりやすく、見出し・箇条書き・表・太字を活用して日本語で回答してください。
 """
 
 TOOLS = [
@@ -164,6 +176,110 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "type": "function",
+        "name": "get_disaster_board_summary",
+        "description": "災害用伝言板（安否確認）の地域別（区別・メッシュ別）および安否区分別の集計と最近の登録状況（伏せ字済み・サンプル/一般区別あり）を取得します。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ward": {
+                    "type": "string",
+                    "description": "絞り込む区名（例: '伏見区'）。全域は 'all'。",
+                },
+                "include_samples": {
+                    "type": "boolean",
+                    "description": "訓練用サンプルを含めるか（デフォルト true）。",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最近の一覧取得件数（最大20）。",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_damage_reports_summary",
+        "description": "利用者が投稿した災害・被害状況報告（建物損傷・道路通行止め・避難所状況・救助支援要請・その他）の区別・カテゴリ別・確認ステータス別（未確認/確認済/公式/訓練サンプル）集計および報告詳細を取得します。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ward": {
+                    "type": "string",
+                    "description": "絞り込む区名（例: '伏見区'）。全域は 'all'。",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "カテゴリ（all, building_damage, road_blocked, shelter_status, rescue_support, other_disaster）",
+                },
+                "verification_status": {
+                    "type": "string",
+                    "description": "確認ステータス（all, unverified, verified, official, demo_sample）",
+                },
+                "include_samples": {
+                    "type": "boolean",
+                    "description": "訓練サンプルを含めるか（デフォルト true）。",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "一覧取得件数（最大30）。",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "type": "function",
+        "name": "prepare_disaster_export",
+        "description": "現在の災害状況（建物リスク・安否集計・被害報告）のCSVまたはExcel（.xlsx）ダウンロードリンクと件数サマリーを生成します。「CSVにまとめて」「Excelで出力して」等の要望時に呼び出します。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ward": {
+                    "type": "string",
+                    "description": "対象区名（例: '伏見区'）。全域は 'all'。",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "被害報告カテゴリ（all, building_damage, road_blocked, shelter_status, rescue_support, other_disaster）",
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "'overview'（統合サマリー+報告詳細）, 'reports'（被害報告のみ）, 'board'（安否伝言板）, 'wards'（区別一覧）",
+                },
+                "include_samples": {
+                    "type": "boolean",
+                    "description": "訓練サンプルを含めるか（デフォルト true）。",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "type": "function",
+        "name": "simulate_alternative_route",
+        "description": "【訓練・研究用シミュレーション】京都市主要幹線モデル上で、登録された道路通行止め報告（road_blocked）を回避する代替経路を探索します。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "origin_id": {
+                    "type": "string",
+                    "description": "出発拠点ID（例: 'kyoto_st', 'takeda_st', 'karasuma_oike'）",
+                },
+                "destination_id": {
+                    "type": "string",
+                    "description": "目的拠点ID（例: 'chushojima', 'yamashina_st', 'fushimi_otesuji'）",
+                },
+                "include_samples": {
+                    "type": "boolean",
+                    "description": "訓練用サンプルの通行止めも含めるか（デフォルト true）",
+                },
+            },
+            "required": ["origin_id", "destination_id"],
+        },
+    },
 ]
 
 
@@ -201,6 +317,19 @@ def _summarize_tool_call(name: str, args: dict[str, Any], result: Any) -> str:
         return f"気象庁 直近地震情報 {len(result.get('earthquakes', []))}件"
     if name == "get_data_methodology_and_programs":
         return "データ出典・指標定義・京都市公式耐震補助制度を取得"
+    if name == "get_disaster_board_summary" and isinstance(result, dict):
+        w = (result.get("scope") or {}).get("ward", "all")
+        w_label = "京都市全域" if w == "all" else f"京都市{w}"
+        return f"災害用伝言板（{w_label}）: 計{result.get('total_entries', 0)}件（市民 {result.get('user_entries_count', 0)}件 / 訓練 {result.get('sample_entries_count', 0)}件）"
+    if name == "get_damage_reports_summary" and isinstance(result, dict):
+        return f"被害状況報告: 継続中{result.get('total_reports', 0)}件（未確認 {result.get('unverified_count', 0)}件 / 確認済・公式 {result.get('verified_count', 0) + result.get('official_count', 0)}件 / 訓練 {result.get('demo_sample_count', 0)}件）"
+    if name == "prepare_disaster_export" and isinstance(result, dict):
+        return f"CSV・Excel出力データを生成（報告 {result.get('report_count', 0)}件・安否 {result.get('board_count', 0)}件）"
+    if name == "simulate_alternative_route" and isinstance(result, dict):
+        alt = result.get("alternative_route") or {}
+        if alt.get("reachable"):
+            return f"代替経路シミュレーション（訓練用）: {alt.get('distance_km')}km（回避箇所 {len(result.get('blocked_segments', []))}区間）"
+        return "代替経路シミュレーション（訓練用）: 回避経路なし"
     return f"{name} 実行完了"
 
 
@@ -260,6 +389,60 @@ def _extract_map_actions(name: str, result: Any) -> list[dict[str, Any]]:
                     "label": f"{w}（1981以前 {row['pre_1981_count']:,}棟）へ移動",
                     "ward": w,
                 })
+    elif name == "get_disaster_board_summary":
+        for row in (result.get("by_ward") or [])[:2]:
+            w = row.get("ward_name")
+            if w and w in WARD_NAMES.values():
+                actions.append({
+                    "type": "fly_to_ward",
+                    "key": f"board_ward:{w}",
+                    "label": f"{w}の安否・地図を確認（{row['total_count']}件）",
+                    "ward": w,
+                })
+    elif name == "get_damage_reports_summary":
+        for rep in (result.get("reports") or [])[:3]:
+            if rep.get("lon") is not None and rep.get("lat") is not None:
+                actions.append({
+                    "type": "focus_report",
+                    "key": f"rep:{rep['id']}",
+                    "label": f"[{rep['verification_label']}] {rep['ward_name']} {rep['category_label']}",
+                    "report_id": rep["id"],
+                    "ward": rep["ward_name"],
+                    "lon": rep["lon"],
+                    "lat": rep["lat"],
+                    "zoom": 15.6,
+                })
+    elif name == "prepare_disaster_export":
+        if result.get("csv_url"):
+            actions.append({
+                "type": "download_export",
+                "key": f"csv:{result['csv_url']}",
+                "label": f"CSVをダウンロード（{result.get('ward', 'all')}）",
+                "url": result["csv_url"],
+                "format": "csv",
+            })
+        if result.get("xlsx_url"):
+            actions.append({
+                "type": "download_export",
+                "key": f"xlsx:{result['xlsx_url']}",
+                "label": f"Excel (.xlsx) をダウンロード",
+                "url": result["xlsx_url"],
+                "format": "xlsx",
+            })
+    elif name == "simulate_alternative_route":
+        ori = result.get("origin") or {}
+        dst = result.get("destination") or {}
+        if ori.get("id") and dst.get("id"):
+            actions.append({
+                "type": "show_route_simulation",
+                "key": f"route:{ori['id']}:{dst['id']}",
+                "label": f"訓練ルート確認: {ori.get('ward')} → {dst.get('ward')}",
+                "origin_id": ori["id"],
+                "destination_id": dst["id"],
+                "lon": dst.get("lon"),
+                "lat": dst.get("lat"),
+                "zoom": 13.5,
+            })
     return actions
 
 
@@ -276,11 +459,29 @@ def _dedupe_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _resolve_board_store(board_store: DisasterBoardStore | None) -> DisasterBoardStore:
+    if board_store is not None:
+        return board_store
+    s = DisasterBoardStore()
+    s.ensure_initialized()
+    return s
+
+
+def _resolve_reports_store(reports_store: DamageReportStore | None) -> DamageReportStore:
+    if reports_store is not None:
+        return reports_store
+    s = DamageReportStore()
+    s.ensure_initialized()
+    return s
+
+
 def _execute_tool(
     store: QuakeLensDataStore,
     name: str,
     args: dict[str, Any] | None,
     earthquakes_cache: list[dict[str, Any]] | None = None,
+    board_store: DisasterBoardStore | None = None,
+    reports_store: DamageReportStore | None = None,
 ) -> Any:
     args = args or {}
     if name == "get_area_statistics":
@@ -376,6 +577,102 @@ def _execute_tool(
             "official_retrofit_programs": OFFICIAL_RETROFIT_PROGRAMS,
         }
 
+    if name == "get_disaster_board_summary":
+        b_store = _resolve_board_store(board_store)
+        ward = args.get("ward") or "all"
+        include_samples = bool(args.get("include_samples", True))
+        limit = min(int(args.get("limit") or 10), 20)
+        summary = b_store.summarize_entries(
+            ward=ward,
+            include_samples=include_samples,
+            store=store,
+        )
+        entries = b_store.list_entries(
+            ward=ward,
+            include_samples=include_samples,
+            limit=limit,
+        )
+        return {
+            **summary,
+            "recent_entries": entries,
+        }
+
+    if name == "get_damage_reports_summary":
+        r_store = _resolve_reports_store(reports_store)
+        ward = args.get("ward") or "all"
+        category = args.get("category") or "all"
+        ver_status = args.get("verification_status") or "all"
+        include_samples = bool(args.get("include_samples", True))
+        limit = min(int(args.get("limit") or 15), 30)
+        summary = r_store.summarize_reports(
+            ward=ward,
+            category=category,
+            include_samples=include_samples,
+            store=store,
+        )
+        reports = r_store.list_reports(
+            ward=ward,
+            category=category,
+            verification_status=ver_status,
+            include_samples=include_samples,
+            include_resolved=False,
+            limit=limit,
+        )
+        return {
+            **summary,
+            "reports": reports,
+        }
+
+    if name == "prepare_disaster_export":
+        b_store = _resolve_board_store(board_store)
+        r_store = _resolve_reports_store(reports_store)
+        ward = args.get("ward") or "all"
+        category = args.get("category") or "all"
+        scope = args.get("scope") or "overview"
+        if scope not in {"overview", "wards", "reports", "board"}:
+            scope = "overview"
+        include_samples = bool(args.get("include_samples", True))
+        params = urlencode({
+            "scope": scope,
+            "ward": ward,
+            "category": category,
+            "include_samples": "true" if include_samples else "false",
+        })
+        r_sum = r_store.summarize_reports(ward=ward, category=category, include_samples=include_samples, store=store)
+        b_sum = b_store.summarize_entries(ward=ward, include_samples=include_samples, store=store)
+        return {
+            "scope": scope,
+            "ward": ward,
+            "category": category,
+            "category_label": REPORT_CATEGORY_LABELS.get(category, "全カテゴリ"),
+            "include_samples": include_samples,
+            "report_count": r_sum["total_reports"],
+            "unverified_report_count": r_sum["unverified_count"],
+            "board_count": b_sum["total_entries"],
+            "csv_url": f"/api/exports/disaster-summary.csv?{params}",
+            "xlsx_url": f"/api/exports/disaster-summary.xlsx?{params}",
+            "note": "未確認の市民報告・訓練サンプルの区分列を保持した状態でCSV/Excelを生成します。",
+        }
+
+    if name == "simulate_alternative_route":
+        r_store = _resolve_reports_store(reports_store)
+        origin_id = str(args.get("origin_id") or "takeda_st")
+        destination_id = str(args.get("destination_id") or "chushojima")
+        include_samples = bool(args.get("include_samples", True))
+        if origin_id not in ARTERIAL_NODES or destination_id not in ARTERIAL_NODES:
+            return {
+                "error": "未知の拠点IDが指定されました。",
+                "available_nodes": list(ARTERIAL_NODES.keys()),
+            }
+        reports = r_store.list_reports(category="road_blocked", include_samples=include_samples, include_resolved=False, limit=100)
+        return simulate_alternative_route(
+            origin_id=origin_id,
+            destination_id=destination_id,
+            reports=reports,
+            include_samples=include_samples,
+            store=store,
+        )
+
     return {"error": f"Unknown tool: {name}"}
 
 
@@ -416,14 +713,24 @@ def _build_correction_prompt(verification: dict[str, Any]) -> str:
     )
 
 
+def _detect_ward_from_message(message: str, fallback_ward: str) -> str:
+    for w in WARD_NAMES.values():
+        if w in message:
+            return w
+    return fallback_ward
+
+
 def _build_unconfigured_fallback(
     store: QuakeLensDataStore,
     message: str,
     context: dict[str, Any] | None,
+    board_store: DisasterBoardStore | None = None,
+    reports_store: DamageReportStore | None = None,
 ) -> dict[str, Any]:
     """Return real backend tool results + transparent setup notice when no Gemini API key is configured."""
     ctx = context or {}
-    ward = str(ctx.get("ward") or "all")
+    ctx_ward = str(ctx.get("ward") or "all")
+    ward = _detect_ward_from_message(message, ctx_ward)
     meshcode = ctx.get("selected_meshcode")
     building_id = ctx.get("selected_building_id")
     usage_group = str(ctx.get("usage_group") or "all")
@@ -441,7 +748,7 @@ def _build_unconfigured_fallback(
 
     if building_id:
         b_args = {"building_id": building_id}
-        b = _execute_tool(store, "get_building_details", b_args)
+        b = _execute_tool(store, "get_building_details", b_args, board_store=board_store, reports_store=reports_store)
         tool_records.append({"name": "get_building_details", "arguments": b_args, "result": b})
         tool_trace.append({
             "name": "get_building_details",
@@ -459,7 +766,7 @@ def _build_unconfigured_fallback(
             )
     elif meshcode:
         m_args = {"meshcode": meshcode}
-        m = _execute_tool(store, "get_mesh_details", m_args)
+        m = _execute_tool(store, "get_mesh_details", m_args, board_store=board_store, reports_store=reports_store)
         tool_records.append({"name": "get_mesh_details", "arguments": m_args, "result": m})
         tool_trace.append({
             "name": "get_mesh_details",
@@ -484,7 +791,7 @@ def _build_unconfigured_fallback(
     if hazard_tiers and len(hazard_tiers) < 5:
         stats_args["hazard_tiers"] = hazard_tiers
 
-    stats = _execute_tool(store, "get_area_statistics", stats_args)
+    stats = _execute_tool(store, "get_area_statistics", stats_args, board_store=board_store, reports_store=reports_store)
     tool_records.append({"name": "get_area_statistics", "arguments": stats_args, "result": stats})
     tool_trace.append({
         "name": "get_area_statistics",
@@ -503,9 +810,89 @@ def _build_unconfigured_fallback(
         f"- 震度6弱+確率6%以上 × 1981以前重複: **{stats['overlap_elevated_or_higher_pre1981_6pct_plus']:,}棟**（うち26%以上: {stats['overlap_very_high_pre1981_26pct_plus']:,}棟）"
     )
 
+    if any(k in message for k in ["被害", "報告", "道路", "損壊", "通行止め", "避難所", "救助", "支援", "状況", "CSV", "csv", "Excel", "まとめ"]):
+        cat_filter = "all"
+        if any(k in message for k in ["道路", "通行止め", "損壊"]):
+            cat_filter = "road_blocked"
+        elif "救助" in message or ("支援" in message and "補助" not in message):
+            cat_filter = "rescue_support"
+        elif "避難所" in message:
+            cat_filter = "shelter_status"
+        elif "倒壊" in message or "建物損傷" in message:
+            cat_filter = "building_damage"
+
+        rep_args = {"ward": ward, "category": cat_filter, "limit": 10}
+        rep_res = _execute_tool(
+            store,
+            "get_damage_reports_summary",
+            rep_args,
+            board_store=board_store,
+            reports_store=reports_store,
+        )
+        tool_records.append({"name": "get_damage_reports_summary", "arguments": rep_args, "result": rep_res})
+        tool_trace.append({
+            "name": "get_damage_reports_summary",
+            "arguments": rep_args,
+            "summary": _summarize_tool_call("get_damage_reports_summary", rep_args, rep_res),
+        })
+        actions.extend(_extract_map_actions("get_damage_reports_summary", rep_res))
+        rep_lines = [
+            f"- 抽出件数（継続中）: **{rep_res['total_reports']}件**（うち未確認・市民報告 **{rep_res['unverified_count']}件** / 訓練サンプル **{rep_res['demo_sample_count']}件** / 確認済・公式 **{rep_res['verified_count'] + rep_res['official_count']}件**）"
+        ]
+        for r in (rep_res.get("reports") or [])[:5]:
+            rep_lines.append(
+                f"  - `{r['id']}` [{r['verification_label']}] {r['ward_name']} / {r['category_label']}: {r['title']}"
+            )
+        rep_lines.append("※ 未確認の市民投稿や訓練サンプルは確定事実ではありません。")
+        sections.append("### 被害状況報告サマリー\n" + "\n".join(rep_lines))
+
+    if any(k in message for k in ["安否", "伝言", "無事", "避難所", "状況", "まとめ", "CSV", "csv", "Excel"]):
+        b_args = {"ward": ward, "limit": 8}
+        b_res = _execute_tool(
+            store,
+            "get_disaster_board_summary",
+            b_args,
+            board_store=board_store,
+            reports_store=reports_store,
+        )
+        tool_records.append({"name": "get_disaster_board_summary", "arguments": b_args, "result": b_res})
+        tool_trace.append({
+            "name": "get_disaster_board_summary",
+            "arguments": b_args,
+            "summary": _summarize_tool_call("get_disaster_board_summary", b_args, b_res),
+        })
+        actions.extend(_extract_map_actions("get_disaster_board_summary", b_res))
+        sc = b_res.get("status_counts") or {}
+        sections.append(
+            f"### 災害用伝言板（安否集計）\n"
+            f"- 登録総数: **{b_res['total_entries']}件**（市民登録 **{b_res['user_entries_count']}件** / 訓練サンプル **{b_res['sample_entries_count']}件**）\n"
+            f"- 区分別: 無事 {sc.get('safe', 0)}件 / 避難所 {sc.get('shelter', 0)}件 / 自宅 {sc.get('home', 0)}件 / 軽傷・支援要 {sc.get('minor_injury', 0)}件 / 連絡待ち {sc.get('waiting', 0)}件"
+        )
+
+    if any(k in message for k in ["CSV", "csv", "Excel", "excel", "xlsx", "ダウンロード", "出力"]):
+        ex_args = {"ward": ward, "scope": "overview"}
+        ex_res = _execute_tool(
+            store,
+            "prepare_disaster_export",
+            ex_args,
+            board_store=board_store,
+            reports_store=reports_store,
+        )
+        tool_records.append({"name": "prepare_disaster_export", "arguments": ex_args, "result": ex_res})
+        tool_trace.append({
+            "name": "prepare_disaster_export",
+            "arguments": ex_args,
+            "summary": _summarize_tool_call("prepare_disaster_export", ex_args, ex_res),
+        })
+        actions.extend(_extract_map_actions("prepare_disaster_export", ex_res))
+        sections.append(
+            f"### CSV / Excel 出力\n"
+            f"下のボタンから最新集計（報告 {ex_res['report_count']}件・安否 {ex_res['board_count']}件）をCSVまたはExcel形式でダウンロードできます。"
+        )
+
     if any(k in message for k in ["優先", "多い", "エリア", "メッシュ", "ハザード", "どこ"]):
         p_args = {"ward": ward, "limit": 3}
-        p_res = _execute_tool(store, "get_priority_confirmation_areas", p_args)
+        p_res = _execute_tool(store, "get_priority_confirmation_areas", p_args, board_store=board_store, reports_store=reports_store)
         tool_records.append({"name": "get_priority_confirmation_areas", "arguments": p_args, "result": p_res})
         tool_trace.append({
             "name": "get_priority_confirmation_areas",
@@ -514,8 +901,8 @@ def _build_unconfigured_fallback(
         })
         actions.extend(_extract_map_actions("get_priority_confirmation_areas", p_res))
 
-    if any(k in message for k in ["補助", "診断", "制度", "支援"]):
-        prog = _execute_tool(store, "get_data_methodology_and_programs", {})
+    if any(k in message for k in ["補助", "診断", "制度"]):
+        prog = _execute_tool(store, "get_data_methodology_and_programs", {}, board_store=board_store, reports_store=reports_store)
         tool_records.append({"name": "get_data_methodology_and_programs", "arguments": {}, "result": prog})
         tool_trace.append({
             "name": "get_data_methodology_and_programs",
@@ -565,11 +952,19 @@ def ask_quakelens_ai(
     model: str | None = None,
     api_key_override: str | None = None,
     earthquakes_cache: list[dict[str, Any]] | None = None,
+    board_store: DisasterBoardStore | None = None,
+    reports_store: DamageReportStore | None = None,
 ) -> dict[str, Any]:
     """Run Gemini Interactions API with Function Calling against real Kyoto City data."""
     api_key = _resolve_api_key(api_key_override)
     if not api_key:
-        return _build_unconfigured_fallback(store, message, context)
+        return _build_unconfigured_fallback(
+            store,
+            message,
+            context,
+            board_store=board_store,
+            reports_store=reports_store,
+        )
 
     chosen_model = _resolve_model(model)
     prompt = _build_contextual_prompt(message, context)
@@ -609,7 +1004,14 @@ def ask_quakelens_ai(
             for fc in fc_steps:
                 fn_name = fc.name
                 fn_args = dict(fc.arguments) if fc.arguments else {}
-                result_data = _execute_tool(store, fn_name, fn_args, earthquakes_cache=earthquakes_cache)
+                result_data = _execute_tool(
+                    store,
+                    fn_name,
+                    fn_args,
+                    earthquakes_cache=earthquakes_cache,
+                    board_store=board_store,
+                    reports_store=reports_store,
+                )
                 tool_records.append({"name": fn_name, "arguments": fn_args, "result": result_data})
                 summary = _summarize_tool_call(fn_name, fn_args, result_data)
                 map_actions.extend(_extract_map_actions(fn_name, result_data))
@@ -659,11 +1061,19 @@ def stream_quakelens_ai(
     model: str | None = None,
     api_key_override: str | None = None,
     earthquakes_cache: list[dict[str, Any]] | None = None,
+    board_store: DisasterBoardStore | None = None,
+    reports_store: DamageReportStore | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield structured SSE events while streaming Gemini Function Calling and text deltas."""
     api_key = _resolve_api_key(api_key_override)
     if not api_key:
-        fallback = _build_unconfigured_fallback(store, message, context)
+        fallback = _build_unconfigured_fallback(
+            store,
+            message,
+            context,
+            board_store=board_store,
+            reports_store=reports_store,
+        )
         for tc in fallback["tool_calls"]:
             yield {"type": "tool_result", **tc}
         yield {"type": "done", **fallback, "model": _resolve_model(model)}
@@ -840,7 +1250,14 @@ def stream_quakelens_ai(
         for fc in fc_calls:
             fn_name = fc["name"]
             fn_args = fc["arguments"]
-            result_data = _execute_tool(store, fn_name, fn_args, earthquakes_cache=earthquakes_cache)
+            result_data = _execute_tool(
+                store,
+                fn_name,
+                fn_args,
+                earthquakes_cache=earthquakes_cache,
+                board_store=board_store,
+                reports_store=reports_store,
+            )
             tool_records.append({"name": fn_name, "arguments": fn_args, "result": result_data})
             summary = _summarize_tool_call(fn_name, fn_args, result_data)
             map_actions.extend(_extract_map_actions(fn_name, result_data))

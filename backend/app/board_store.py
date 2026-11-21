@@ -15,6 +15,8 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from app.constants import WARD_CENTERS
+
 JST = timezone(timedelta(hours=9))
 DEFAULT_BOARD_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "board.db"
 
@@ -88,12 +90,27 @@ class DisasterBoardStore:
                         passcode_salt TEXT,
                         passcode_hash TEXT,
                         is_sample INTEGER NOT NULL DEFAULT 0,
-                        created_at TEXT NOT NULL
+                        location_consent INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT
                     )
                     """
                 )
+                existing_cols = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(board_entries)").fetchall()
+                }
+                if "location_consent" not in existing_cols:
+                    conn.execute(
+                        "ALTER TABLE board_entries ADD COLUMN location_consent INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "updated_at" not in existing_cols:
+                    conn.execute("ALTER TABLE board_entries ADD COLUMN updated_at TEXT")
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_board_phone ON board_entries (phone)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_board_ward ON board_entries (ward_name)"
                 )
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_board_created ON board_entries (created_at DESC)"
@@ -157,6 +174,9 @@ class DisasterBoardStore:
     def _serialize_row(row: sqlite3.Row, reveal_exact_phone: bool = False) -> dict[str, Any]:
         status = str(row["status"])
         phone = str(row["phone"])
+        keys = row.keys()
+        updated_at = row["updated_at"] if "updated_at" in keys and row["updated_at"] else row["created_at"]
+        location_consent = bool(row["location_consent"]) if "location_consent" in keys else bool(row["meshcode"])
         return {
             "id": str(row["id"]),
             "phone_masked": phone if reveal_exact_phone else mask_phone(phone),
@@ -165,10 +185,12 @@ class DisasterBoardStore:
             "status_label": BOARD_STATUS_LABELS.get(status, status),
             "ward_name": str(row["ward_name"]),
             "meshcode": str(row["meshcode"]) if row["meshcode"] else None,
+            "location_consent": location_consent,
             "message": str(row["message"]),
             "has_passcode": bool(row["passcode_hash"]),
             "is_sample": bool(row["is_sample"]),
             "created_at": str(row["created_at"]),
+            "updated_at": str(updated_at),
         }
 
     def list_entries(
@@ -176,14 +198,20 @@ class DisasterBoardStore:
         phone: str | None = None,
         q: str | None = None,
         ward: str | None = None,
+        meshcode: str | None = None,
+        status: str | None = None,
+        include_samples: bool = True,
         ids: list[str] | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        """Query disaster message board entries with optional phone, keyword, ward, or ID filters."""
+        """Query disaster message board entries with optional phone, keyword, ward, mesh, status, or ID filters."""
         self.ensure_initialized()
         clauses: list[str] = []
         params: list[Any] = []
         exact_phone_lookup = False
+
+        if not include_samples:
+            clauses.append("is_sample = 0")
 
         if phone and phone.strip():
             norm = normalize_phone(phone)
@@ -211,6 +239,14 @@ class DisasterBoardStore:
             clauses.append("ward_name = ?")
             params.append(ward)
 
+        if meshcode and meshcode.strip():
+            clauses.append("meshcode = ?")
+            params.append(meshcode.strip())
+
+        if status and status != "all":
+            clauses.append("status = ?")
+            params.append(status)
+
         if ids:
             clean_ids = [i.strip() for i in ids if i and i.strip()][:50]
             if not clean_ids:
@@ -221,13 +257,13 @@ class DisasterBoardStore:
 
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"""
-            SELECT id, phone, name, status, ward_name, meshcode, message, passcode_hash, is_sample, created_at
+            SELECT id, phone, name, status, ward_name, meshcode, message, passcode_hash, is_sample, location_consent, created_at, updated_at
             FROM board_entries
             {where_sql}
             ORDER BY created_at DESC
             LIMIT ?
         """
-        params.append(max(1, min(limit, 100)))
+        params.append(max(1, min(limit, 200)))
 
         with self._lock, self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
@@ -242,8 +278,9 @@ class DisasterBoardStore:
         ward_name: str = "京都市全域",
         meshcode: str | None = None,
         passcode: str | None = None,
+        location_consent: bool | None = None,
     ) -> dict[str, Any]:
-        """Validate and store a new disaster safety registration."""
+        """Validate and store a new disaster safety registration without storing personal GPS coordinates."""
         self.ensure_initialized()
         norm_phone = normalize_phone(phone)
         if not re.fullmatch(r"[A-Za-z0-9]{6,20}", norm_phone):
@@ -273,7 +310,13 @@ class DisasterBoardStore:
             )
 
         clean_ward = (ward_name or "京都市全域").strip()[:32] or "京都市全域"
-        clean_mesh = meshcode.strip()[:20] if meshcode and meshcode.strip() else None
+        raw_mesh = meshcode.strip()[:20] if meshcode and meshcode.strip() else None
+        if location_consent is False:
+            clean_mesh = None
+            consent_flag = 0
+        else:
+            clean_mesh = raw_mesh
+            consent_flag = 1 if (location_consent or raw_mesh) else 0
 
         clean_pass = (passcode or "").strip()
         if clean_pass and len(clean_pass) > 32:
@@ -288,8 +331,8 @@ class DisasterBoardStore:
             conn.execute(
                 """
                 INSERT INTO board_entries
-                (id, phone, name, status, ward_name, meshcode, message, passcode_salt, passcode_hash, is_sample, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                (id, phone, name, status, ward_name, meshcode, message, passcode_salt, passcode_hash, is_sample, location_consent, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
                 """,
                 (
                     entry_id,
@@ -301,17 +344,106 @@ class DisasterBoardStore:
                     clean_msg,
                     salt,
                     p_hash,
+                    consent_flag,
+                    created_at,
                     created_at,
                 ),
             )
             conn.commit()
             row = conn.execute(
-                "SELECT id, phone, name, status, ward_name, meshcode, message, passcode_hash, is_sample, created_at FROM board_entries WHERE id = ?",
+                "SELECT id, phone, name, status, ward_name, meshcode, message, passcode_hash, is_sample, location_consent, created_at, updated_at FROM board_entries WHERE id = ?",
                 (entry_id,),
             ).fetchone()
 
         assert row is not None
         return self._serialize_row(row, reveal_exact_phone=False)
+
+    def update_entry(
+        self,
+        entry_id: str,
+        passcode: str | None = None,
+        status: str | None = None,
+        message: str | None = None,
+        ward_name: str | None = None,
+        meshcode: str | None = None,
+        location_consent: bool | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing user-registered safety entry after verifying its passcode."""
+        self.ensure_initialized()
+        clean_id = entry_id.strip()
+        if not clean_id:
+            raise HTTPException(status_code=400, detail="entry_id is required")
+
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM board_entries WHERE id = ?",
+                (clean_id,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="指定された伝言が見つかりません。")
+            if int(row["is_sample"]) == 1:
+                raise HTTPException(
+                    status_code=403,
+                    detail="訓練サンプルデータは編集できません。",
+                )
+            stored_hash = row["passcode_hash"]
+            stored_salt = row["passcode_salt"]
+            if stored_hash and stored_salt:
+                candidate = _hash_passcode((passcode or "").strip(), str(stored_salt))
+                if not hmac.compare_digest(candidate, str(stored_hash)):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="編集・削除用暗証番号が一致しません。",
+                    )
+
+            next_status = str(row["status"])
+            if status is not None:
+                if status not in BOARD_STATUS_LABELS:
+                    raise HTTPException(status_code=400, detail=f"不正な安否区分です: {status}")
+                next_status = status
+
+            next_msg = str(row["message"])
+            if message is not None:
+                trimmed = message.strip()
+                if not trimmed or len(trimmed) > 400:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="伝言メッセージは1〜400文字で入力してください。",
+                    )
+                next_msg = trimmed
+
+            next_ward = str(row["ward_name"])
+            if ward_name is not None:
+                next_ward = ward_name.strip()[:32] or "京都市全域"
+
+            next_mesh = row["meshcode"]
+            next_consent = int(row["location_consent"]) if "location_consent" in row.keys() else 0
+            if location_consent is False:
+                next_mesh = None
+                next_consent = 0
+            else:
+                if meshcode is not None:
+                    next_mesh = meshcode.strip()[:20] if meshcode.strip() else None
+                if location_consent is True:
+                    next_consent = 1
+
+            updated_at = _now_jst_iso()
+            conn.execute(
+                """
+                UPDATE board_entries
+                SET status = ?, message = ?, ward_name = ?, meshcode = ?, location_consent = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_status, next_msg, next_ward, next_mesh, next_consent, updated_at, clean_id),
+            )
+            conn.commit()
+            updated_row = conn.execute(
+                "SELECT id, phone, name, status, ward_name, meshcode, message, passcode_hash, is_sample, location_consent, created_at, updated_at FROM board_entries WHERE id = ?",
+                (clean_id,),
+            ).fetchone()
+
+        assert updated_row is not None
+        return self._serialize_row(updated_row, reveal_exact_phone=False)
 
     def delete_entry(self, entry_id: str, passcode: str | None = None) -> dict[str, Any]:
         """Delete a user-registered entry after verifying its passcode."""
@@ -345,3 +477,120 @@ class DisasterBoardStore:
             conn.commit()
 
         return {"deleted": True, "id": clean_id}
+
+    def summarize_entries(
+        self,
+        ward: str | None = None,
+        include_samples: bool = True,
+        store: Any | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate safety status counts by ward and 250m mesh without exposing personal coordinates."""
+        self.ensure_initialized()
+        clauses: list[str] = []
+        params: list[Any] = []
+        if not include_samples:
+            clauses.append("is_sample = 0")
+        if ward and ward != "all":
+            clauses.append("ward_name = ?")
+            params.append(ward)
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT id, name, status, ward_name, meshcode, message, is_sample, created_at, updated_at FROM board_entries {where_sql} ORDER BY created_at DESC",
+                params,
+            ).fetchall()
+
+        status_counts: dict[str, int] = {k: 0 for k in BOARD_STATUS_LABELS}
+        user_status_counts: dict[str, int] = {k: 0 for k in BOARD_STATUS_LABELS}
+        ward_agg: dict[str, dict[str, Any]] = {}
+        mesh_agg: dict[str, dict[str, Any]] = {}
+        user_entries_count = 0
+        sample_entries_count = 0
+
+        for r in rows:
+            st = str(r["status"])
+            wn = str(r["ward_name"] or "京都市全域")
+            mc = str(r["meshcode"]) if r["meshcode"] else None
+            is_smp = int(r["is_sample"]) == 1
+
+            status_counts[st] = status_counts.get(st, 0) + 1
+            if is_smp:
+                sample_entries_count += 1
+            else:
+                user_entries_count += 1
+                user_status_counts[st] = user_status_counts.get(st, 0) + 1
+
+            if wn not in ward_agg:
+                center = WARD_CENTERS.get(wn) or WARD_CENTERS["京都市全域"]
+                ward_agg[wn] = {
+                    "ward_name": wn,
+                    "lon": center["lon"],
+                    "lat": center["lat"],
+                    "total_count": 0,
+                    "user_count": 0,
+                    "sample_count": 0,
+                    "support_needed_count": 0,
+                    "status_counts": {k: 0 for k in BOARD_STATUS_LABELS},
+                    "latest_at": str(r["created_at"]),
+                }
+            w_item = ward_agg[wn]
+            w_item["total_count"] += 1
+            if is_smp:
+                w_item["sample_count"] += 1
+            else:
+                w_item["user_count"] += 1
+            w_item["status_counts"][st] = w_item["status_counts"].get(st, 0) + 1
+            if st in {"minor_injury", "waiting"}:
+                w_item["support_needed_count"] += 1
+
+            if mc:
+                if mc not in mesh_agg:
+                    lon = None
+                    lat = None
+                    m_ward = wn
+                    if store is not None and getattr(store, "loaded", False):
+                        detail = store.get_mesh_detail(mc)
+                        if detail:
+                            lon = detail.get("centroid_lon")
+                            lat = detail.get("centroid_lat")
+                            m_ward = detail.get("ward_name") or wn
+                    mesh_agg[mc] = {
+                        "meshcode": mc,
+                        "ward_name": m_ward,
+                        "centroid_lon": lon,
+                        "centroid_lat": lat,
+                        "total_count": 0,
+                        "user_count": 0,
+                        "sample_count": 0,
+                        "status_counts": {k: 0 for k in BOARD_STATUS_LABELS},
+                    }
+                m_item = mesh_agg[mc]
+                m_item["total_count"] += 1
+                if is_smp:
+                    m_item["sample_count"] += 1
+                else:
+                    m_item["user_count"] += 1
+                m_item["status_counts"][st] = m_item["status_counts"].get(st, 0) + 1
+
+        by_ward = sorted(
+            ward_agg.values(),
+            key=lambda x: (-x["support_needed_count"], -x["total_count"], x["ward_name"]),
+        )
+        by_mesh = sorted(
+            mesh_agg.values(),
+            key=lambda x: (-x["total_count"], x["meshcode"]),
+        )
+
+        return {
+            "scope": {"ward": ward or "all", "include_samples": include_samples},
+            "total_entries": len(rows),
+            "user_entries_count": user_entries_count,
+            "sample_entries_count": sample_entries_count,
+            "status_labels": BOARD_STATUS_LABELS,
+            "status_counts": status_counts,
+            "user_status_counts": user_status_counts,
+            "by_ward": by_ward,
+            "by_mesh": by_mesh,
+            "privacy_note": "個人の電話番号は一覧では伏せ字表示され、個人の正確なGPS座標は取得・保存しません（任意同意時のみ区・250mメッシュ単位で集計）。",
+        }

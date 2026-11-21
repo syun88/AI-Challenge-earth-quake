@@ -10,17 +10,18 @@ from app.constants import DATA_SOURCES, OFFICIAL_RETROFIT_PROGRAMS
 # Allowed domain/methodological constants that may appear cleanly in explanations
 # without originating from a specific tool payload.
 EXEMPT_INTEGERS = {
-    0, 1, 2, 3, 4, 5, 6, 10, 11, 12, 15, 20, 24, 30, 56, 250,
+    0, 1, 2, 3, 4, 5, 6, 10, 11, 12, 15, 20, 24, 30, 56, 171, 250,
     1981, 1982, 1999, 2000, 2001, 2020, 2022, 2024, 2025, 2026,
     461, 611, 6674, 26100, 100,
 }
 EXEMPT_PERCENTS = {0.0, 3.0, 6.0, 26.0, 100.0}
 
 URL_RE = re.compile(r"https?://[^\s)\]>「」『』、。\"']+")
+REPORT_ID_RE = re.compile(r"rep-[A-Za-z0-9]{4,20}")
 MESHCODE_RE = re.compile(r"(?<!\d)(\d{10})(?!\d)")
 BUILDING_ID_RE = re.compile(r"26100-bldg-\d+")
 QUANT_RE = re.compile(
-    r"(?P<num>\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(?P<unit>棟|%|％|m/s|km|m(?![A-Za-z])|件|箇所|区|階)"
+    r"(?P<num>\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(?P<unit>棟|%|％|m/s|km|m(?![A-Za-z])|件|箇所|ヶ所|か所|区|階|人|回)"
 )
 PAREN_NUM_RE = re.compile(r"(?:[:：]\s*\*{0,2}|[（(])\s*(?P<num>\d{1,3}(?:,\d{3})+|\d+\.\d+)\s*(?:[）)]|\*{0,2})")
 METRIC_PREFIX_RE = re.compile(r"(?:ARV|AVS|M|震度|倍率|平均S波速度)[^0-9\n]{0,10}(?P<num>\d+(?:\.\d+)?)", re.IGNORECASE)
@@ -58,6 +59,10 @@ DERIVED_RATIO_PAIRS = [
     ("overlap_very_high_pre1981_26pct_plus", "total_buildings"),
     ("overlap_elevated_or_higher_pre1981_6pct_plus", "total_buildings"),
     ("overlap_high_pre1981", "total_buildings"),
+    ("unverified_count", "total_reports"),
+    ("demo_sample_count", "total_reports"),
+    ("user_entries_count", "total_entries"),
+    ("sample_entries_count", "total_entries"),
 ]
 
 
@@ -67,7 +72,12 @@ def _collect_grounding_universe(tool_records: list[dict[str, Any]]) -> dict[str,
     percents: set[float] = set()
     meshcodes: set[str] = set()
     building_ids: set[str] = set()
+    report_ids: set[str] = set()
     urls: set[str] = set()
+    source_flags = {
+        "has_unverified_reports": False,
+        "has_sample_data": False,
+    }
 
     def register_dict_ratios(obj: dict[str, Any]) -> None:
         for num_key, den_key in DERIVED_RATIO_PAIRS:
@@ -77,6 +87,17 @@ def _collect_grounding_universe(tool_records: list[dict[str, Any]]) -> dict[str,
                 percents.add((float(num) / float(den)) * 100.0)
         if isinstance(obj.get("known_year_rate"), (int, float)):
             percents.add((1.0 - float(obj["known_year_rate"])) * 100.0)
+        if obj.get("verification_status") == "unverified" or (
+            isinstance(obj.get("unverified_count"), int) and obj["unverified_count"] > 0
+        ):
+            source_flags["has_unverified_reports"] = True
+        if (
+            obj.get("is_sample") is True
+            or obj.get("verification_status") == "demo_sample"
+            or (isinstance(obj.get("demo_sample_count"), int) and obj["demo_sample_count"] > 0)
+            or (isinstance(obj.get("sample_entries_count"), int) and obj["sample_entries_count"] > 0)
+        ):
+            source_flags["has_sample_data"] = True
 
     def walk(val: Any, parent_key: str = "") -> None:
         if isinstance(val, bool) or val is None:
@@ -92,13 +113,15 @@ def _collect_grounding_universe(tool_records: list[dict[str, Any]]) -> dict[str,
             return
         if isinstance(val, str):
             s = val.strip()
-            if s.startswith("http://") or s.startswith("https://"):
+            if s.startswith("http://") or s.startswith("https://") or s.startswith("/api/exports/"):
                 urls.add(s.rstrip("/"))
                 urls.add(s)
             for mc in MESHCODE_RE.findall(s):
                 meshcodes.add(mc)
             for bid in BUILDING_ID_RE.findall(s):
                 building_ids.add(bid)
+            for rid in REPORT_ID_RE.findall(s):
+                report_ids.add(rid)
             return
         if isinstance(val, dict):
             register_dict_ratios(val)
@@ -119,7 +142,10 @@ def _collect_grounding_universe(tool_records: list[dict[str, Any]]) -> dict[str,
         "percents": percents,
         "meshcodes": meshcodes,
         "building_ids": building_ids,
+        "report_ids": report_ids,
         "urls": urls,
+        "has_unverified_reports": source_flags["has_unverified_reports"],
+        "has_sample_data": source_flags["has_sample_data"],
     }
 
 
@@ -191,6 +217,8 @@ def verify_grounded_response(answer: str, tool_records: list[dict[str, Any]]) ->
             "verified_claims": [],
             "unverified_claims": [],
             "unverified_urls": [],
+            "contains_unverified_reports": False,
+            "contains_sample_data": False,
             "note": "回答テキストが空です。",
         }
 
@@ -228,17 +256,24 @@ def verify_grounded_response(answer: str, tool_records: list[dict[str, Any]]) ->
         else:
             add_unverified(f"メッシュ {mc}")
 
-    # 3. Check PLATEAU building IDs
+    # 3. Check PLATEAU building IDs & disaster report IDs
     for bid in BUILDING_ID_RE.findall(answer):
         if bid in universe["building_ids"]:
             add_verified(bid)
         else:
             add_unverified(bid)
 
+    for rid in REPORT_ID_RE.findall(answer):
+        if rid in universe["report_ids"]:
+            add_verified(rid)
+        else:
+            add_unverified(rid)
+
     # 4. Check quantitative data claims
     scrubbed = _strip_exempt_markdown_lines(answer)
     scrubbed = MESHCODE_RE.sub("", scrubbed)
     scrubbed = BUILDING_ID_RE.sub("", scrubbed)
+    scrubbed = REPORT_ID_RE.sub("", scrubbed)
     scrubbed = URL_RE.sub("", scrubbed)
 
     for m in QUANT_RE.finditer(scrubbed):
@@ -295,5 +330,7 @@ def verify_grounded_response(answer: str, tool_records: list[dict[str, Any]]) ->
         "verified_claims": verified[:12],
         "unverified_claims": unverified[:10],
         "unverified_urls": unverified_urls[:5],
+        "contains_unverified_reports": universe["has_unverified_reports"],
+        "contains_sample_data": universe["has_sample_data"],
         "note": note,
     }

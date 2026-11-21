@@ -21,8 +21,16 @@ from pydantic import BaseModel
 
 from app.ai_assistant import ask_quakelens_ai, stream_quakelens_ai
 from app.board_store import BOARD_STATUS_LABELS, DisasterBoardStore
-from app.constants import OFFICIAL_RETROFIT_PROGRAMS
+from app.constants import (
+    OFFICIAL_RETROFIT_PROGRAMS,
+    REPORT_CATEGORY_LABELS,
+    REPORT_SEVERITY_LABELS,
+    VERIFICATION_STATUS_LABELS,
+)
 from app.data_store import QuakeLensDataStore
+from app.export_utils import generate_disaster_csv, generate_disaster_xlsx
+from app.reports_store import DamageReportStore
+from app.route_sim import list_route_nodes, simulate_alternative_route
 from app.security import (
     ai_guard,
     extract_client_ip,
@@ -40,12 +48,14 @@ COD_RE = re.compile(r"^([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)(?:([+-]\d+(?:\.\d+
 
 store = QuakeLensDataStore()
 board_store = DisasterBoardStore()
+reports_store = DamageReportStore()
 _quake_cache: dict[str, Any] = {"fetched_at": 0.0, "data": []}
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     board_store.ensure_initialized()
+    reports_store.ensure_initialized()
     if store.buildings_path.exists() and store.meshes_path.exists():
         store.load()
     yield
@@ -53,8 +63,8 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="QuakeLens Japan API",
-    description="PLATEAU建築年データ × J-SHIS地震ハザード・表層地盤 × Gemini Function Calling API",
-    version="0.1.0",
+    description="PLATEAU建築年データ × J-SHIS地震ハザード・表層地盤 × 災害伝言板・被害報告 × Gemini Function Calling API",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -62,7 +72,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_cors_allow_origins(),
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-Gemini-Api-Key", "X-Ai-Access-Code"],
 )
 
@@ -339,6 +349,16 @@ class BoardEntryCreateRequest(BaseModel):
     ward_name: str = "京都市全域"
     meshcode: str | None = None
     passcode: str | None = None
+    location_consent: bool | None = None
+
+
+class BoardEntryUpdateRequest(BaseModel):
+    passcode: str | None = None
+    status: str | None = None
+    message: str | None = None
+    ward_name: str | None = None
+    meshcode: str | None = None
+    location_consent: bool | None = None
 
 
 @app.get("/api/board")
@@ -346,13 +366,19 @@ def list_board_entries(
     phone: str | None = Query(default=None),
     q: str | None = Query(default=None),
     ward: str | None = Query(default=None),
+    meshcode: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    include_samples: bool = Query(default=True),
     ids: str | None = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, Any]:
     entries = board_store.list_entries(
         phone=phone,
         q=q,
         ward=ward,
+        meshcode=meshcode,
+        status=status,
+        include_samples=include_samples,
         ids=_split_csv(ids),
         limit=limit,
     )
@@ -361,6 +387,18 @@ def list_board_entries(
         "status_labels": BOARD_STATUS_LABELS,
         "entries": entries,
     }
+
+
+@app.get("/api/board/summary")
+def summarize_board_entries(
+    ward: str | None = Query(default=None),
+    include_samples: bool = Query(default=True),
+) -> dict[str, Any]:
+    return board_store.summarize_entries(
+        ward=ward,
+        include_samples=include_samples,
+        store=store if store.loaded else None,
+    )
 
 
 @app.post("/api/board")
@@ -373,6 +411,21 @@ def create_board_entry(req: BoardEntryCreateRequest) -> dict[str, Any]:
         ward_name=req.ward_name,
         meshcode=req.meshcode,
         passcode=req.passcode,
+        location_consent=req.location_consent,
+    )
+    return {"entry": entry}
+
+
+@app.patch("/api/board/{entry_id}")
+def update_board_entry(entry_id: str, req: BoardEntryUpdateRequest) -> dict[str, Any]:
+    entry = board_store.update_entry(
+        entry_id=entry_id,
+        passcode=req.passcode,
+        status=req.status,
+        message=req.message,
+        ward_name=req.ward_name,
+        meshcode=req.meshcode,
+        location_consent=req.location_consent,
     )
     return {"entry": entry}
 
@@ -383,6 +436,289 @@ def delete_board_entry(
     passcode: str | None = Query(default=None),
 ) -> dict[str, Any]:
     return board_store.delete_entry(entry_id=entry_id, passcode=passcode)
+
+
+class DamageReportCreateRequest(BaseModel):
+    category: str
+    severity: str = "moderate"
+    title: str
+    description: str
+    ward_name: str = "京都市全域"
+    meshcode: str | None = None
+    location_label: str | None = None
+    lat: float | None = None
+    lon: float | None = None
+    location_consent: bool = False
+    reporter_alias: str | None = None
+    passcode: str | None = None
+    reported_at: str | None = None
+    force_duplicate: bool = False
+
+
+class DamageReportUpdateRequest(BaseModel):
+    passcode: str | None = None
+    severity: str | None = None
+    title: str | None = None
+    description: str | None = None
+    resolved: bool | None = None
+    ward_name: str | None = None
+
+
+class DamageReportSimilarRequest(BaseModel):
+    ward_name: str
+    category: str
+    title: str = ""
+    description: str = ""
+    meshcode: str | None = None
+    lat: float | None = None
+    lon: float | None = None
+
+
+@app.get("/api/reports")
+def list_damage_reports(
+    ward: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    verification_status: str | None = Query(default=None),
+    meshcode: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    include_samples: bool = Query(default=True),
+    include_resolved: bool = Query(default=True),
+    limit: int = Query(default=100, ge=1, le=300),
+) -> dict[str, Any]:
+    reports = reports_store.list_reports(
+        ward=ward,
+        category=category,
+        severity=severity,
+        verification_status=verification_status,
+        meshcode=meshcode,
+        q=q,
+        include_samples=include_samples,
+        include_resolved=include_resolved,
+        limit=limit,
+    )
+    return {
+        "count": len(reports),
+        "category_labels": REPORT_CATEGORY_LABELS,
+        "severity_labels": REPORT_SEVERITY_LABELS,
+        "verification_labels": VERIFICATION_STATUS_LABELS,
+        "reports": reports,
+    }
+
+
+@app.get("/api/reports/summary")
+def summarize_damage_reports(
+    ward: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    include_samples: bool = Query(default=True),
+    include_resolved: bool = Query(default=False),
+) -> dict[str, Any]:
+    return reports_store.summarize_reports(
+        ward=ward,
+        category=category,
+        include_samples=include_samples,
+        include_resolved=include_resolved,
+        store=store if store.loaded else None,
+    )
+
+
+@app.post("/api/reports/similar")
+def find_similar_damage_reports(req: DamageReportSimilarRequest) -> dict[str, Any]:
+    matches = reports_store.find_similar_reports(
+        ward_name=req.ward_name,
+        category=req.category,
+        title=req.title,
+        description=req.description,
+        meshcode=req.meshcode,
+        lat=req.lat,
+        lon=req.lon,
+        include_samples=False,
+    )
+    return {"count": len(matches), "similar_reports": matches}
+
+
+@app.post("/api/reports")
+def create_damage_report(req: DamageReportCreateRequest) -> dict[str, Any]:
+    return reports_store.create_report(
+        category=req.category,
+        severity=req.severity,
+        title=req.title,
+        description=req.description,
+        ward_name=req.ward_name,
+        meshcode=req.meshcode,
+        location_label=req.location_label,
+        lat=req.lat,
+        lon=req.lon,
+        location_consent=req.location_consent,
+        reporter_alias=req.reporter_alias,
+        passcode=req.passcode,
+        reported_at=req.reported_at,
+        force_duplicate=req.force_duplicate,
+    )
+
+
+@app.post("/api/reports/{report_id}/confirm")
+def confirm_damage_report(report_id: str) -> dict[str, Any]:
+    report = reports_store.confirm_report(report_id)
+    return {"report": report}
+
+
+@app.patch("/api/reports/{report_id}")
+def update_damage_report(report_id: str, req: DamageReportUpdateRequest) -> dict[str, Any]:
+    report = reports_store.update_report(
+        report_id,
+        passcode=req.passcode,
+        severity=req.severity,
+        title=req.title,
+        description=req.description,
+        resolved=req.resolved,
+        ward_name=req.ward_name,
+    )
+    return {"report": report}
+
+
+@app.delete("/api/reports/{report_id}")
+def delete_damage_report(
+    report_id: str,
+    passcode: str | None = Query(default=None),
+) -> dict[str, Any]:
+    return reports_store.delete_report(report_id=report_id, passcode=passcode)
+
+
+@app.get("/api/disaster-overview")
+def get_disaster_overview(
+    ward: str | None = Query(default=None),
+    include_samples: bool = Query(default=True),
+) -> dict[str, Any]:
+    board_sum = board_store.summarize_entries(
+        ward=ward,
+        include_samples=include_samples,
+        store=store if store.loaded else None,
+    )
+    rep_sum = reports_store.summarize_reports(
+        ward=ward,
+        include_samples=include_samples,
+        include_resolved=False,
+        store=store if store.loaded else None,
+    )
+    return {
+        "ward": ward or "all",
+        "include_samples": include_samples,
+        "board_summary": board_sum,
+        "report_summary": rep_sum,
+    }
+
+
+def _gather_export_inputs(
+    *,
+    ward: str | None,
+    category: str | None,
+    verification_status: str | None,
+    include_samples: bool,
+) -> dict[str, Any]:
+    s = _require_store()
+    stats = s.get_stats(ward=ward)
+    board_sum = board_store.summarize_entries(ward=ward, include_samples=include_samples, store=s)
+    board_entries = board_store.list_entries(ward=ward, include_samples=include_samples, limit=200)
+    rep_sum = reports_store.summarize_reports(
+        ward=ward,
+        category=category,
+        include_samples=include_samples,
+        include_resolved=False,
+        store=s,
+    )
+    reports = reports_store.list_reports(
+        ward=ward,
+        category=category,
+        verification_status=verification_status,
+        include_samples=include_samples,
+        include_resolved=True,
+        limit=300,
+    )
+    return {
+        "stats": stats,
+        "board_summary": board_sum,
+        "board_entries": board_entries,
+        "report_summary": rep_sum,
+        "reports": reports,
+        "ward_filter": ward,
+    }
+
+
+@app.get("/api/exports/disaster-summary.csv")
+def export_disaster_csv(
+    scope: str = Query(default="overview"),
+    ward: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    verification_status: str | None = Query(default=None),
+    include_samples: bool = Query(default=True),
+) -> Response:
+    if scope not in {"overview", "wards", "reports", "board"}:
+        raise HTTPException(status_code=400, detail="Invalid export scope")
+    inputs = _gather_export_inputs(
+        ward=ward,
+        category=category,
+        verification_status=verification_status,
+        include_samples=include_samples,
+    )
+    payload = generate_disaster_csv(scope=scope, **inputs)
+    filename = f"quakelens_kyoto_{scope}.csv"
+    return Response(
+        content=payload,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/exports/disaster-summary.xlsx")
+def export_disaster_xlsx(
+    ward: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    verification_status: str | None = Query(default=None),
+    include_samples: bool = Query(default=True),
+) -> Response:
+    inputs = _gather_export_inputs(
+        ward=ward,
+        category=category,
+        verification_status=verification_status,
+        include_samples=include_samples,
+    )
+    payload = generate_disaster_xlsx(**inputs)
+    return Response(
+        content=payload,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="quakelens_kyoto_summary.xlsx"'},
+    )
+
+
+@app.get("/api/routes/nodes")
+def get_route_nodes() -> dict[str, Any]:
+    return {"is_simulation": True, "nodes": list_route_nodes()}
+
+
+@app.get("/api/routes/simulate")
+def get_route_simulation(
+    origin_id: str = Query(...),
+    destination_id: str = Query(...),
+    include_samples: bool = Query(default=True),
+    avoid_unverified: bool = Query(default=True),
+    block_radius_m: float = Query(default=420.0, ge=100.0, le=1500.0),
+) -> dict[str, Any]:
+    reports = reports_store.list_reports(
+        category="road_blocked",
+        include_samples=include_samples,
+        include_resolved=False,
+        limit=200,
+    )
+    return simulate_alternative_route(
+        origin_id=origin_id,
+        destination_id=destination_id,
+        reports=reports,
+        include_samples=include_samples,
+        avoid_unverified=avoid_unverified,
+        block_radius_m=block_radius_m,
+        store=store if store.loaded else None,
+    )
 
 
 class ChatRequest(BaseModel):
@@ -418,6 +754,8 @@ def chat(
             model=req.model,
             api_key_override=x_gemini_api_key,
             earthquakes_cache=_quake_cache.get("data"),
+            board_store=board_store,
+            reports_store=reports_store,
         )
     except HTTPException:
         raise
@@ -463,6 +801,8 @@ def chat_stream(
                     model=req.model,
                     api_key_override=x_gemini_api_key,
                     earthquakes_cache=_quake_cache.get("data"),
+                    board_store=board_store,
+                    reports_store=reports_store,
                 ):
                     if stop_flag.is_set():
                         break
