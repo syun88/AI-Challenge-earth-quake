@@ -41,7 +41,7 @@ export const HAZARD_SHORT_LABELS: Record<HazardTier, string> = {
 
 // Kyoto Ward approximate centers for quick flyTo navigation
 export const WARD_CENTERS: Record<string, { lon: number; lat: number; zoom: number }> = {
-  all: { lon: 135.7588, lat: 34.9858, zoom: 12.0 },
+  all: { lon: 135.762, lat: 34.974, zoom: 12.6 },
   北区: { lon: 135.745, lat: 35.048, zoom: 13.8 },
   上京区: { lon: 135.756, lat: 35.029, zoom: 14.3 },
   左京区: { lon: 135.788, lat: 35.045, zoom: 13.8 },

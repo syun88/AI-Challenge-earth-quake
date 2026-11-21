@@ -463,3 +463,48 @@ def test_ai_aggregation_grounding_and_route_simulation(isolated_env, monkeypatch
         any(h["report_id"] == "rep-sample01" for h in seg["triggered_by"])
         for seg in sim["blocked_segments"]
     )
+
+    # 5) Live road closure network status & shelter-hub evacuation / rescue dispatch navigation
+    r_net = client.get("/api/network/status?include_samples=true")
+    assert r_net.status_code == 200
+    net_data = r_net.json()
+    assert net_data["blocked_count"] >= 1
+    assert any(e["status"] == "blocked" for e in net_data["edges"])
+    assert len(net_data["hubs"]) == 11
+
+    # Building-linked report persists building_id cleanly with consent
+    r_bldg_rep = client.post(
+        "/api/reports",
+        json={
+            "category": "building_damage",
+            "severity": "critical",
+            "title": "木造住宅 倒壊テスト",
+            "description": "建物ポリゴン紐付けテスト",
+            "ward_name": "伏見区",
+            "meshcode": "5235362024",
+            "building_id": "26100-bldg-1001",
+            "lat": 34.9355,
+            "lon": 135.7615,
+            "location_consent": True,
+        },
+    )
+    assert r_bldg_rep.status_code == 200
+    bldg_rep = r_bldg_rep.json()["report"]
+    assert bldg_rep["building_id"] == "26100-bldg-1001"
+
+    # Evacuation route from map click -> nearest open shelter/relief hub
+    r_evac = client.get("/api/routes/navigate?mode=evacuate&start_lat=34.936&start_lon=135.756")
+    assert r_evac.status_code == 200
+    evac = r_evac.json()
+    assert evac["is_simulation"] is True
+    assert evac["mode"] == "evacuate"
+    assert evac["alternative_route"]["reachable"] is True
+    assert len(evac["alternative_route"]["coordinates"]) >= 2
+
+    # Rescue dispatch route from nearest clear shelter/hub -> incident report
+    r_resc = client.get(f"/api/routes/navigate?mode=rescue&target_report_id={bldg_rep['id']}")
+    assert r_resc.status_code == 200
+    resc = r_resc.json()
+    assert resc["mode"] == "rescue"
+    assert resc["alternative_route"]["reachable"] is True
+    assert "出動元拠点" in (resc.get("note") or "")

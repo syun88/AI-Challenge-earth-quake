@@ -14,6 +14,7 @@ import {
   EarthquakeEvent,
   MeshDetail,
   MetadataResponse,
+  NetworkStatusResponse,
   PriorityArea,
   ReportCategory,
   ReportSeverity,
@@ -433,6 +434,7 @@ export function createDamageReport(body: {
   description: string;
   ward_name: string;
   meshcode?: string | null;
+  building_id?: string | null;
   location_label?: string | null;
   lat?: number | null;
   lon?: number | null;
@@ -527,6 +529,17 @@ export function getRouteNodes() {
   return fetchJson<{ is_simulation: boolean; nodes: RouteNode[] }>("/api/routes/nodes");
 }
 
+export function getNetworkStatus(params?: {
+  includeSamples?: boolean;
+  avoidUnverified?: boolean;
+}) {
+  const sp = new URLSearchParams({
+    include_samples: params?.includeSamples === false ? "false" : "true",
+    avoid_unverified: params?.avoidUnverified === false ? "false" : "true",
+  });
+  return fetchJson<NetworkStatusResponse>(`/api/network/status?${sp.toString()}`);
+}
+
 export function simulateRoute(params: {
   originId: string;
   destinationId: string;
@@ -540,4 +553,35 @@ export function simulateRoute(params: {
     avoid_unverified: params.avoidUnverified === false ? "false" : "true",
   });
   return fetchJson<RouteSimulationResponse>(`/api/routes/simulate?${sp.toString()}`);
+}
+
+export function simulateNavigation(params: {
+  mode: "evacuate" | "rescue" | "custom";
+  originId?: string;
+  destinationId?: string;
+  startLat?: number;
+  startLon?: number;
+  targetLat?: number;
+  targetLon?: number;
+  targetReportId?: string;
+  includeSamples?: boolean;
+  avoidUnverified?: boolean;
+}) {
+  const sp = new URLSearchParams({
+    mode: params.mode,
+    include_samples: params.includeSamples === false ? "false" : "true",
+    avoid_unverified: params.avoidUnverified === false ? "false" : "true",
+  });
+  if (params.originId) sp.set("origin_id", params.originId);
+  if (params.destinationId) sp.set("destination_id", params.destinationId);
+  if (params.startLat != null && params.startLon != null) {
+    sp.set("start_lat", String(params.startLat));
+    sp.set("start_lon", String(params.startLon));
+  }
+  if (params.targetLat != null && params.targetLon != null) {
+    sp.set("target_lat", String(params.targetLat));
+    sp.set("target_lon", String(params.targetLon));
+  }
+  if (params.targetReportId) sp.set("target_report_id", params.targetReportId);
+  return fetchJson<RouteSimulationResponse>(`/api/routes/navigate?${sp.toString()}`);
 }

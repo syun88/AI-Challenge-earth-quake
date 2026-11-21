@@ -381,6 +381,7 @@ export interface DamageReport {
   description: string;
   ward_name: string;
   meshcode: string | null;
+  building_id?: string | null;
   location_label: string | null;
   lat: number | null;
   lon: number | null;
@@ -482,9 +483,54 @@ export interface RouteBlockedSegment {
   }>;
 }
 
-export interface RouteSimulationResponse {
+export interface NetworkEdgeFeature {
+  from_id: string;
+  to_id: string;
+  label: string;
+  status: "clear" | "blocked";
+  coordinates: [[number, number], [number, number]];
+  mid_lon: number;
+  mid_lat: number;
+  triggered_by: Array<{
+    report_id: string;
+    title: string;
+    verification_status: VerificationStatus;
+    verification_label: string;
+    is_sample: boolean;
+    distance_m: number;
+  }>;
+}
+
+export interface ShelterHub {
+  id: string;
+  name: string;
+  role: string;
+  ward: string;
+  lon: number;
+  lat: number;
+  hub_status: "open" | "restricted" | "support_needed";
+  status_note: string;
+  related_reports: Array<{
+    report_id: string;
+    title: string;
+    verification_label: string;
+  }>;
+}
+
+export interface NetworkStatusResponse {
   is_simulation: boolean;
   simulation_disclaimer: string;
+  blocked_count: number;
+  total_segments: number;
+  edges: NetworkEdgeFeature[];
+  hubs: ShelterHub[];
+}
+
+export interface RouteSimulationResponse {
+  mode?: "evacuate" | "rescue" | "custom";
+  is_simulation: boolean;
+  simulation_disclaimer: string;
+  note?: string | null;
   origin: RouteNode;
   destination: RouteNode;
   settings: {

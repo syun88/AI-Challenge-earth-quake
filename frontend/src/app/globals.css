@@ -55,3 +55,9 @@
 .maplibregl-ctrl-attrib a {
   color: #7dd3fc !important;
 }
+
+@media (max-width: 1023px) {
+  .maplibregl-ctrl-bottom-right {
+    margin-bottom: 60px !important;
+  }
+}

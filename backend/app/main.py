@@ -30,7 +30,12 @@ from app.constants import (
 from app.data_store import QuakeLensDataStore
 from app.export_utils import generate_disaster_csv, generate_disaster_xlsx
 from app.reports_store import DamageReportStore
-from app.route_sim import list_route_nodes, simulate_alternative_route
+from app.route_sim import (
+    get_network_status,
+    list_route_nodes,
+    simulate_alternative_route,
+    simulate_navigation,
+)
 from app.security import (
     ai_guard,
     extract_client_ip,
@@ -445,6 +450,7 @@ class DamageReportCreateRequest(BaseModel):
     description: str
     ward_name: str = "京都市全域"
     meshcode: str | None = None
+    building_id: str | None = None
     location_label: str | None = None
     lat: float | None = None
     lon: float | None = None
@@ -546,6 +552,7 @@ def create_damage_report(req: DamageReportCreateRequest) -> dict[str, Any]:
         description=req.description,
         ward_name=req.ward_name,
         meshcode=req.meshcode,
+        building_id=req.building_id,
         location_label=req.location_label,
         lat=req.lat,
         lon=req.lon,
@@ -696,6 +703,26 @@ def get_route_nodes() -> dict[str, Any]:
     return {"is_simulation": True, "nodes": list_route_nodes()}
 
 
+@app.get("/api/network/status")
+def read_network_status(
+    include_samples: bool = Query(default=True),
+    avoid_unverified: bool = Query(default=True),
+    block_radius_m: float = Query(default=420.0, ge=100.0, le=1500.0),
+) -> dict[str, Any]:
+    reports = reports_store.list_reports(
+        include_samples=include_samples,
+        include_resolved=False,
+        limit=300,
+    )
+    return get_network_status(
+        reports=reports,
+        include_samples=include_samples,
+        avoid_unverified=avoid_unverified,
+        block_radius_m=block_radius_m,
+        store=store if store.loaded else None,
+    )
+
+
 @app.get("/api/routes/simulate")
 def get_route_simulation(
     origin_id: str = Query(...),
@@ -714,6 +741,42 @@ def get_route_simulation(
         origin_id=origin_id,
         destination_id=destination_id,
         reports=reports,
+        include_samples=include_samples,
+        avoid_unverified=avoid_unverified,
+        block_radius_m=block_radius_m,
+        store=store if store.loaded else None,
+    )
+
+
+@app.get("/api/routes/navigate")
+def get_navigation_simulation(
+    mode: str = Query(default="evacuate"),
+    origin_id: str | None = Query(default=None),
+    destination_id: str | None = Query(default=None),
+    start_lat: float | None = Query(default=None),
+    start_lon: float | None = Query(default=None),
+    target_lat: float | None = Query(default=None),
+    target_lon: float | None = Query(default=None),
+    target_report_id: str | None = Query(default=None),
+    include_samples: bool = Query(default=True),
+    avoid_unverified: bool = Query(default=True),
+    block_radius_m: float = Query(default=420.0, ge=100.0, le=1500.0),
+) -> dict[str, Any]:
+    reports = reports_store.list_reports(
+        include_samples=include_samples,
+        include_resolved=False,
+        limit=300,
+    )
+    return simulate_navigation(
+        mode=mode,
+        reports=reports,
+        origin_id=origin_id,
+        destination_id=destination_id,
+        start_lat=start_lat,
+        start_lon=start_lon,
+        target_lat=target_lat,
+        target_lon=target_lon,
+        target_report_id=target_report_id,
         include_samples=include_samples,
         avoid_unverified=avoid_unverified,
         block_radius_m=block_radius_m,

@@ -1,18 +1,30 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
-  BarChart3,
+  Ban,
+  Compass,
   Map as MapIcon,
   MessageSquareHeart,
-  Sparkles,
+  ShieldAlert,
+  Tent,
   X,
 } from "lucide-react";
-import { TopBar } from "@/components/TopBar";
-import { LeftFilterPanel } from "@/components/LeftFilterPanel";
-import { QuakeMap } from "@/components/QuakeMap";
-import { RightPanel, RightTab } from "@/components/RightPanel";
+import { AiAssistantPanel } from "@/components/AiAssistantPanel";
+import { DamageReportPanel } from "@/components/DamageReportPanel";
+import { DisasterBoard } from "@/components/DisasterBoard";
+import { FloatingHeader, WorkspacePanel } from "@/components/FloatingHeader";
+import { MapDisplayPopover } from "@/components/MapDisplayPopover";
+import { NavigationPanel } from "@/components/NavigationPanel";
+import {
+  MapPickMode,
+  PickedMapTarget,
+  QuakeMap,
+  VisualPreset,
+} from "@/components/QuakeMap";
+import { RiskStatsDrawer } from "@/components/RiskStatsDrawer";
+import { SelectedFeatureCard } from "@/components/SelectedFeatureCard";
 import { SourcesModal } from "@/components/SourcesModal";
 import { WARD_CENTERS } from "@/lib/colors";
 import {
@@ -25,8 +37,10 @@ import {
   getMeshDetail,
   getMeshesGeoJson,
   getMetadata,
+  getNetworkStatus,
   getPriorityAreas,
   getStats,
+  simulateNavigation,
   simulateRoute,
 } from "@/lib/api";
 import {
@@ -42,8 +56,11 @@ import {
   MeshDetail,
   MeshOverlayMode,
   MetadataResponse,
+  NetworkEdgeFeature,
+  NetworkStatusResponse,
   PriorityArea,
   RouteSimulationResponse,
+  ShelterHub,
   StatsResponse,
   UsageGroup,
 } from "@/types/quakelens";
@@ -61,15 +78,22 @@ export default function HomePage() {
   const [aiProtection, setAiProtection] = useState<AiProtectionStatus | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
 
-  // Integrated Disaster Response State (Safety Board & Damage Reports & Routes)
+  // Live Disaster Data & Road Network State
   const [boardSummary, setBoardSummary] = useState<BoardSummaryResponse | null>(null);
   const [reports, setReports] = useState<DamageReport[]>([]);
   const [reportSummary, setReportSummary] = useState<DamageReportSummaryResponse | null>(null);
+  const [networkStatus, setNetworkStatus] = useState<NetworkStatusResponse | null>(null);
   const [includeSamples, setIncludeSamples] = useState(true);
   const [disasterNonce, setDisasterNonce] = useState(0);
   const [routeResult, setRouteResult] = useState<RouteSimulationResponse | null>(null);
 
-  // Filters & Layer state
+  // Workspace Shell & Visual Presets
+  const [activePanel, setActivePanel] = useState<WorkspacePanel>("none");
+  const [displayOpen, setDisplayOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [visualPreset, setVisualPreset] = useState<VisualPreset>("crisis");
+
+  // Map Layers & Filters
   const [selectedWard, setSelectedWard] = useState<string>("all");
   const [ageCategories, setAgeCategories] = useState<AgeCategory[]>(DEFAULT_AGES);
   const [hazardTiers, setHazardTiers] = useState<HazardTier[]>(DEFAULT_HAZARDS);
@@ -80,19 +104,32 @@ export default function HomePage() {
   const [showBuildings, setShowBuildings] = useState(true);
   const [showHazardMesh, setShowHazardMesh] = useState(true);
   const [meshOverlayMode, setMeshOverlayMode] = useState<MeshOverlayMode>("hazard");
-  const [showEarthquakes, setShowEarthquakes] = useState(false);
-  const [showSafetyLayer, setShowSafetyLayer] = useState(true);
+  const [showRoadClosures, setShowRoadClosures] = useState(true);
+  const [showShelterHubs, setShowShelterHubs] = useState(true);
   const [showReports, setShowReports] = useState(true);
+  const [showSafetyLayer, setShowSafetyLayer] = useState(true);
+  const [showEarthquakes, setShowEarthquakes] = useState(false);
   const [is3D, setIs3D] = useState(false);
 
-  // Selection, Picker & Responsive Layout State
-  const [activeTab, setActiveTab] = useState<RightTab>("stats");
-  const [mobilePane, setMobilePane] = useState<"map" | "panel">("map");
+  // Active Selections & Map Pickers
   const [selectedBuilding, setSelectedBuilding] = useState<BuildingDetail | null>(null);
   const [selectedMesh, setSelectedMesh] = useState<MeshDetail | null>(null);
   const [selectedReport, setSelectedReport] = useState<DamageReport | null>(null);
-  const [isPickingLocation, setIsPickingLocation] = useState(false);
-  const [pickedCoords, setPickedCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [selectedBlockedRoad, setSelectedBlockedRoad] = useState<NetworkEdgeFeature | null>(null);
+  const [selectedShelterHub, setSelectedShelterHub] = useState<ShelterHub | null>(null);
+
+  const [mapPickMode, setMapPickMode] = useState<MapPickMode>("none");
+  const [pickedReportTarget, setPickedReportTarget] = useState<PickedMapTarget | null>(null);
+  const [pickedEvacuateCoords, setPickedEvacuateCoords] = useState<{
+    lat: number;
+    lon: number;
+    label?: string;
+  } | null>(null);
+  const [pickedRescueCoords, setPickedRescueCoords] = useState<{
+    lat: number;
+    lon: number;
+    label?: string;
+  } | null>(null);
 
   const [flyToTarget, setFlyToTarget] = useState<{
     lon: number;
@@ -100,65 +137,114 @@ export default function HomePage() {
     zoom: number;
     ts: number;
   } | null>(null);
-  const [sourcesOpen, setSourcesOpen] = useState(false);
-  const [mobileLeftOpen, setMobileLeftOpen] = useState(false);
   const [queuedAiPrompt, setQueuedAiPrompt] = useState<{ text: string; ts: number } | null>(null);
-
-  const wardsList =
-    metadata?.wards || Object.keys(WARD_CENTERS).filter((k) => k !== "all");
+  const [reportCreateTrigger, setReportCreateTrigger] = useState(0);
 
   // Initial load: health, metadata, meshes, earthquakes
   useEffect(() => {
-    (async () => {
-      try {
-        const [h, m, mj, eq] = await Promise.all([
-          getHealth(),
-          getMetadata(),
-          getMeshesGeoJson("all"),
-          getEarthquakes(40).catch(() => ({ earthquakes: [] })),
-        ]);
+    let cancelled = false;
+    Promise.all([
+      getHealth(),
+      getMetadata(),
+      getMeshesGeoJson("all"),
+      getEarthquakes(40).catch(() => ({ earthquakes: [] })),
+    ])
+      .then(([h, m, mj, eq]) => {
+        if (cancelled) return;
         setGeminiConfigured(h.gemini_configured);
         setAiProtection(h.ai_protection ?? null);
         setMetadata(m);
         setMeshesGeoJson(mj);
         setEarthquakes(eq.earthquakes || []);
         setApiError(null);
-      } catch (err) {
+      })
+      .catch((err) => {
+        if (cancelled) return;
         setApiError(
           err instanceof Error
             ? `バックエンドAPIに接続できません（${err.message}）`
             : "バックエンドAPIに接続できません。"
         );
-      }
-    })();
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Load / refresh Safety Board & Damage Reports whenever ward, sample toggle, or mutation changes
+  // Load / refresh Board Summary, Damage Reports & Road Network Status
   useEffect(() => {
-    (async () => {
-      try {
-        const [bSum, repList, repSum] = await Promise.all([
-          getBoardSummary({ ward: selectedWard, includeSamples }),
-          getDamageReports({
-            ward: selectedWard,
-            includeSamples,
-            includeResolved: true,
-            limit: 120,
-          }),
-          getDamageReportsSummary({
-            ward: selectedWard,
-            includeSamples,
-            includeResolved: false,
-          }),
-        ]);
+    let cancelled = false;
+    Promise.all([
+      getBoardSummary({ ward: selectedWard, includeSamples }),
+      getDamageReports({
+        ward: selectedWard,
+        includeSamples,
+        includeResolved: true,
+        limit: 120,
+      }),
+      getDamageReportsSummary({
+        ward: selectedWard,
+        includeSamples,
+        includeResolved: false,
+      }),
+      getNetworkStatus({ includeSamples, avoidUnverified: true }),
+    ])
+      .then(([bSum, repList, repSum, net]) => {
+        if (cancelled) return;
         setBoardSummary(bSum);
         setReports(repList.reports);
         setReportSummary(repSum);
-      } catch {
-        // leave current state if backend unavailable
-      }
-    })();
+        setNetworkStatus(net);
+      })
+      .catch(() => {
+        // handled by top-level banner if unreachable
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedWard, includeSamples, disasterNonce]);
+
+  // Refresh building/hazard stats whenever filters change
+  useEffect(() => {
+    let cancelled = false;
+    getStats({
+      ward: selectedWard,
+      ageCategories,
+      hazardTiers,
+      usageGroup,
+      meshcode: selectedMeshcode,
+    })
+      .then((s) => {
+        if (!cancelled) setStats(s);
+      })
+      .catch(() => {
+        // handled cleanly
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedWard, ageCategories, hazardTiers, usageGroup, selectedMeshcode]);
+
+  // Refresh priority areas
+  useEffect(() => {
+    let cancelled = false;
+    getPriorityAreas({
+      ward: selectedWard,
+      hazardTiers,
+      usageGroup,
+      sortBy,
+      limit: 20,
+    })
+      .then((res) => {
+        if (!cancelled) setPriorityAreas(res.areas);
+      })
+      .catch(() => {
+        // ignore
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedWard, hazardTiers, usageGroup, sortBy]);
 
   const handleRefreshHealth = useCallback(async () => {
     try {
@@ -170,44 +256,16 @@ export default function HomePage() {
     }
   }, []);
 
-  // Refresh building/hazard stats whenever filters change
-  useEffect(() => {
-    (async () => {
-      try {
-        const s = await getStats({
-          ward: selectedWard,
-          ageCategories,
-          hazardTiers,
-          usageGroup,
-          meshcode: selectedMeshcode,
-        });
-        setStats(s);
-      } catch {
-        // handled by top-level error banner
-      }
-    })();
-  }, [selectedWard, ageCategories, hazardTiers, usageGroup, selectedMeshcode]);
-
-  // Refresh priority areas
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await getPriorityAreas({
-          ward: selectedWard,
-          hazardTiers,
-          usageGroup,
-          sortBy,
-          limit: 20,
-        });
-        setPriorityAreas(res.areas);
-      } catch {
-        // ignore
-      }
-    })();
-  }, [selectedWard, hazardTiers, usageGroup, sortBy]);
-
   const triggerDisasterRefresh = useCallback(() => {
     setDisasterNonce((n) => n + 1);
+  }, []);
+
+  const clearSelections = useCallback(() => {
+    setSelectedBuilding(null);
+    setSelectedMesh(null);
+    setSelectedReport(null);
+    setSelectedBlockedRoad(null);
+    setSelectedShelterHub(null);
   }, []);
 
   const handleSelectWard = useCallback((ward: string) => {
@@ -246,75 +304,241 @@ export default function HomePage() {
     setHazardTiers(DEFAULT_HAZARDS);
     setUsageGroup("all");
     setSelectedMeshcode(null);
-    setSelectedMesh(null);
-    setSelectedBuilding(null);
-    setSelectedReport(null);
     setRouteResult(null);
+    clearSelections();
     setFlyToTarget({ ...WARD_CENTERS.all, ts: Date.now() });
-  }, []);
+  }, [clearSelections]);
 
-  const handleClearMeshcode = useCallback(() => {
-    setSelectedMeshcode(null);
-    setSelectedMesh(null);
-  }, []);
+  const handleSelectBuilding = useCallback(
+    async (buildingId: string) => {
+      clearSelections();
+      try {
+        const detail = await getBuildingDetail(buildingId);
+        setSelectedBuilding(detail);
+      } catch {
+        // ignore
+      }
+    },
+    [clearSelections]
+  );
 
-  const openPanelTab = useCallback((tab: RightTab) => {
-    setActiveTab(tab);
-    setMobilePane("panel");
-  }, []);
+  const handleSelectMesh = useCallback(
+    async (meshcode: string) => {
+      clearSelections();
+      setSelectedMeshcode(meshcode);
+      try {
+        const detail = await getMeshDetail(meshcode);
+        setSelectedMesh(detail);
+      } catch {
+        // ignore
+      }
+    },
+    [clearSelections]
+  );
 
-  const handleSelectBuilding = useCallback(async (buildingId: string) => {
-    try {
-      const detail = await getBuildingDetail(buildingId);
-      setSelectedBuilding(detail);
-      setActiveTab("detail");
-      setMobilePane("panel");
-    } catch {
-      // ignore
-    }
-  }, []);
+  const handleSelectReportFromMap = useCallback(
+    (rep: DamageReport) => {
+      clearSelections();
+      setSelectedReport(rep);
+    },
+    [clearSelections]
+  );
 
-  const handleSelectMesh = useCallback(async (meshcode: string) => {
-    setSelectedMeshcode(meshcode);
-    try {
-      const detail = await getMeshDetail(meshcode);
-      setSelectedMesh(detail);
-      setActiveTab("detail");
-      setMobilePane("panel");
-    } catch {
-      // ignore
-    }
-  }, []);
+  const handleSelectBlockedRoad = useCallback(
+    (edge: NetworkEdgeFeature) => {
+      clearSelections();
+      setSelectedBlockedRoad(edge);
+    },
+    [clearSelections]
+  );
 
-  const handleSelectReportFromMap = useCallback((rep: DamageReport) => {
-    setSelectedReport(rep);
-    setActiveTab("detail");
-    setMobilePane("panel");
-  }, []);
+  const handleSelectShelterHub = useCallback(
+    (hub: ShelterHub) => {
+      clearSelections();
+      setSelectedShelterHub(hub);
+      setFlyToTarget({ lon: hub.lon, lat: hub.lat, zoom: 14.5, ts: Date.now() });
+    },
+    [clearSelections]
+  );
 
   const handleSelectSafetyWardFromMap = useCallback((wardName: string) => {
     if (wardName && WARD_CENTERS[wardName]) {
       setSelectedWard(wardName);
     }
-    setActiveTab("safety");
-    setMobilePane("panel");
+    setActivePanel("safety");
+    setDisplayOpen(false);
   }, []);
+
+  const handleFocusReport = useCallback((rep: DamageReport) => {
+    setSelectedReport(rep);
+    setShowReports(true);
+    if (rep.lon != null && rep.lat != null) {
+      setFlyToTarget({ lon: rep.lon, lat: rep.lat, zoom: 16.5, ts: Date.now() });
+    } else if (rep.ward_name && WARD_CENTERS[rep.ward_name]) {
+      setSelectedWard(rep.ward_name);
+      setFlyToTarget({ ...WARD_CENTERS[rep.ward_name], ts: Date.now() });
+    }
+  }, []);
+
+  const handleReportCreated = useCallback(
+    (rep: DamageReport) => {
+      setShowReports(true);
+      setShowRoadClosures(true);
+      setSelectedReport(rep);
+      if (rep.lon != null && rep.lat != null) {
+        setFlyToTarget({ lon: rep.lon, lat: rep.lat, zoom: 16.8, ts: Date.now() });
+      }
+    },
+    []
+  );
+
+  const handleDispatchRescueToReport = useCallback(
+    async (rep: DamageReport) => {
+      try {
+        const res = await simulateNavigation({
+          mode: "rescue",
+          targetReportId: rep.id,
+          includeSamples,
+          avoidUnverified: true,
+        });
+        setRouteResult(res);
+        setShowRoadClosures(true);
+        setShowShelterHubs(true);
+        setActivePanel("nav");
+      } catch {
+        setActivePanel("nav");
+      }
+    },
+    [includeSamples]
+  );
+
+  const handleDispatchRescueToBuilding = useCallback(
+    async (building: BuildingDetail) => {
+      try {
+        const res = await simulateNavigation({
+          mode: "rescue",
+          targetLat: building.centroid_lat,
+          targetLon: building.centroid_lon,
+          includeSamples,
+          avoidUnverified: true,
+        });
+        setPickedRescueCoords({
+          lat: building.centroid_lat,
+          lon: building.centroid_lon,
+          label: `${building.ward_name} (${building.building_id})`,
+        });
+        setRouteResult(res);
+        setShowRoadClosures(true);
+        setShowShelterHubs(true);
+        setActivePanel("nav");
+      } catch {
+        setActivePanel("nav");
+      }
+    },
+    [includeSamples]
+  );
+
+  const handleReportBuilding = useCallback((building: BuildingDetail) => {
+    setPickedReportTarget({
+      lat: building.centroid_lat,
+      lon: building.centroid_lon,
+      buildingId: building.building_id,
+      meshcode: building.meshcode,
+      wardName: building.ward_name,
+      yearBuilt: building.year_built,
+      structureLabel: building.structure_label,
+      usageLabel: building.usage_label,
+    });
+    setReportCreateTrigger((n) => n + 1);
+    setActivePanel("report");
+    setDisplayOpen(false);
+  }, []);
+
+  const handleOpenReportForMesh = useCallback((mesh: MeshDetail) => {
+    setPickedReportTarget({
+      lat: mesh.centroid_lat,
+      lon: mesh.centroid_lon,
+      meshcode: mesh.meshcode,
+      wardName: mesh.ward_name,
+    });
+    setReportCreateTrigger((n) => n + 1);
+    setActivePanel("report");
+    setDisplayOpen(false);
+  }, []);
+
+  const handleMapPicked = useCallback(
+    async (target: PickedMapTarget) => {
+      if (mapPickMode === "report") {
+        setPickedReportTarget(target);
+        setMapPickMode("none");
+        setReportCreateTrigger((n) => n + 1);
+        setActivePanel("report");
+        return;
+      }
+
+      if (mapPickMode === "evacuate") {
+        setMapPickMode("none");
+        setPickedEvacuateCoords({
+          lat: target.lat,
+          lon: target.lon,
+          label: target.wardName
+            ? `${target.wardName} (${target.lat.toFixed(4)}, ${target.lon.toFixed(4)})`
+            : undefined,
+        });
+        try {
+          const res = await simulateNavigation({
+            mode: "evacuate",
+            startLat: target.lat,
+            startLon: target.lon,
+            includeSamples,
+            avoidUnverified: true,
+          });
+          setRouteResult(res);
+          setActivePanel("nav");
+        } catch {
+          setActivePanel("nav");
+        }
+        return;
+      }
+
+      if (mapPickMode === "rescue") {
+        setMapPickMode("none");
+        setPickedRescueCoords({
+          lat: target.lat,
+          lon: target.lon,
+          label: target.buildingId
+            ? `${target.wardName ?? ""} (${target.buildingId})`
+            : target.wardName
+              ? `${target.wardName} (${target.lat.toFixed(4)}, ${target.lon.toFixed(4)})`
+              : undefined,
+        });
+        try {
+          const res = await simulateNavigation({
+            mode: "rescue",
+            targetLat: target.lat,
+            targetLon: target.lon,
+            includeSamples,
+            avoidUnverified: true,
+          });
+          setRouteResult(res);
+          setActivePanel("nav");
+        } catch {
+          setActivePanel("nav");
+        }
+      }
+    },
+    [mapPickMode, includeSamples]
+  );
 
   const handleSelectPriorityArea = useCallback(
     async (area: PriorityArea) => {
-      if (selectedMeshcode === area.meshcode) {
-        setSelectedMeshcode(null);
-        setSelectedMesh(null);
-        return;
-      }
       setSelectedMeshcode(area.meshcode);
       setFlyToTarget({
         lon: area.centroid_lon,
         lat: area.centroid_lat,
-        zoom: 15.6,
+        zoom: 15.8,
         ts: Date.now(),
       });
-      setMobilePane("map");
       try {
         const detail = await getMeshDetail(area.meshcode);
         setSelectedMesh(detail);
@@ -322,50 +546,17 @@ export default function HomePage() {
         // ignore
       }
     },
-    [selectedMeshcode]
+    []
   );
 
   const handleRequestAiExplain = useCallback((prompt: string) => {
     setQueuedAiPrompt({ text: prompt, ts: Date.now() });
-    setActiveTab("ai");
-    setMobilePane("panel");
+    setActivePanel("ai");
+    setDisplayOpen(false);
   }, []);
-
-  const handleConsumeQueuedAiPrompt = useCallback(() => {
-    setQueuedAiPrompt(null);
-  }, []);
-
-  const handleStartPickLocation = useCallback(() => {
-    setIsPickingLocation(true);
-    setShowReports(true);
-    setMobilePane("map");
-  }, []);
-
-  const handlePickLocation = useCallback((coords: { lat: number; lon: number }) => {
-    setPickedCoords(coords);
-    setIsPickingLocation(false);
-    setActiveTab("reports");
-    setMobilePane("panel");
-  }, []);
-
-  const handleFocusReport = useCallback(
-    (rep: DamageReport) => {
-      setSelectedReport(rep);
-      setShowReports(true);
-      setMobilePane("map");
-      if (rep.lon != null && rep.lat != null) {
-        setFlyToTarget({ lon: rep.lon, lat: rep.lat, zoom: 15.8, ts: Date.now() });
-      } else if (rep.ward_name && WARD_CENTERS[rep.ward_name]) {
-        setSelectedWard(rep.ward_name);
-        setFlyToTarget({ ...WARD_CENTERS[rep.ward_name], ts: Date.now() });
-      }
-    },
-    []
-  );
 
   const handleFocusBoardArea = useCallback(async (wardName: string, meshcode: string | null) => {
     setShowSafetyLayer(true);
-    setMobilePane("map");
     if (wardName && wardName !== "京都市全域" && WARD_CENTERS[wardName]) {
       setSelectedWard(wardName);
     }
@@ -402,13 +593,11 @@ export default function HomePage() {
           zoom: action.zoom ?? center.zoom ?? 12.6,
           ts: Date.now(),
         });
-        setMobilePane("map");
         return;
       }
 
       if (action.type === "fly_to_mesh" && action.meshcode) {
         setSelectedMeshcode(action.meshcode);
-        setMobilePane("map");
         if (action.lon != null && action.lat != null) {
           setFlyToTarget({
             lon: action.lon,
@@ -435,7 +624,6 @@ export default function HomePage() {
       }
 
       if (action.type === "focus_building" && action.building_id) {
-        setMobilePane("map");
         try {
           const detail = await getBuildingDetail(action.building_id);
           setSelectedBuilding(detail);
@@ -454,7 +642,6 @@ export default function HomePage() {
 
       if (action.type === "focus_report") {
         setShowReports(true);
-        setMobilePane("map");
         if (action.lon != null && action.lat != null) {
           setFlyToTarget({
             lon: action.lon,
@@ -477,7 +664,7 @@ export default function HomePage() {
             avoidUnverified: true,
           });
           setRouteResult(res);
-          setMobilePane("map");
+          setShowRoadClosures(true);
         } catch {
           // ignore
         }
@@ -486,304 +673,366 @@ export default function HomePage() {
     [includeSamples]
   );
 
+  const wards = metadata?.wards ?? Object.keys(WARD_CENTERS).filter((k) => k !== "all");
+  const blockedCount = networkStatus?.blocked_count ?? 0;
+
   return (
-    <div className="flex h-[100dvh] w-screen flex-col overflow-hidden bg-slate-950">
-      <TopBar
-        stats={stats}
+    <div className="relative h-[100dvh] w-screen overflow-hidden bg-slate-950">
+      {/* Full-Viewport Interactive Kyoto Map Canvas */}
+      <QuakeMap
+        meshesGeoJson={meshesGeoJson}
+        earthquakes={earthquakes}
+        reports={reports}
         boardSummary={boardSummary}
-        reportSummary={reportSummary}
+        networkStatus={networkStatus}
+        routeResult={routeResult}
+        visualPreset={visualPreset}
         selectedWard={selectedWard}
-        geminiConfigured={geminiConfigured}
-        onOpenSources={() => setSourcesOpen(true)}
-        onOpenSafetyTab={() => openPanelTab("safety")}
-        onOpenReportsTab={() => openPanelTab("reports")}
-        onOpenAiTab={() => openPanelTab("ai")}
-        onToggleMobileLeft={() => setMobileLeftOpen((v) => !v)}
+        ageCategories={ageCategories}
+        hazardTiers={hazardTiers}
+        usageGroup={usageGroup}
+        showBuildings={showBuildings}
+        showHazardMesh={showHazardMesh}
+        meshOverlayMode={meshOverlayMode}
+        showEarthquakes={showEarthquakes}
+        showReports={showReports}
+        showRoadClosures={showRoadClosures}
+        showSafetyLayer={showSafetyLayer}
+        showShelterHubs={showShelterHubs}
+        is3D={is3D}
+        selectedBuildingId={selectedBuilding?.building_id ?? null}
+        selectedMeshcode={selectedMeshcode}
+        flyToTarget={flyToTarget}
+        mapPickMode={mapPickMode}
+        pickedCoords={pickedReportTarget}
+        onCancelPickMode={() => setMapPickMode("none")}
+        onMapPicked={(target) => void handleMapPicked(target)}
+        onSelectBuilding={(id) => void handleSelectBuilding(id)}
+        onSelectMesh={(mc) => void handleSelectMesh(mc)}
+        onSelectReport={handleSelectReportFromMap}
+        onSelectBlockedRoad={handleSelectBlockedRoad}
+        onSelectShelterHub={handleSelectShelterHub}
+        onSelectSafetyWard={handleSelectSafetyWardFromMap}
       />
 
+      {/* Top Floating Nav & Mobile Bottom Dock */}
+      <FloatingHeader
+        activePanel={activePanel}
+        onTogglePanel={(p) => {
+          setActivePanel(p);
+          setDisplayOpen(false);
+        }}
+        wards={wards}
+        selectedWard={selectedWard}
+        onSelectWard={handleSelectWard}
+        displayOpen={displayOpen}
+        onToggleDisplay={() => setDisplayOpen((o) => !o)}
+        onOpenSources={() => setSourcesOpen(true)}
+        reportCount={reportSummary?.total_reports ?? reports.length}
+        boardCount={boardSummary?.total_entries ?? 0}
+        blockedRoadCount={blockedCount}
+        hasActiveRoute={Boolean(routeResult)}
+        geminiConfigured={geminiConfigured}
+      />
+
+      {/* API Connection Error Banner (floating under top header) */}
       {apiError && (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-500/40 bg-rose-950/80 px-4 py-1.5 text-xs text-rose-200">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
-            <span>{apiError}</span>
-          </div>
-          <span className="font-mono text-[10px] text-rose-300">
-            Backend: uv run uvicorn app.main:app --port 8000
-          </span>
+        <div
+          role="alert"
+          data-testid="api-error-banner"
+          className="fixed left-1/2 top-[68px] z-40 flex w-[min(640px,calc(100vw-24px))] -translate-x-1/2 items-center justify-between gap-3 rounded-2xl border border-rose-500/60 bg-rose-950/95 px-4 py-2.5 text-xs text-rose-100 shadow-2xl backdrop-blur-md"
+        >
+          <span>{apiError}</span>
+          <button
+            type="button"
+            onClick={() => setApiError(null)}
+            className="rounded px-2 py-0.5 text-rose-200 hover:bg-rose-900"
+          >
+            閉じる
+          </button>
         </div>
       )}
 
-      {/* Main Responsive Workspace */}
-      <div className="relative flex flex-1 min-h-0 overflow-hidden">
-        {/* Desktop Left Filters */}
-        <div className="hidden lg:block lg:w-72 shrink-0 h-full overflow-hidden">
-          <LeftFilterPanel
-            wards={wardsList}
-            selectedWard={selectedWard}
-            onSelectWard={handleSelectWard}
-            ageCategories={ageCategories}
-            onToggleAgeCategory={handleToggleAgeCategory}
-            onSelectAllAges={() => setAgeCategories(DEFAULT_AGES)}
-            hazardTiers={hazardTiers}
-            onToggleHazardTier={handleToggleHazardTier}
-            onSelectAllHazards={() => setHazardTiers(DEFAULT_HAZARDS)}
-            usageGroup={usageGroup}
-            onChangeUsageGroup={setUsageGroup}
-            showBuildings={showBuildings}
-            onToggleBuildings={() => setShowBuildings((v) => !v)}
-            showHazardMesh={showHazardMesh}
-            onToggleHazardMesh={() => setShowHazardMesh((v) => !v)}
-            meshOverlayMode={meshOverlayMode}
-            onChangeMeshOverlayMode={setMeshOverlayMode}
-            showEarthquakes={showEarthquakes}
-            onToggleEarthquakes={() => setShowEarthquakes((v) => !v)}
-            showSafetyLayer={showSafetyLayer}
-            onToggleSafetyLayer={() => setShowSafetyLayer((v) => !v)}
-            showReports={showReports}
-            onToggleReports={() => setShowReports((v) => !v)}
-            includeSamples={includeSamples}
-            onToggleIncludeSamples={() => setIncludeSamples((v) => !v)}
-            is3D={is3D}
-            onChangeIs3D={setIs3D}
-            onResetFilters={handleResetFilters}
-            selectedMeshcode={selectedMeshcode}
-            onClearMeshcode={handleClearMeshcode}
-            knownHeightRate={metadata?.counts?.known_measured_height_rate ?? null}
-          />
-        </div>
+      {/* Compact Display & Filter Settings Popover */}
+      <MapDisplayPopover
+        open={displayOpen}
+        onClose={() => setDisplayOpen(false)}
+        visualPreset={visualPreset}
+        onChangeVisualPreset={setVisualPreset}
+        is3D={is3D}
+        onChangeIs3D={setIs3D}
+        showBuildings={showBuildings}
+        onToggleBuildings={() => setShowBuildings((v) => !v)}
+        showHazardMesh={showHazardMesh}
+        onToggleHazardMesh={() => setShowHazardMesh((v) => !v)}
+        meshOverlayMode={meshOverlayMode}
+        onChangeMeshOverlayMode={setMeshOverlayMode}
+        showRoadClosures={showRoadClosures}
+        onToggleRoadClosures={() => setShowRoadClosures((v) => !v)}
+        showShelterHubs={showShelterHubs}
+        onToggleShelterHubs={() => setShowShelterHubs((v) => !v)}
+        showReports={showReports}
+        onToggleReports={() => setShowReports((v) => !v)}
+        showSafetyLayer={showSafetyLayer}
+        onToggleSafetyLayer={() => setShowSafetyLayer((v) => !v)}
+        showEarthquakes={showEarthquakes}
+        onToggleEarthquakes={() => setShowEarthquakes((v) => !v)}
+        includeSamples={includeSamples}
+        onToggleIncludeSamples={() => setIncludeSamples((v) => !v)}
+        ageCategories={ageCategories}
+        onToggleAgeCategory={handleToggleAgeCategory}
+        hazardTiers={hazardTiers}
+        onToggleHazardTier={handleToggleHazardTier}
+        usageGroup={usageGroup}
+        onChangeUsageGroup={setUsageGroup}
+        selectedMeshcode={selectedMeshcode}
+        onClearMeshcode={() => {
+          setSelectedMeshcode(null);
+          setSelectedMesh(null);
+        }}
+        onResetFilters={handleResetFilters}
+      />
 
-        {/* Mobile Filters Slide-Over */}
-        {mobileLeftOpen && (
-          <div className="fixed inset-0 z-40 flex lg:hidden">
-            <div className="relative h-full w-72 bg-slate-900 shadow-2xl">
+      {/* Clean Left Slide-Over Action Drawer */}
+      {activePanel !== "none" && (
+        <aside
+          data-testid="workspace-drawer"
+          className="fixed inset-x-2 bottom-[62px] top-[66px] z-20 flex flex-col overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-900/95 shadow-2xl backdrop-blur-xl lg:inset-x-auto lg:bottom-4 lg:left-3 lg:top-[68px] lg:w-[420px]"
+        >
+          <div className="flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950/70 px-4 py-2.5">
+            <span className="text-xs font-bold text-slate-200">
+              {activePanel === "report"
+                ? "被害状況の報告・確認"
+                : activePanel === "safety"
+                  ? "災害用伝言板（安否確認）"
+                  : activePanel === "nav"
+                    ? "避難・救援ルート案内"
+                    : activePanel === "ai"
+                      ? "Gemini AI 状況分析"
+                      : "災害統計・建物リスク分析"}
+            </span>
+            <button
+              type="button"
+              data-testid="close-drawer-btn"
+              onClick={() => setActivePanel("none")}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-slate-300 hover:bg-slate-800 hover:text-white"
+            >
+              <X className="h-3.5 w-3.5" />
+              地図を広く見る
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {activePanel === "report" && (
+              <DamageReportPanel
+                key={`rep-${reportCreateTrigger}`}
+                wards={wards}
+                selectedWard={selectedWard}
+                selectedMeshcode={selectedMeshcode}
+                reports={reports}
+                summary={reportSummary}
+                includeSamples={includeSamples}
+                onToggleIncludeSamples={setIncludeSamples}
+                pickedTarget={pickedReportTarget}
+                isPickingLocation={mapPickMode === "report"}
+                onStartPickLocation={() => {
+                  setShowReports(true);
+                  setMapPickMode("report");
+                }}
+                onCancelPickLocation={() => setMapPickMode("none")}
+                onClearPickedLocation={() => setPickedReportTarget(null)}
+                onFocusReport={handleFocusReport}
+                onReportCreated={handleReportCreated}
+                onDispatchRescue={(rep) => void handleDispatchRescueToReport(rep)}
+                onReportsChanged={triggerDisasterRefresh}
+                onOpenRouteSimulator={() => setActivePanel("nav")}
+                startInCreateMode={reportCreateTrigger > 0}
+              />
+            )}
+
+            {activePanel === "safety" && (
+              <DisasterBoard
+                embedded
+                wards={wards}
+                defaultWard={selectedWard}
+                defaultMeshcode={selectedMeshcode}
+                includeSamples={includeSamples}
+                onToggleIncludeSamples={setIncludeSamples}
+                onFocusArea={handleFocusBoardArea}
+                onSelectWardFilter={handleSelectWard}
+                onDataMutated={triggerDisasterRefresh}
+              />
+            )}
+
+            {activePanel === "nav" && (
+              <NavigationPanel
+                reports={reports}
+                networkStatus={networkStatus}
+                routeResult={routeResult}
+                includeSamples={includeSamples}
+                isPickingEvacuate={mapPickMode === "evacuate"}
+                isPickingRescue={mapPickMode === "rescue"}
+                pickedEvacuateCoords={pickedEvacuateCoords}
+                pickedRescueCoords={pickedRescueCoords}
+                onStartPickEvacuate={() => {
+                  setShowShelterHubs(true);
+                  setShowRoadClosures(true);
+                  setMapPickMode("evacuate");
+                }}
+                onStartPickRescue={() => {
+                  setShowShelterHubs(true);
+                  setShowRoadClosures(true);
+                  setMapPickMode("rescue");
+                }}
+                onCancelPick={() => setMapPickMode("none")}
+                onChangeRouteResult={setRouteResult}
+                onSelectShelterHub={handleSelectShelterHub}
+              />
+            )}
+
+            {activePanel === "ai" && (
+              <AiAssistantPanel
+                geminiConfigured={geminiConfigured}
+                aiProtection={aiProtection}
+                totalBuildings={metadata?.counts.total_buildings ?? stats?.total_buildings}
+                onRefreshHealth={handleRefreshHealth}
+                selectedWard={selectedWard}
+                ageCategories={ageCategories}
+                hazardTiers={hazardTiers}
+                usageGroup={usageGroup}
+                is3D={is3D}
+                selectedBuilding={selectedBuilding}
+                selectedMesh={selectedMesh}
+                queuedPrompt={queuedAiPrompt}
+                onConsumeQueuedPrompt={() => setQueuedAiPrompt(null)}
+                onExecuteMapAction={handleExecuteMapAction}
+              />
+            )}
+
+            {activePanel === "stats" && (
+              <RiskStatsDrawer
+                selectedWard={selectedWard}
+                selectedMeshcode={selectedMeshcode}
+                includeSamples={includeSamples}
+                stats={stats}
+                boardSummary={boardSummary}
+                reportSummary={reportSummary}
+                priorityAreas={priorityAreas}
+                sortBy={sortBy}
+                onChangeSortBy={setSortBy}
+                ageCategories={ageCategories}
+                hazardTiers={hazardTiers}
+                onToggleAgeCategory={handleToggleAgeCategory}
+                onToggleHazardTier={handleToggleHazardTier}
+                onSelectPriorityArea={handleSelectPriorityArea}
+                onOpenSafety={() => setActivePanel("safety")}
+                onOpenReports={() => setActivePanel("report")}
+              />
+            )}
+          </div>
+        </aside>
+      )}
+
+      {/* Unobtrusive Bottom-Left Live Summary & Visual Key when Drawer Closed (Desktop) */}
+      {activePanel === "none" && mapPickMode === "none" && (
+        <div
+          data-testid="map-summary-pill"
+          className="pointer-events-auto fixed bottom-4 left-3 z-20 hidden max-w-[600px] flex-col gap-2 rounded-2xl border border-slate-700/80 bg-slate-900/90 px-4 py-3 text-xs text-slate-200 shadow-2xl backdrop-blur-xl lg:flex"
+        >
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="flex items-center gap-1.5 font-bold text-white">
+              <MapIcon className="h-3.5 w-3.5 text-sky-400" />
+              {selectedWard === "all" ? "京都市全域" : selectedWard}
+            </span>
+            <span className="font-mono text-slate-300">
+              建物 {(stats?.total_buildings ?? metadata?.counts.total_buildings ?? 0).toLocaleString("ja-JP")}棟
+            </span>
+            <span className="flex items-center gap-1 text-rose-300">
+              <Ban className="h-3.5 w-3.5" />
+              通行止 {blockedCount}区間
+            </span>
+            <span className="flex items-center gap-1 text-amber-300">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              報告 {reportSummary?.total_reports ?? reports.length}件
+            </span>
+            <span className="flex items-center gap-1 text-sky-300">
+              <MessageSquareHeart className="h-3.5 w-3.5" />
+              安否 {boardSummary?.total_entries ?? 0}件
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/80 pt-2 text-[11px] text-slate-400">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-sm bg-rose-500 ring-1 ring-white/50" />
+                倒壊/被害建物・通行止
+              </span>
+              <span className="flex items-center gap-1">
+                <Tent className="h-3.5 w-3.5 text-emerald-400" />
+                避難/支援拠点(訓練用)
+              </span>
+              <span className="flex items-center gap-1">
+                <ShieldAlert className="h-3.5 w-3.5 text-amber-400" />
+                市民報告=未確認
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => setMobileLeftOpen(false)}
-                className="absolute right-2 top-2 z-50 rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
-              >
-                <X className="h-4 w-4" />
-              </button>
-              <LeftFilterPanel
-                wards={wardsList}
-                selectedWard={selectedWard}
-                onSelectWard={(w) => {
-                  handleSelectWard(w);
-                  setMobileLeftOpen(false);
+                onClick={() => {
+                  setReportCreateTrigger((n) => n + 1);
+                  setActivePanel("report");
                 }}
-                ageCategories={ageCategories}
-                onToggleAgeCategory={handleToggleAgeCategory}
-                onSelectAllAges={() => setAgeCategories(DEFAULT_AGES)}
-                hazardTiers={hazardTiers}
-                onToggleHazardTier={handleToggleHazardTier}
-                onSelectAllHazards={() => setHazardTiers(DEFAULT_HAZARDS)}
-                usageGroup={usageGroup}
-                onChangeUsageGroup={setUsageGroup}
-                showBuildings={showBuildings}
-                onToggleBuildings={() => setShowBuildings((v) => !v)}
-                showHazardMesh={showHazardMesh}
-                onToggleHazardMesh={() => setShowHazardMesh((v) => !v)}
-                meshOverlayMode={meshOverlayMode}
-                onChangeMeshOverlayMode={setMeshOverlayMode}
-                showEarthquakes={showEarthquakes}
-                onToggleEarthquakes={() => setShowEarthquakes((v) => !v)}
-                showSafetyLayer={showSafetyLayer}
-                onToggleSafetyLayer={() => setShowSafetyLayer((v) => !v)}
-                showReports={showReports}
-                onToggleReports={() => setShowReports((v) => !v)}
-                includeSamples={includeSamples}
-                onToggleIncludeSamples={() => setIncludeSamples((v) => !v)}
-                is3D={is3D}
-                onChangeIs3D={setIs3D}
-                onResetFilters={handleResetFilters}
-                selectedMeshcode={selectedMeshcode}
-                onClearMeshcode={handleClearMeshcode}
-                knownHeightRate={metadata?.counts?.known_measured_height_rate ?? null}
-              />
+                className="rounded-lg bg-rose-500 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-rose-400"
+              >
+                ＋ 被害を報告
+              </button>
+              <button
+                type="button"
+                onClick={() => setActivePanel("nav")}
+                className="inline-flex items-center gap-1 rounded-lg bg-emerald-500 px-2.5 py-1 text-[11px] font-bold text-slate-950 hover:bg-emerald-400"
+              >
+                <Compass className="h-3 w-3" />
+                避難・救援ナビ
+              </button>
             </div>
-            <div
-              className="flex-1 bg-black/50"
-              onClick={() => setMobileLeftOpen(false)}
-            />
           </div>
-        )}
-
-        {/* Center Map: Always visible on desktop; visible when mobilePane === 'map' on small screens */}
-        <main
-          className={`relative flex-1 min-h-0 h-full overflow-hidden ${
-            mobilePane === "map" ? "block" : "hidden lg:block"
-          }`}
-        >
-          <QuakeMap
-            meshesGeoJson={meshesGeoJson}
-            earthquakes={earthquakes}
-            reports={reports}
-            boardSummary={boardSummary}
-            routeResult={routeResult}
-            selectedWard={selectedWard}
-            ageCategories={ageCategories}
-            hazardTiers={hazardTiers}
-            usageGroup={usageGroup}
-            showBuildings={showBuildings}
-            onToggleBuildings={() => setShowBuildings((v) => !v)}
-            showHazardMesh={showHazardMesh}
-            onToggleHazardMesh={() => setShowHazardMesh((v) => !v)}
-            meshOverlayMode={meshOverlayMode}
-            showEarthquakes={showEarthquakes}
-            onToggleEarthquakes={() => setShowEarthquakes((v) => !v)}
-            showReports={showReports}
-            onToggleReports={() => setShowReports((v) => !v)}
-            showSafetyLayer={showSafetyLayer}
-            onToggleSafetyLayer={() => setShowSafetyLayer((v) => !v)}
-            is3D={is3D}
-            onToggle3D={() => setIs3D((v) => !v)}
-            selectedBuildingId={selectedBuilding?.building_id ?? null}
-            selectedMeshcode={selectedMeshcode}
-            flyToTarget={flyToTarget}
-            isPickingLocation={isPickingLocation}
-            pickedCoords={pickedCoords}
-            onPickLocation={handlePickLocation}
-            onCancelPickLocation={() => setIsPickingLocation(false)}
-            onSelectBuilding={handleSelectBuilding}
-            onSelectMesh={handleSelectMesh}
-            onSelectReport={handleSelectReportFromMap}
-            onSelectSafetyWard={handleSelectSafetyWardFromMap}
-          />
-        </main>
-
-        {/* Right Integrated Command Panel: fixed on desktop; full-screen stage when mobilePane === 'panel' */}
-        <div
-          className={`h-full overflow-hidden shrink-0 ${
-            mobilePane === "panel"
-              ? "w-full lg:w-[440px] xl:w-[468px]"
-              : "hidden lg:block lg:w-[440px] xl:w-[468px]"
-          }`}
-        >
-          <RightPanel
-            activeTab={activeTab}
-            onChangeTab={setActiveTab}
-            wards={wardsList}
-            stats={stats}
-            priorityAreas={priorityAreas}
-            sortBy={sortBy}
-            onChangeSortBy={setSortBy}
-            onSelectPriorityArea={handleSelectPriorityArea}
-            selectedBuilding={selectedBuilding}
-            selectedMesh={selectedMesh}
-            selectedReport={selectedReport}
-            selectedMeshcode={selectedMeshcode}
-            selectedWard={selectedWard}
-            onSelectWard={handleSelectWard}
-            ageCategories={ageCategories}
-            hazardTiers={hazardTiers}
-            usageGroup={usageGroup}
-            is3D={is3D}
-            geminiConfigured={geminiConfigured}
-            aiProtection={aiProtection}
-            totalBuildings={metadata?.counts?.total_buildings ?? stats?.total_buildings ?? null}
-            onRefreshHealth={handleRefreshHealth}
-            queuedAiPrompt={queuedAiPrompt}
-            onConsumeQueuedAiPrompt={handleConsumeQueuedAiPrompt}
-            onRequestAiExplain={handleRequestAiExplain}
-            onExecuteMapAction={handleExecuteMapAction}
-            onToggleAgeCategory={handleToggleAgeCategory}
-            onToggleHazardTier={handleToggleHazardTier}
-            boardSummary={boardSummary}
-            reports={reports}
-            reportSummary={reportSummary}
-            includeSamples={includeSamples}
-            onToggleIncludeSamples={setIncludeSamples}
-            onFocusBoardArea={handleFocusBoardArea}
-            onFocusReport={handleFocusReport}
-            onDisasterDataChanged={triggerDisasterRefresh}
-            pickedCoords={pickedCoords}
-            isPickingLocation={isPickingLocation}
-            onStartPickLocation={handleStartPickLocation}
-            onCancelPickLocation={() => setIsPickingLocation(false)}
-            onClearPickedLocation={() => setPickedCoords(null)}
-            routeResult={routeResult}
-            onChangeRouteResult={setRouteResult}
-          />
         </div>
-      </div>
+      )}
 
-      {/* Smartphone Bottom Navigation Bar */}
-      <nav
-        aria-label="モバイル主要メニュー"
-        className="grid shrink-0 grid-cols-5 border-t border-slate-800 bg-slate-950/95 lg:hidden"
-      >
-        <MobileNavBtn
-          active={mobilePane === "map"}
-          onClick={() => setMobilePane("map")}
-          icon={<MapIcon className="h-4 w-4" />}
-          label="地図"
-        />
-        <MobileNavBtn
-          active={mobilePane === "panel" && activeTab === "stats"}
-          onClick={() => openPanelTab("stats")}
-          icon={<BarChart3 className="h-4 w-4" />}
-          label="概要"
-        />
-        <MobileNavBtn
-          active={mobilePane === "panel" && activeTab === "safety"}
-          onClick={() => openPanelTab("safety")}
-          icon={<MessageSquareHeart className="h-4 w-4 text-sky-400" />}
-          label="安否"
-          badge={boardSummary?.total_entries}
-        />
-        <MobileNavBtn
-          active={mobilePane === "panel" && activeTab === "reports"}
-          onClick={() => openPanelTab("reports")}
-          icon={<AlertTriangle className="h-4 w-4 text-amber-400" />}
-          label="被害報告"
-          badge={reportSummary?.total_reports}
-        />
-        <MobileNavBtn
-          active={mobilePane === "panel" && activeTab === "ai"}
-          onClick={() => openPanelTab("ai")}
-          icon={<Sparkles className="h-4 w-4 text-emerald-400" />}
-          label="AI分析"
-        />
-      </nav>
-
-      <SourcesModal
-        open={sourcesOpen}
-        onClose={() => setSourcesOpen(false)}
-        metadata={metadata}
+      {/* Selected Building / Report / Blocked Road / Shelter Hub / Active Route HUD */}
+      <SelectedFeatureCard
+        selectedBuilding={selectedBuilding}
+        selectedMesh={selectedMesh}
+        selectedReport={selectedReport}
+        selectedBlockedRoad={selectedBlockedRoad}
+        selectedShelterHub={selectedShelterHub}
+        routeResult={routeResult}
+        onClearSelection={clearSelections}
+        onClearRoute={() => setRouteResult(null)}
+        onReportBuilding={handleReportBuilding}
+        onDispatchToBuilding={(b) => void handleDispatchRescueToBuilding(b)}
+        onDispatchToReport={(r) => void handleDispatchRescueToReport(r)}
+        onEvacuateToHub={(hub) => {
+          clearSelections();
+          setShowShelterHubs(true);
+          setShowRoadClosures(true);
+          setActivePanel("nav");
+          setMapPickMode("evacuate");
+          setFlyToTarget({ lon: hub.lon, lat: hub.lat, zoom: 13.8, ts: Date.now() });
+        }}
+        onOpenNavPanel={() => setActivePanel("nav")}
+        onOpenSafetyForWard={(w) => {
+          if (w && WARD_CENTERS[w]) setSelectedWard(w);
+          setActivePanel("safety");
+        }}
+        onOpenReportForMesh={handleOpenReportForMesh}
+        onRequestAiExplain={handleRequestAiExplain}
       />
-    </div>
-  );
-}
 
-function MobileNavBtn({
-  active,
-  onClick,
-  icon,
-  label,
-  badge,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-  badge?: number;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`relative flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-semibold transition ${
-        active ? "bg-slate-900 text-sky-300" : "text-slate-400 hover:text-slate-200"
-      }`}
-    >
-      <div className="relative">
-        {icon}
-        {badge !== undefined && badge > 0 && (
-          <span className="absolute -right-2.5 -top-1 rounded-full bg-sky-600 px-1 font-mono text-[8px] font-bold text-white">
-            {badge}
-          </span>
-        )}
-      </div>
-      <span>{label}</span>
-    </button>
+      {/* Sources Modal */}
+      <SourcesModal open={sourcesOpen} onClose={() => setSourcesOpen(false)} metadata={metadata} />
+    </div>
   );
 }

@@ -100,6 +100,7 @@ class DamageReportStore:
                         description TEXT NOT NULL,
                         ward_name TEXT NOT NULL,
                         meshcode TEXT,
+                        building_id TEXT,
                         location_label TEXT,
                         lat REAL,
                         lon REAL,
@@ -116,6 +117,12 @@ class DamageReportStore:
                     )
                     """
                 )
+                existing_cols = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(damage_reports)").fetchall()
+                }
+                if "building_id" not in existing_cols:
+                    conn.execute("ALTER TABLE damage_reports ADD COLUMN building_id TEXT")
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_reports_ward ON damage_reports (ward_name)"
                 )
@@ -124,6 +131,11 @@ class DamageReportStore:
                 )
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_reports_created ON damage_reports (reported_at DESC)"
+                )
+                # Ensure sample02 building damage demo links cleanly to real Kyoto building polygon
+                conn.execute(
+                    "UPDATE damage_reports SET building_id = ? WHERE id = 'rep-sample02' AND building_id IS NULL",
+                    ("26100-bldg-103372",),
                 )
 
                 cnt_row = conn.execute("SELECT COUNT(*) AS cnt FROM damage_reports").fetchone()
@@ -265,6 +277,8 @@ class DamageReportStore:
         cat = str(row["category"])
         sev = str(row["severity"])
         ver = str(row["verification_status"])
+        keys = row.keys()
+        building_id = str(row["building_id"]) if ("building_id" in keys and row["building_id"]) else None
         return {
             "id": str(row["id"]),
             "category": cat,
@@ -277,6 +291,7 @@ class DamageReportStore:
             "description": str(row["description"]),
             "ward_name": str(row["ward_name"]),
             "meshcode": str(row["meshcode"]) if row["meshcode"] else None,
+            "building_id": building_id,
             "location_label": str(row["location_label"]) if row["location_label"] else None,
             "lat": float(row["lat"]) if row["lat"] is not None else None,
             "lon": float(row["lon"]) if row["lon"] is not None else None,
@@ -440,6 +455,7 @@ class DamageReportStore:
         description: str,
         ward_name: str = "京都市全域",
         meshcode: str | None = None,
+        building_id: str | None = None,
         location_label: str | None = None,
         lat: float | None = None,
         lon: float | None = None,
@@ -469,6 +485,7 @@ class DamageReportStore:
         )
 
         clean_loc_label = location_label.strip()[:80] if location_label and location_label.strip() else None
+        clean_bldg_id = building_id.strip()[:64] if (building_id and building_id.strip() and location_consent) else None
         clean_alias = (reporter_alias or "匿名市民").strip()[:32] or "匿名市民"
 
         clean_pass = (passcode or "").strip()
@@ -507,10 +524,10 @@ class DamageReportStore:
                 """
                 INSERT INTO damage_reports (
                     id, category, severity, verification_status, title, description,
-                    ward_name, meshcode, location_label, lat, lon, location_consent,
+                    ward_name, meshcode, building_id, location_label, lat, lon, location_consent,
                     reporter_alias, corroborations, is_sample, resolved,
                     passcode_salt, passcode_hash, reported_at, created_at, updated_at
-                ) VALUES (?, ?, ?, 'unverified', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, 'unverified', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     report_id,
@@ -520,6 +537,7 @@ class DamageReportStore:
                     clean_desc,
                     clean_ward,
                     clean_mesh,
+                    clean_bldg_id,
                     clean_loc_label,
                     clean_lat,
                     clean_lon,
