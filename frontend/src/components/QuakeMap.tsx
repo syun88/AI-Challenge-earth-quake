@@ -291,7 +291,7 @@ export function QuakeMap({
               tiles: ["https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png"],
               tileSize: 256,
               attribution:
-                '地図: <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a> | 建物: PLATEAU | ハザード: J-SHIS',
+                '地図: <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a> | 建物: PLATEAU | ハザード: J-SHIS | 道路: © OSM contributors',
             },
           },
           layers: [
@@ -542,35 +542,24 @@ export function QuakeMap({
         },
       });
 
-      // Live Kyoto Arterial Road Network Status (Always highlights closed/unusable roads!)
-      map.addSource("network-clear", { type: "geojson", data: EMPTY_FC });
-      map.addLayer({
-        id: "network-clear-line",
-        type: "line",
-        source: "network-clear",
-        paint: {
-          "line-color": "#38bdf8",
-          "line-width": 1.6,
-          "line-opacity": 0.22,
-        },
-      });
-
+      // Real Kyoto street-segment road closure highlight layers
       map.addSource("network-blocked", { type: "geojson", data: EMPTY_FC });
       map.addLayer({
         id: "network-blocked-glow",
         type: "line",
         source: "network-blocked",
-        layout: { "line-cap": "round" },
+        layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#ef4444",
+          "line-color": "#dc2626",
           "line-width": 8.5,
-          "line-opacity": 0.85,
+          "line-opacity": 0.9,
         },
       });
       map.addLayer({
         id: "network-blocked-dash",
         type: "line",
         source: "network-blocked",
+        layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": "#ffffff",
           "line-width": 2.4,
@@ -855,33 +844,20 @@ export function QuakeMap({
     zoneSrc?.setData({ type: "FeatureCollection", features: haloFeatures });
   }, [reports, showReports, damagedFilterExpr, selectedWard, meshesGeoJson, mapReady]);
 
-  // Update Always-Visible Live Road Closure Overlay & Midpoint Click Markers
+  // Update Always-Visible Live Real-Street Road Closure Overlay & Deduplicated Markers
   useEffect(() => {
     const map = mapRef.current;
     blockedMarkersRef.current.forEach((m) => m.remove());
     blockedMarkersRef.current = [];
     if (!map || !mapReady) return;
 
-    const clrSrc = map.getSource("network-clear") as maplibregl.GeoJSONSource | undefined;
     const blkSrc = map.getSource("network-blocked") as maplibregl.GeoJSONSource | undefined;
-    if (!clrSrc || !blkSrc) return;
+    if (!blkSrc) return;
 
     if (!showRoadClosures || !networkStatus) {
-      clrSrc.setData(EMPTY_FC);
       blkSrc.setData(EMPTY_FC);
       return;
     }
-
-    clrSrc.setData({
-      type: "FeatureCollection",
-      features: networkStatus.edges
-        .filter((e) => e.status === "clear")
-        .map((e) => ({
-          type: "Feature",
-          geometry: { type: "LineString", coordinates: e.coordinates },
-          properties: { label: e.label },
-        })),
-    });
 
     const blockedEdges = networkStatus.edges.filter((e) => e.status === "blocked");
     blkSrc.setData({
@@ -893,19 +869,50 @@ export function QuakeMap({
       })),
     });
 
-    for (const edge of blockedEdges) {
+    const markerItems =
+      networkStatus.closure_markers && networkStatus.closure_markers.length > 0
+        ? networkStatus.closure_markers.map((cm) => {
+            const matchedEdge =
+              blockedEdges.find((e) =>
+                e.triggered_by.some((t) => cm.triggered_by.some((ct) => ct.report_id === t.report_id))
+              ) ??
+              blockedEdges[0] ?? {
+                from_id: cm.id,
+                to_id: cm.id,
+                label: cm.label,
+                status: "blocked" as const,
+                coordinates: [[cm.mid_lon, cm.mid_lat]],
+                mid_lon: cm.mid_lon,
+                mid_lat: cm.mid_lat,
+                triggered_by: cm.triggered_by.map((t) => ({ ...t, distance_m: 0 })),
+              };
+            return {
+              lon: cm.mid_lon,
+              lat: cm.mid_lat,
+              label: cm.label,
+              edge: matchedEdge,
+            };
+          })
+        : blockedEdges.map((e) => ({
+            lon: e.mid_lon,
+            lat: e.mid_lat,
+            label: e.label,
+            edge: e,
+          }));
+
+    for (const item of markerItems) {
       const el = document.createElement("button");
       el.type = "button";
-      el.title = `通行不可区間（シミュレーション）: ${edge.label}`;
+      el.title = `通行不可区間（シミュレーション）: ${item.label}`;
       el.className =
         "flex items-center gap-1 rounded-md border border-white/90 bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-lg transition hover:scale-110 cursor-pointer";
       el.innerHTML = `<span>✕ 通行不可</span>`;
       el.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        callbacksRef.current.onSelectBlockedRoad(edge);
+        callbacksRef.current.onSelectBlockedRoad(item.edge);
       });
       const marker = new maplibregl.Marker({ element: el, anchor: "center" })
-        .setLngLat([edge.mid_lon, edge.mid_lat])
+        .setLngLat([item.lon, item.lat])
         .addTo(map);
       blockedMarkersRef.current.push(marker);
     }
@@ -1301,7 +1308,7 @@ export function QuakeMap({
     baseSrc.setData({
       type: "FeatureCollection",
       features:
-        routeResult.baseline_route.coordinates.length >= 2
+        routeResult.rerouted && routeResult.baseline_route.coordinates.length >= 2
           ? [
               {
                 type: "Feature",

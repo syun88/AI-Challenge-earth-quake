@@ -134,8 +134,13 @@ class DamageReportStore:
                 )
                 # Ensure sample02 building damage demo links cleanly to real Kyoto building polygon
                 conn.execute(
-                    "UPDATE damage_reports SET building_id = ? WHERE id = 'rep-sample02' AND building_id IS NULL",
-                    ("26100-bldg-103372",),
+                    "UPDATE damage_reports SET building_id = ?, lat = ?, lon = ? WHERE id = 'rep-sample02' AND is_sample = 1",
+                    ("26100-bldg-103372", 34.978844, 135.80386),
+                )
+                # Align sample01 closure demo with exact Takeda-kaido x Otesuji intersection
+                conn.execute(
+                    "UPDATE damage_reports SET lat = ?, lon = ? WHERE id = 'rep-sample01' AND is_sample = 1",
+                    (34.9330, 135.7584),
                 )
 
                 cnt_row = conn.execute("SELECT COUNT(*) AS cnt FROM damage_reports").fetchone()
@@ -152,8 +157,8 @@ class DamageReportStore:
                             "伏見区",
                             "5235362024",
                             "伏見区・大手筋通周辺（訓練想定地点）",
-                            34.9355,
-                            135.7615,
+                            34.9330,
+                            135.7584,
                             1,
                             "訓練シナリオ",
                             1,
@@ -175,8 +180,8 @@ class DamageReportStore:
                             "山科区",
                             "5235367414",
                             "山科区・椥辻周辺（訓練想定メッシュ）",
-                            34.9781,
-                            135.8047,
+                            34.978844,
+                            135.80386,
                             1,
                             "訓練シナリオ",
                             1,

@@ -457,8 +457,9 @@ def test_ai_aggregation_grounding_and_route_simulation(isolated_env, monkeypatch
     assert "訓練・研究用" in sim["simulation_disclaimer"]
     assert sim["rerouted"] is True
     assert sim["alternative_route"]["reachable"] is True
-    assert "fushimi_otesuji" in sim["baseline_route"]["node_ids"]
-    assert "fushimi_otesuji" not in sim["alternative_route"]["node_ids"]
+    assert len(sim["alternative_route"]["coordinates"]) >= 10
+    assert sim["alternative_route"]["coordinates"] != sim["baseline_route"]["coordinates"]
+    assert sim["baseline_route"]["distance_km"] <= sim["alternative_route"]["distance_km"]
     assert any(
         any(h["report_id"] == "rep-sample01" for h in seg["triggered_by"])
         for seg in sim["blocked_segments"]

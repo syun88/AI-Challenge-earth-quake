@@ -395,6 +395,7 @@ export default function HomePage() {
   const handleDispatchRescueToReport = useCallback(
     async (rep: DamageReport) => {
       try {
+        clearSelections();
         const res = await simulateNavigation({
           mode: "rescue",
           targetReportId: rep.id,
@@ -409,12 +410,13 @@ export default function HomePage() {
         setActivePanel("nav");
       }
     },
-    [includeSamples]
+    [includeSamples, clearSelections]
   );
 
   const handleDispatchRescueToBuilding = useCallback(
     async (building: BuildingDetail) => {
       try {
+        clearSelections();
         const res = await simulateNavigation({
           mode: "rescue",
           targetLat: building.centroid_lat,
@@ -435,7 +437,7 @@ export default function HomePage() {
         setActivePanel("nav");
       }
     },
-    [includeSamples]
+    [includeSamples, clearSelections]
   );
 
   const handleReportBuilding = useCallback((building: BuildingDetail) => {
@@ -885,7 +887,10 @@ export default function HomePage() {
                   setMapPickMode("rescue");
                 }}
                 onCancelPick={() => setMapPickMode("none")}
-                onChangeRouteResult={setRouteResult}
+                onChangeRouteResult={(res) => {
+                  if (res) clearSelections();
+                  setRouteResult(res);
+                }}
                 onSelectShelterHub={handleSelectShelterHub}
               />
             )}

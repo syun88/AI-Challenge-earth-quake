@@ -63,9 +63,9 @@ Google AI Challenge 2026 応募作品として開発された、平時の建物�
    - AIが未確認報告や訓練サンプルを参照した場合は、回答下部の検証カードに **「未確認の市民報告を含む／訓練サンプルを含む集計」** 警告を自動表示し、確定事実と混同しない設計
    - チャットからの指示（例：「この地域の災害状況をCSVにまとめて」）や「統計・リスク」「被害報告」ドロワーから **UTF-8 BOM付CSV（数式インジェクション対策済）** および **マルチシートExcel（`.xlsx`）** を即時出力
    - `GEMINI_API_KEY` 未設定時もダミー回答を行わず、バックエンド実データ照会ツールを実行して正確な集計・CSVダウンロード導線を提示
-5. **双方向 避難・救援ルート案内（訓練・研究用プロトタイプ）**
-   - 京都市11区の **防災・避難拠点モデル（`🏕`）** と道路通行止め連動ネットワーク（`/api/network/status`）を活用し、**① 地図クリックによる現在地→最寄り避難所ルート（`evacuate`）**、**② 最寄り拠点→要救助/被害現場への救援出動ルート（`rescue`）**、**③ 任意2拠点間の通常最短 vs 通行止め回避比較（`custom`）** を算出・地図描画
-   - 実道路幅員や公式交通規制を伴わないため、API・UI・凡例のすべてで **「訓練・研究用シミュレーション専用（実災害での通行・避難所開設保証なし）」** と明示
+5. **実道路ネットワークに基づく 双方向 避難・救援ナビ（訓練・研究用プロトタイプ）**
+   - OpenStreetMap 由来の京都市実道路ネットワーク（`kyoto_roads.json.gz`: **41,813交差点 / 58,360街路エッジ**）上で、`road_blocked` 報告周辺の実際の街路ポリラインを赤色通行止めとして除外・描画し、実際の通り・交差点・橋梁に沿った **① 現在地→最寄り避難拠点（`evacuate`）**、**② 最寄り拠点→要救助・被害現場への救援出動（`rescue`）**、**③ 任意2拠点迂回比較（`custom`）** をA\*探索で算出・描画
+   - 実際の被災状況・車両規制や実避難所開設は反映されない訓練モデルのため、API・UI・凡例のすべてで **「訓練・研究用シミュレーション専用（実災害での道路安全性・実避難所開設保証なし）」** と明記
 6. **Map-First 統合UI（全画面地図 × 切替式左ドロワー × モバイルボトムドック）**
    - 画面全体を覆う広い地図キャンバスの上部にスリムなフローティングヘッダー（`被害報告` / `安否確認` / `避難・救援ナビ` / `AI分析` / `統計・リスク` ＋ `表示設定` ポップオーバー）を配置
    - 選択中の1機能だけを左スライドドロワーに表示し、地図上の建物・報告・通行止め道路・避難拠点をクリックすると右下にコンテキストカード（即座に被害報告・救援ルート・AI分析を起動可能）を表示
@@ -87,15 +87,17 @@ Google AI Challenge 2026 応募作品として開発された、平時の建物�
 │   │   ├── board_store.py                # SQLite 災害用伝言板（登録・検索・更新・削除・地域集計）
 │   │   ├── reports_store.py              # SQLite 被害状況報告（未確認強制・重複検知・同意検証）
 │   │   ├── export_utils.py               # UTF-8 BOM CSV & openpyxl Excel(.xlsx) 出力エンジン
-│   │   ├── route_sim.py                  # 京都市主要幹線モデル 代替経路シミュレーション（訓練用）
+│   │   ├── route_sim.py                  # 京都市実道路ネットワーク（OSM）A*避難・救援・迂回経路エンジン（訓練用）
 │   │   ├── ai_assistant.py               # Gemini Interactions API / SSE / Function Calling（11ツール）
 │   │   ├── grounding.py                  # 数値・ID・URL自動検証＆未確認/サンプルソース検知
 │   │   ├── security.py                   # レート制限・日次上限・アクセスコード・秘密マスク
 │   │   └── constants.py                  # 区中心座標・カテゴリ定義・耐震補助制度データ
-│   ├── scripts/fetch_and_build.py        # PLATEAU + J-SHIS データ取得・EPSG:6674空間結合パイプライン
+│   ├── scripts/
+│   │   ├── fetch_and_build.py            # PLATEAU + J-SHIS データ取得・EPSG:6674空間結合パイプライン
+│   │   └── fetch_road_network.py         # OpenStreetMap (Overpass) 京都市実道路ネットワーク構築スクリプト
 │   ├── data/
 │   │   ├── board.db                      # SQLite DB（board_entries / damage_reports）
-│   │   └── processed/                    # 前処理済み空間データ（buildings.parquet, meshes.geojson, summary.json）
+│   │   └── processed/                    # 前処理済み空間データ（buildings.parquet, meshes.geojson, kyoto_roads.json.gz, summary.json）
 │   └── tests/
 │       ├── test_pipeline_and_api.py      # 空間データ・API・AIセキュリティ・根拠検証・伝言板テスト（10件）
 │       └── test_disaster_platform.py     # 安否更新/集計・被害報告・重複・CSV/Excel・AI・迂回経路テスト（4件）
@@ -146,6 +148,7 @@ Google AI Challenge 2026 応募作品として開発された、平時の建物�
 | 表層地盤 | J-SHIS Web API（表層地盤情報 250mメッシュ） | 防災科学技術研究所（NIED） | `V4`（微地形区分・ARV・AVS） | 同上 | https://www.j-shis.bosai.go.jp/api-sstruct-meshinfo |
 | 地震履歴 | 気象庁 地震情報 JSON | 気象庁（JMA） | リアルタイム・直近履歴 | 気象庁ホームページ利用規約（出典明記） | https://www.jma.go.jp/bosai/quake/data/list.json |
 | 背景地図 | 地理院タイル（淡色地図） | 国土地理院（GSI） | 最新 | 国土地理院コンテンツ利用規約（出典明記） | https://maps.gsi.go.jp/development/ichiran.html |
+| 道路ネットワーク | OpenStreetMap (Overpass API) | © OpenStreetMap contributors | 最新（京都市域前処理済） | ODbL（出典明記・訓練用経路シミュレーションに利用） | https://www.openstreetmap.org/copyright |
 
 ---
 

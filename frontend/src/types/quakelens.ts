@@ -472,7 +472,7 @@ export interface RouteBlockedSegment {
   to_id: string;
   label: string;
   distance_km: number;
-  coordinates: [[number, number], [number, number]];
+  coordinates: [number, number][];
   triggered_by: Array<{
     report_id: string;
     title: string;
@@ -488,7 +488,7 @@ export interface NetworkEdgeFeature {
   to_id: string;
   label: string;
   status: "clear" | "blocked";
-  coordinates: [[number, number], [number, number]];
+  coordinates: [number, number][];
   mid_lon: number;
   mid_lat: number;
   triggered_by: Array<{
@@ -498,6 +498,20 @@ export interface NetworkEdgeFeature {
     verification_label: string;
     is_sample: boolean;
     distance_m: number;
+  }>;
+}
+
+export interface ClosureMarker {
+  id: string;
+  label: string;
+  mid_lon: number;
+  mid_lat: number;
+  triggered_by: Array<{
+    report_id: string;
+    title: string;
+    verification_status: VerificationStatus;
+    verification_label: string;
+    is_sample: boolean;
   }>;
 }
 
@@ -523,6 +537,7 @@ export interface NetworkStatusResponse {
   blocked_count: number;
   total_segments: number;
   edges: NetworkEdgeFeature[];
+  closure_markers?: ClosureMarker[];
   hubs: ShelterHub[];
 }
 

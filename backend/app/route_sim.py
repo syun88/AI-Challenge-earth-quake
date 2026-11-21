@@ -1,17 +1,45 @@
-"""Training & research-only Kyoto arterial corridor alternative-route simulator."""
+"""Kyoto real OpenStreetMap street-network routing & road-closure simulator.
+
+Uses junction-compressed OSM Kyoto roads (`backend/data/processed/kyoto_roads.json.gz`)
+to highlight exact closed street polylines and compute street-following evacuation,
+rescue dispatch, and detour routes across Kyoto City. All routes are strictly labeled
+for training and research simulation only.
+"""
 
 from __future__ import annotations
 
+import gzip
 import heapq
+import json
 import math
+import threading
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
 
-from app.constants import ROUTE_SIMULATION_DISCLAIMER
+from app.constants import ROUTE_SIMULATION_DISCLAIMER, WARD_CENTERS
 
-# Simplified arterial intersection/hub network covering Kyoto's 11 wards.
-# Coordinates correspond to real Kyoto City major intersections/stations (EPSG:4326).
+ROAD_NETWORK_PATH = (
+    Path(__file__).resolve().parent.parent / "data" / "processed" / "kyoto_roads.json.gz"
+)
+GRID_DEG = 0.002  # ~200m uniform spatial grid cell
+
+HIGHWAY_WEIGHT_FACTORS: dict[str, float] = {
+    "trunk": 1.0,
+    "trunk_link": 1.05,
+    "primary": 1.0,
+    "primary_link": 1.05,
+    "secondary": 1.02,
+    "secondary_link": 1.08,
+    "tertiary": 1.08,
+    "tertiary_link": 1.12,
+    "unclassified": 1.22,
+    "residential": 1.38,
+}
+
+# Selectable preset intersections / stations covering Kyoto's 11 wards (EPSG:4326)
 ARTERIAL_NODES: dict[str, dict[str, Any]] = {
     "kitaoji_karasuma": {"name": "北大路烏丸（北区拠点）", "ward": "北区", "lon": 135.7585, "lat": 35.0445},
     "demachiyanagi": {"name": "出町柳（左京区入口）", "ward": "左京区", "lon": 135.7727, "lat": 35.0301},
@@ -43,145 +71,17 @@ ARTERIAL_NODES: dict[str, dict[str, Any]] = {
     "kamitoba": {"name": "上鳥羽・新堀川通（南区南）", "ward": "南区", "lon": 135.7470, "lat": 34.9620},
     "takeda_st": {"name": "竹田駅周辺（伏見区北）", "ward": "伏見区", "lon": 135.7563, "lat": 34.9562},
     "fushimi_west": {"name": "下鳥羽・油小路通（伏見区西）", "ward": "伏見区", "lon": 135.7470, "lat": 34.9365},
-    "fushimi_otesuji": {"name": "伏見桃山・大手筋（伏見区中心）", "ward": "伏見区", "lon": 135.7615, "lat": 34.9355},
-    "fushimi_east": {"name": "藤森・桃山御陵東（伏見区東）", "ward": "伏見区", "lon": 135.7755, "lat": 34.9460},
-    "chushojima": {"name": "中書島・宇治川北岸（伏見区南）", "ward": "伏見区", "lon": 135.7604, "lat": 34.9255},
+    "fushimi_otesuji": {"name": "伏見桃山・大手筋（伏見区中心）", "ward": "伏見区", "lon": 135.7584, "lat": 34.9330},
+    "fushimi_east": {"name": "伏見・総合庁舎北東拠点（伏見区東）", "ward": "伏見区", "lon": 135.7685, "lat": 34.9418},
+    "chushojima": {"name": "中書島・竹田街道南（伏見区南）", "ward": "伏見区", "lon": 135.7596, "lat": 34.9254},
 }
 
-ARTERIAL_EDGES: list[tuple[str, str, str]] = [
-    ("kitaoji_karasuma", "karasuma_imadegawa", "烏丸通（北大路〜今出川）"),
-    ("kitaoji_karasuma", "demachiyanagi", "北大路〜加茂街道"),
-    ("demachiyanagi", "sakyo_shugakuin", "白川通・東大路北"),
-    ("karasuma_imadegawa", "demachiyanagi", "今出川通"),
-    ("karasuma_imadegawa", "senbon_imadegawa", "今出川通（西）"),
-    ("karasuma_imadegawa", "karasuma_oike", "烏丸通（丸太町〜御池）"),
-    ("senbon_imadegawa", "nijo_senbon", "千本通"),
-    ("senbon_imadegawa", "horikawa_oike", "堀川丸太町経由"),
-    ("uzumasa", "nijo_senbon", "御池通西延伸・三条通"),
-    ("uzumasa", "nishioji_shijo", "四条通（太秦〜西大路）"),
-    ("uzumasa", "katsura", "葛野大路・桂川街道"),
-    ("nijo_senbon", "horikawa_oike", "御池通（千本〜堀川）"),
-    ("nijo_senbon", "nishioji_shijo", "西大路御池経由"),
-    ("horikawa_oike", "karasuma_oike", "御池通（堀川〜烏丸）"),
-    ("horikawa_oike", "horikawa_gojo", "堀川通（御池〜五条）"),
-    ("karasuma_oike", "kawaramachi_oike", "御池通（烏丸〜河原町）"),
-    ("karasuma_oike", "shijo_karasuma", "烏丸通（御池〜四条）"),
-    ("kawaramachi_oike", "sanjo_keihan", "御池通〜三条京阪"),
-    ("kawaramachi_oike", "shijo_kawaramachi", "河原町通"),
-    ("sanjo_keihan", "demachiyanagi", "川端通"),
-    ("sanjo_keihan", "keage", "三条通（蹴上方面）"),
-    ("sanjo_keihan", "gojo_higashiyama", "東大路通（三条〜五条）"),
-    ("keage", "yamashina_st", "三条通（日ノ岡〜山科）"),
-    ("keage", "higashino", "五条バイパス西連絡"),
-    ("yamashina_st", "higashino", "外環状線（山科〜東野）"),
-    ("higashino", "nagitsuji", "外環状線（東野〜椥辻）"),
-    ("nagitsuji", "gojo_higashiyama", "国道1号 五条バイパス"),
-    ("nagitsuji", "fushimi_east", "大石道・小野〜藤森ルート"),
-    ("nishioji_shijo", "shijo_karasuma", "四条通（西大路〜烏丸）"),
-    ("nishioji_shijo", "nishioji_gojo", "西大路通（四条〜五条）"),
-    ("shijo_karasuma", "shijo_kawaramachi", "四条通（烏丸〜河原町）"),
-    ("shijo_karasuma", "gojo_karasuma", "烏丸通（四条〜五条）"),
-    ("shijo_kawaramachi", "gojo_higashiyama", "河原町五条〜五条坂"),
-    ("katsura", "nishioji_gojo", "国道9号 五条通"),
-    ("katsura", "toji_kujo", "久世橋通・西大路九条"),
-    ("katsura", "fushimi_west", "桂川街道・外環西"),
-    ("nishioji_gojo", "horikawa_gojo", "五条通（西大路〜堀川）"),
-    ("nishioji_gojo", "toji_kujo", "西大路通〜九条"),
-    ("horikawa_gojo", "gojo_karasuma", "五条通（堀川〜烏丸）"),
-    ("horikawa_gojo", "toji_kujo", "堀川通・大宮通"),
-    ("gojo_karasuma", "gojo_higashiyama", "五条通（烏丸〜東大路）"),
-    ("gojo_karasuma", "kyoto_st", "烏丸通（五条〜京都駅）"),
-    ("gojo_higashiyama", "shichijo_keihan", "川端通〜七条"),
-    ("shichijo_keihan", "kyoto_st", "七条通"),
-    ("shichijo_keihan", "fushimi_east", "本町通・師団街道"),
-    ("kyoto_st", "toji_kujo", "八条・九条（京都駅〜東寺）"),
-    ("kyoto_st", "kujo_karasuma", "烏丸通（京都駅〜九条）"),
-    ("toji_kujo", "kujo_karasuma", "九条通"),
-    ("toji_kujo", "kamitoba", "油小路通・新堀川通（北）"),
-    ("kujo_karasuma", "takeda_st", "竹田街道（九条〜竹田）"),
-    ("kamitoba", "takeda_st", "十条・名神南連絡"),
-    ("kamitoba", "fushimi_west", "新堀川通・油小路通（伏見）"),
-    ("takeda_st", "fushimi_otesuji", "竹田街道（竹田〜大手筋）"),
-    ("takeda_st", "fushimi_west", "津知橋通・西連絡"),
-    ("takeda_st", "fushimi_east", "深草・藤森連絡"),
-    ("fushimi_west", "fushimi_otesuji", "大手筋通（西）"),
-    ("fushimi_west", "chushojima", "油小路南・中書島西連絡"),
-    ("fushimi_otesuji", "chushojima", "竹田街道・大手筋南"),
-    ("fushimi_east", "fushimi_otesuji", "京町通・大手筋東"),
-    ("fushimi_east", "chushojima", "宇治川北岸・観月橋連絡"),
-]
-
-
-def _dist_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
-    lat_scale = 111.0
-    lon_scale = 111.0 * math.cos(math.radians(35.0))
-    dx = (lon2 - lon1) * lon_scale
-    dy = (lat2 - lat1) * lat_scale
-    return math.hypot(dx, dy)
-
-
-def _point_to_segment_meters(
-    px: float,
-    py: float,
-    ax: float,
-    ay: float,
-    bx: float,
-    by: float,
-) -> float:
-    """Planar projection distance (calibrated around 35N in Kyoto) from point P to segment AB."""
-    lon_m = 111000.0 * math.cos(math.radians(35.0))
-    lat_m = 111000.0
-    p_x, p_y = px * lon_m, py * lat_m
-    a_x, a_y = ax * lon_m, ay * lat_m
-    b_x, b_y = bx * lon_m, by * lat_m
-
-    ab_x = b_x - a_x
-    ab_y = b_y - a_y
-    len_sq = ab_x * ab_x + ab_y * ab_y
-    if len_sq <= 1e-6:
-        return math.hypot(p_x - a_x, p_y - a_y)
-    t = max(0.0, min(1.0, ((p_x - a_x) * ab_x + (p_y - a_y) * ab_y) / len_sq))
-    proj_x = a_x + t * ab_x
-    proj_y = a_y + t * ab_y
-    return math.hypot(p_x - proj_x, p_y - proj_y)
-
-
-def _dijkstra(
-    adj: dict[str, list[tuple[str, float, str]]],
-    start: str,
-    goal: str,
-) -> tuple[list[str], list[str], float] | None:
-    pq: list[tuple[float, str, list[str], list[str]]] = [(0.0, start, [start], [])]
-    best: dict[str, float] = {start: 0.0}
-    while pq:
-        cost, u, path_nodes, path_edges = heapq.heappop(pq)
-        if u == goal:
-            return path_nodes, path_edges, cost
-        if cost > best.get(u, float("inf")):
-            continue
-        for v, w, label in adj.get(u, []):
-            nc = cost + w
-            if nc < best.get(v, float("inf")):
-                best[v] = nc
-                heapq.heappush(pq, (nc, v, [*path_nodes, v], [*path_edges, label]))
-    return None
-
-
-def list_route_nodes() -> list[dict[str, Any]]:
-    """Return sorted selectable arterial hub nodes across Kyoto wards."""
-    return [
-        {"id": nid, **meta}
-        for nid, meta in ARTERIAL_NODES.items()
-    ]
-
-
-# Training/simulation regional evacuation & rescue dispatch hubs mapped onto arterial nodes
 SHELTER_RELIEF_HUBS: dict[str, dict[str, str]] = {
     "kyoto_st": {"title": "下京・京都駅 広域防災拠点（訓練モデル）", "role": "広域救護・物資集積"},
     "karasuma_oike": {"title": "中京・御池防災拠点（訓練モデル）", "role": "避難所・救援調整"},
     "sanjo_keihan": {"title": "東山・三条京阪拠点（訓練モデル）", "role": "避難・救護拠点"},
     "nagitsuji": {"title": "山科・椥辻拠点（訓練モデル）", "role": "避難所・地域支援"},
-    "fushimi_east": {"title": "伏見・桃山東拠点（訓練モデル）", "role": "避難所・救援派遣"},
+    "fushimi_east": {"title": "伏見・桃山丹波橋拠点（訓練モデル）", "role": "避難所・救援派遣"},
     "toji_kujo": {"title": "南区・九条東寺拠点（訓練モデル）", "role": "避難所・物資拠点"},
     "uzumasa": {"title": "右京・太秦天神川拠点（訓練モデル）", "role": "避難所・救護拠点"},
     "katsura": {"title": "西京・桂拠点（訓練モデル）", "role": "避難所・救援派遣"},
@@ -191,12 +91,475 @@ SHELTER_RELIEF_HUBS: dict[str, dict[str, str]] = {
 }
 
 
-def find_nearest_node(
-    lat: float,
-    lon: float,
-    allowed_nodes: set[str] | None = None,
-) -> tuple[str, float]:
-    """Snap a map coordinate (lat, lon) to the nearest arterial node, returning (node_id, distance_km)."""
+@dataclass(slots=True)
+class RoadEdge:
+    idx: int
+    u: int
+    v: int
+    name: str
+    highway: str
+    length_km: float
+    weight_km: float
+    coords: list[list[float]]
+    mid_lon: float
+    mid_lat: float
+
+
+@dataclass(slots=True)
+class SnappedPoint:
+    edge_idx: int
+    u: int
+    v: int
+    snap_lon: float
+    snap_lat: float
+    snap_dist_km: float
+    name: str
+    to_u_coords: list[list[float]]
+    to_v_coords: list[list[float]]
+    to_u_km: float
+    to_v_km: float
+    to_u_cost: float
+    to_v_cost: float
+    seg_idx: int
+
+
+def _dist_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    lat_scale = 111.0
+    lon_scale = 111.0 * math.cos(math.radians(35.0))
+    return math.hypot((lon2 - lon1) * lon_scale, (lat2 - lat1) * lat_scale)
+
+
+def _polyline_km(coords: list[list[float]]) -> float:
+    total = 0.0
+    for i in range(len(coords) - 1):
+        total += _dist_km(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1])
+    return total
+
+
+def _project_point_to_segment(
+    px: float,
+    py: float,
+    ax: float,
+    ay: float,
+    bx: float,
+    by: float,
+) -> tuple[float, float, float, float]:
+    """Return (dist_m, t in [0..1], proj_lon, proj_lat) calibrated around Kyoto."""
+    lon_m = 111000.0 * math.cos(math.radians(35.0))
+    lat_m = 111000.0
+    p_x, p_y = px * lon_m, py * lat_m
+    a_x, a_y = ax * lon_m, ay * lat_m
+    b_x, b_y = bx * lon_m, by * lat_m
+    ab_x = b_x - a_x
+    ab_y = b_y - a_y
+    len_sq = ab_x * ab_x + ab_y * ab_y
+    if len_sq <= 1e-6:
+        return math.hypot(p_x - a_x, p_y - a_y), 0.0, ax, ay
+    t = max(0.0, min(1.0, ((p_x - a_x) * ab_x + (p_y - a_y) * ab_y) / len_sq))
+    proj_lon = round(ax + t * (bx - ax), 5)
+    proj_lat = round(ay + t * (by - ay), 5)
+    dist_m = math.hypot(p_x - (a_x + t * ab_x), p_y - (a_y + t * ab_y))
+    return dist_m, t, proj_lon, proj_lat
+
+
+def _project_to_polyline(px: float, py: float, coords: list[list[float]]) -> tuple[float, int, float, float]:
+    best_dist = float("inf")
+    best_seg = 0
+    best_lon, best_lat = coords[0][0], coords[0][1]
+    for i in range(len(coords) - 1):
+        d_m, _, plon, plat = _project_point_to_segment(
+            px, py, coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1]
+        )
+        if d_m < best_dist:
+            best_dist = d_m
+            best_seg = i
+            best_lon, best_lat = plon, plat
+    return best_dist, best_seg, best_lon, best_lat
+
+
+class KyotoRoadNetwork:
+    """Thread-safe lazy loader & A* street-routing graph for Kyoto City."""
+
+    def __init__(self, path: Path = ROAD_NETWORK_PATH) -> None:
+        self.path = path
+        self._lock = threading.Lock()
+        self._loaded = False
+        self.nodes: list[tuple[float, float]] = []
+        self.edges: list[RoadEdge] = []
+        self.adj: list[list[tuple[int, int, float]]] = []
+        self.grid: dict[tuple[int, int], list[int]] = {}
+
+    def ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        with self._lock:
+            if self._loaded:
+                return
+            if not self.path.exists():
+                raise RuntimeError(f"Road network file not found: {self.path}")
+            with gzip.open(self.path, "rb") as f:
+                raw = json.loads(f.read().decode("utf-8"))
+
+            names: list[str] = raw["names"]
+            highways: list[str] = raw["highways"]
+            self.nodes = [(float(n[0]), float(n[1])) for n in raw["nodes"]]
+            self.adj = [[] for _ in range(len(self.nodes))]
+            self.edges = []
+            self.grid = {}
+
+            for idx, item in enumerate(raw["edges"]):
+                u, v, name_i, hw_i, length_m, coords = item
+                hw = highways[hw_i] if hw_i < len(highways) else "residential"
+                name = names[name_i] if name_i < len(names) else ""
+                len_km = float(length_m) / 1000.0
+                factor = HIGHWAY_WEIGHT_FACTORS.get(hw, 1.35)
+                weight_km = max(0.001, len_km * factor)
+                mid = coords[len(coords) // 2]
+                edge = RoadEdge(
+                    idx=idx,
+                    u=int(u),
+                    v=int(v),
+                    name=name,
+                    highway=hw,
+                    length_km=len_km,
+                    weight_km=weight_km,
+                    coords=coords,
+                    mid_lon=float(mid[0]),
+                    mid_lat=float(mid[1]),
+                )
+                self.edges.append(edge)
+                self.adj[edge.u].append((edge.v, idx, weight_km))
+                self.adj[edge.v].append((edge.u, idx, weight_km))
+
+                lons = [c[0] for c in coords]
+                lats = [c[1] for c in coords]
+                cx0 = int(math.floor(min(lons) / GRID_DEG))
+                cx1 = int(math.floor(max(lons) / GRID_DEG))
+                cy0 = int(math.floor(min(lats) / GRID_DEG))
+                cy1 = int(math.floor(max(lats) / GRID_DEG))
+                for cx in range(cx0, cx1 + 1):
+                    for cy in range(cy0, cy1 + 1):
+                        self.grid.setdefault((cx, cy), []).append(idx)
+
+            self._loaded = True
+
+    def _candidate_edges_near(self, lon: float, lat: float, radius_deg: float) -> set[int]:
+        self.ensure_loaded()
+        cx0 = int(math.floor((lon - radius_deg) / GRID_DEG))
+        cx1 = int(math.floor((lon + radius_deg) / GRID_DEG))
+        cy0 = int(math.floor((lat - radius_deg) / GRID_DEG))
+        cy1 = int(math.floor((lat + radius_deg) / GRID_DEG))
+        out: set[int] = set()
+        for cx in range(cx0, cx1 + 1):
+            for cy in range(cy0, cy1 + 1):
+                if (cx, cy) in self.grid:
+                    out.update(self.grid[(cx, cy)])
+        return out
+
+    def find_edges_for_closure(
+        self,
+        lon: float,
+        lat: float,
+        radius_m: float = 48.0,
+        fallback_nearest_m: float = 180.0,
+    ) -> list[tuple[int, float, float, float]]:
+        """Find exact road segment(s) blocked by a road_blocked coordinate.
+
+        Returns sorted tuples `(edge_idx, dist_m, snap_lon, snap_lat)`.
+        Matches all road segments within `radius_m` (exact street/intersection), or
+        falls back to the single nearest road edge within `fallback_nearest_m`.
+        """
+        search_m = max(radius_m, fallback_nearest_m) + 120.0
+        cands = self._candidate_edges_near(lon, lat, search_m / 90000.0)
+        measured: list[tuple[int, float, float, float]] = []
+        for eidx in cands:
+            edge = self.edges[eidx]
+            d_m, _, plon, plat = _project_to_polyline(lon, lat, edge.coords)
+            measured.append((eidx, d_m, plon, plat))
+        measured.sort(key=lambda t: t[1])
+
+        within = [m for m in measured if m[1] <= radius_m]
+        if within:
+            return within[:8]
+        if measured and measured[0][1] <= fallback_nearest_m:
+            return [measured[0]]
+        return []
+
+    def snap_point(
+        self,
+        lat: float,
+        lon: float,
+        blocked_edges: set[int] | None = None,
+        prefer_clear: bool = True,
+    ) -> SnappedPoint:
+        """Snap an arbitrary map coordinate cleanly onto the nearest real Kyoto road polyline."""
+        self.ensure_loaded()
+        blocked = blocked_edges or set()
+        best_clear: tuple[float, int, int, float, float] | None = None
+        best_any: tuple[float, int, int, float, float] | None = None
+
+        for rad_deg in (0.0025, 0.006, 0.015, 0.035):
+            cands = self._candidate_edges_near(lon, lat, rad_deg)
+            for eidx in cands:
+                edge = self.edges[eidx]
+                d_m, seg_idx, plon, plat = _project_to_polyline(lon, lat, edge.coords)
+                cand = (d_m, eidx, seg_idx, plon, plat)
+                if best_any is None or d_m < best_any[0]:
+                    best_any = cand
+                if eidx not in blocked and (best_clear is None or d_m < best_clear[0]):
+                    best_clear = cand
+            if (prefer_clear and best_clear is not None) or (not prefer_clear and best_any is not None):
+                break
+
+        chosen = (best_clear if prefer_clear and best_clear is not None else best_any)
+        if chosen is None:
+            # Emergency fallback to node 0
+            e = self.edges[0]
+            chosen = (1000.0, 0, 0, e.coords[0][0], e.coords[0][1])
+
+        d_m, eidx, seg_idx, plon, plat = chosen
+        edge = self.edges[eidx]
+        snap_pt = [plon, plat]
+
+        raw_u = [snap_pt, *reversed(edge.coords[: seg_idx + 1])]
+        to_u_coords = _dedupe_coords(raw_u)
+        to_v_coords = _dedupe_coords([snap_pt, *edge.coords[seg_idx + 1 :]])
+
+        to_u_km = _polyline_km(to_u_coords)
+        to_v_km = _polyline_km(to_v_coords)
+        factor = HIGHWAY_WEIGHT_FACTORS.get(edge.highway, 1.35)
+
+        return SnappedPoint(
+            edge_idx=eidx,
+            u=edge.u,
+            v=edge.v,
+            snap_lon=plon,
+            snap_lat=plat,
+            snap_dist_km=round(d_m / 1000.0, 3),
+            name=edge.name or ("生活道路" if edge.highway in ("residential", "unclassified") else "幹線道路"),
+            to_u_coords=to_u_coords,
+            to_v_coords=to_v_coords,
+            to_u_km=to_u_km,
+            to_v_km=to_v_km,
+            to_u_cost=to_u_km * factor,
+            to_v_cost=to_v_km * factor,
+            seg_idx=seg_idx,
+        )
+
+    def route_between(
+        self,
+        start: SnappedPoint,
+        goal: SnappedPoint,
+        blocked_edges: set[int] | None = None,
+        start_pin: tuple[float, float] | None = None,
+        end_pin: tuple[float, float] | None = None,
+    ) -> dict[str, Any]:
+        """Compute street-following route via admissible A* on Kyoto real road graph."""
+        self.ensure_loaded()
+        blocked = blocked_edges or set()
+
+        # Direct same-edge shortcut
+        if start.edge_idx == goal.edge_idx and start.edge_idx not in blocked:
+            edge = self.edges[start.edge_idx]
+            coords = _slice_same_edge_coords(edge.coords, start, goal)
+            dist_km = _polyline_km(coords)
+            full_coords = _attach_curb_pins(coords, start_pin, end_pin)
+            segs = [f"{start.name} (約{max(10, round(dist_km * 1000))}m)"]
+            return {
+                "reachable": True,
+                "node_ids": [f"r{start.u}", f"r{goal.v}"],
+                "node_names": [start.name],
+                "segments": segs,
+                "coordinates": full_coords,
+                "distance_km": round(max(0.01, dist_km), 2),
+                "weighted_cost": dist_km,
+            }
+
+        goal_lon, goal_lat = goal.snap_lon, goal.snap_lat
+        goal_nodes = {goal.u, goal.v}
+        goal_branch_cost = {goal.u: goal.to_u_cost, goal.v: goal.to_v_cost}
+
+        best_g: dict[int, float] = {}
+        parent: dict[int, tuple[int | None, int | None]] = {}
+        start_branch_edge: dict[int, int] = {}
+        pq: list[tuple[float, float, int]] = []
+
+        # Virtual start opens edges to start.u and start.v (unless edge blocked; snapped clear handles it)
+        for node_id, cost in ((start.u, start.to_u_cost), (start.v, start.to_v_cost)):
+            if node_id not in best_g or cost < best_g[node_id]:
+                best_g[node_id] = cost
+                parent[node_id] = (None, None)
+                start_branch_edge[node_id] = start.edge_idx
+                h = _dist_km(self.nodes[node_id][0], self.nodes[node_id][1], goal_lon, goal_lat) * 0.98
+                heapq.heappush(pq, (cost + h, cost, node_id))
+
+        best_total_cost = float("inf")
+        best_end_node: int | None = None
+
+        while pq:
+            f_val, g_val, u = heapq.heappop(pq)
+            if f_val >= best_total_cost:
+                break
+            if g_val > best_g.get(u, float("inf")):
+                continue
+            if u in goal_nodes:
+                cand_total = g_val + goal_branch_cost[u]
+                if cand_total < best_total_cost:
+                    best_total_cost = cand_total
+                    best_end_node = u
+
+            for v, eidx, w_cost in self.adj[u]:
+                if eidx in blocked:
+                    continue
+                ng = g_val + w_cost
+                if ng < best_g.get(v, float("inf")) and ng < best_total_cost:
+                    best_g[v] = ng
+                    parent[v] = (u, eidx)
+                    h = _dist_km(self.nodes[v][0], self.nodes[v][1], goal_lon, goal_lat) * 0.98
+                    heapq.heappush(pq, (ng + h, ng, v))
+
+        if best_end_node is None:
+            return {
+                "reachable": False,
+                "node_ids": [],
+                "node_names": [],
+                "segments": [],
+                "coordinates": [],
+                "distance_km": None,
+                "weighted_cost": float("inf"),
+            }
+
+        # Reconstruct chain
+        rev_nodes: list[int] = []
+        rev_edges: list[int] = []
+        cur: int | None = best_end_node
+        while cur is not None:
+            rev_nodes.append(cur)
+            prev_n, eidx = parent[cur]
+            if eidx is not None:
+                rev_edges.append(eidx)
+            cur = prev_n
+        node_chain = list(reversed(rev_nodes))
+        edge_chain = list(reversed(rev_edges))
+
+        start_node = node_chain[0]
+        full_coords: list[list[float]] = []
+        step_parts: list[tuple[str, float]] = []
+
+        # 1) Start snap -> first junction node
+        first_branch = list(reversed(start.to_u_coords if start_node == start.u else start.to_v_coords))
+        # Wait: to_u_coords goes FROM snap_pt TO u, which is already forward order [snap_pt -> ... -> start_node]!
+        first_branch = list(start.to_u_coords if start_node == start.u else start.to_v_coords)
+        full_coords.extend(first_branch)
+        first_len = _polyline_km(first_branch)
+        if first_len > 0.005:
+            step_parts.append((start.name, first_len))
+
+        # 2) Graph edge polylines
+        for i, eidx in enumerate(edge_chain):
+            edge = self.edges[eidx]
+            u_n = node_chain[i]
+            seg_c = edge.coords if u_n == edge.u else list(reversed(edge.coords))
+            full_coords.extend(seg_c)
+            ename = edge.name or ("生活道路" if edge.highway in ("residential", "unclassified") else "幹線道路")
+            step_parts.append((ename, edge.length_km))
+
+        # 3) Final junction node -> goal snap
+        last_branch_from_snap = goal.to_u_coords if best_end_node == goal.u else goal.to_v_coords
+        last_branch = list(reversed(last_branch_from_snap))
+        full_coords.extend(last_branch)
+        last_len = _polyline_km(last_branch)
+        if last_len > 0.005:
+            step_parts.append((goal.name, last_len))
+
+        street_coords = _dedupe_coords(full_coords)
+        dist_km = _polyline_km(street_coords)
+        final_coords = _attach_curb_pins(street_coords, start_pin, end_pin)
+        merged_steps = _summarize_street_steps(step_parts)
+
+        return {
+            "reachable": True,
+            "node_ids": [f"r{n}" for n in node_chain],
+            "node_names": [s for s in merged_steps[:8]],
+            "segments": merged_steps,
+            "coordinates": final_coords,
+            "distance_km": round(max(0.01, dist_km), 2),
+            "weighted_cost": best_total_cost,
+        }
+
+
+_ROAD_NET = KyotoRoadNetwork()
+
+
+def _dedupe_coords(coords: list[list[float]]) -> list[list[float]]:
+    out: list[list[float]] = []
+    for c in coords:
+        pt = [round(float(c[0]), 5), round(float(c[1]), 5)]
+        if not out or abs(out[-1][0] - pt[0]) > 1e-6 or abs(out[-1][1] - pt[1]) > 1e-6:
+            out.append(pt)
+    return out
+
+
+def _attach_curb_pins(
+    street_coords: list[list[float]],
+    start_pin: tuple[float, float] | None,
+    end_pin: tuple[float, float] | None,
+) -> list[list[float]]:
+    res = list(street_coords)
+    if start_pin is not None and res:
+        if _dist_km(start_pin[0], start_pin[1], res[0][0], res[0][1]) <= 0.15:
+            res = [[round(start_pin[0], 5), round(start_pin[1], 5)], *res]
+    if end_pin is not None and res:
+        if _dist_km(end_pin[0], end_pin[1], res[-1][0], res[-1][1]) <= 0.15:
+            res = [*res, [round(end_pin[0], 5), round(end_pin[1], 5)]]
+    return _dedupe_coords(res)
+
+
+def _slice_same_edge_coords(
+    edge_coords: list[list[float]],
+    start: SnappedPoint,
+    goal: SnappedPoint,
+) -> list[list[float]]:
+    # Both snapped points lie on same edge. Order them along edge vertex indices + progress.
+    s_pos = start.seg_idx + _dist_km(edge_coords[start.seg_idx][0], edge_coords[start.seg_idx][1], start.snap_lon, start.snap_lat)
+    g_pos = goal.seg_idx + _dist_km(edge_coords[goal.seg_idx][0], edge_coords[goal.seg_idx][1], goal.snap_lon, goal.snap_lat)
+    s_pt = [start.snap_lon, start.snap_lat]
+    g_pt = [goal.snap_lon, goal.snap_lat]
+    if s_pos <= g_pos:
+        mid = edge_coords[start.seg_idx + 1 : goal.seg_idx + 1]
+        return _dedupe_coords([s_pt, *mid, g_pt])
+    mid = list(reversed(edge_coords[goal.seg_idx + 1 : start.seg_idx + 1]))
+    return _dedupe_coords([s_pt, *mid, g_pt])
+
+
+def _summarize_street_steps(parts: list[tuple[str, float]]) -> list[str]:
+    merged: list[tuple[str, float]] = []
+    for name, km in parts:
+        clean_name = name or "一般街路"
+        if merged and merged[-1][0] == clean_name:
+            merged[-1] = (clean_name, merged[-1][1] + km)
+        else:
+            merged.append((clean_name, km))
+
+    out: list[str] = []
+    for name, km in merged:
+        if km < 0.015 and len(merged) > 1:
+            continue
+        if km >= 1.0:
+            dist_lbl = f"{km:.1f}km"
+        else:
+            dist_lbl = f"約{max(10, int(round(km * 1000 / 10.0) * 10))}m"
+        out.append(f"{name} ({dist_lbl})")
+    return out or ["現場周辺道路へ移動"]
+
+
+def list_route_nodes() -> list[dict[str, Any]]:
+    """Return sorted selectable preset nodes across Kyoto wards."""
+    return [{"id": nid, **meta} for nid, meta in ARTERIAL_NODES.items()]
+
+
+def find_nearest_node(lat: float, lon: float, allowed_nodes: set[str] | None = None) -> tuple[str, float]:
+    """Return nearest preset node ID for backward compatibility."""
     best_id = "kyoto_st"
     best_dist = float("inf")
     for nid, meta in ARTERIAL_NODES.items():
@@ -214,10 +577,14 @@ def _evaluate_network(
     reports: list[dict[str, Any]],
     include_samples: bool = True,
     avoid_unverified: bool = True,
-    block_radius_m: float = 420.0,
+    block_radius_m: float = 48.0,
     store: Any | None = None,
 ) -> dict[str, Any]:
-    """Evaluate road_blocked closures across all arterial segments and live shelter statuses."""
+    """Evaluate active road_blocked reports onto real Kyoto street polylines & shelter statuses."""
+    _ROAD_NET.ensure_loaded()
+    # Keep localized road closure radius tight (<= 65m) even if caller passes a legacy broad radius
+    eff_radius_m = min(float(block_radius_m), 65.0) if block_radius_m > 0 else 48.0
+
     hazard_points: list[dict[str, Any]] = []
     shelter_reports: list[dict[str, Any]] = []
 
@@ -258,64 +625,53 @@ def _evaluate_network(
             "coord_source": coord_source,
         })
 
-    base_adj: dict[str, list[tuple[str, float, str]]] = {k: [] for k in ARTERIAL_NODES}
-    clear_adj: dict[str, list[tuple[str, float, str]]] = {k: [] for k in ARTERIAL_NODES}
+    blocked_edge_hits: dict[int, list[dict[str, Any]]] = {}
+    closure_markers: list[dict[str, Any]] = []
+
+    for hp in hazard_points:
+        matches = _ROAD_NET.find_edges_for_closure(
+            hp["lon"], hp["lat"], radius_m=eff_radius_m, fallback_nearest_m=180.0
+        )
+        if not matches:
+            continue
+        primary_eidx, _, p_lon, p_lat = matches[0]
+        primary_edge = _ROAD_NET.edges[primary_eidx]
+        closure_markers.append({
+            "id": hp["report_id"],
+            "label": primary_edge.name or f"{hp['title'][:18]}付近道路",
+            "mid_lon": p_lon,
+            "mid_lat": p_lat,
+            "triggered_by": [hp],
+        })
+        for eidx, d_m, _, _ in matches:
+            blocked_edge_hits.setdefault(eidx, []).append({**hp, "distance_m": round(d_m, 1)})
+
+    blocked_edge_ids = set(blocked_edge_hits.keys())
     blocked_segments: list[dict[str, Any]] = []
     edge_features: list[dict[str, Any]] = []
 
-    for u, v, label in ARTERIAL_EDGES:
-        nu = ARTERIAL_NODES[u]
-        nv = ARTERIAL_NODES[v]
-        dist_km = _dist_km(nu["lon"], nu["lat"], nv["lon"], nv["lat"])
-        base_adj[u].append((v, dist_km, label))
-        base_adj[v].append((u, dist_km, label))
-
-        hits: list[dict[str, Any]] = []
-        for hp in hazard_points:
-            d_m = _point_to_segment_meters(
-                hp["lon"], hp["lat"],
-                nu["lon"], nu["lat"],
-                nv["lon"], nv["lat"],
-            )
-            if d_m <= block_radius_m:
-                hits.append({
-                    **hp,
-                    "distance_m": round(d_m, 1),
-                })
-
-        coords = [[nu["lon"], nu["lat"]], [nv["lon"], nv["lat"]]]
-        if hits:
-            blocked_segments.append({
-                "from_id": u,
-                "to_id": v,
-                "label": label,
-                "distance_km": round(dist_km, 2),
-                "coordinates": coords,
-                "triggered_by": hits,
-            })
-            edge_features.append({
-                "from_id": u,
-                "to_id": v,
-                "label": label,
-                "status": "blocked",
-                "coordinates": coords,
-                "mid_lon": round((nu["lon"] + nv["lon"]) / 2.0, 5),
-                "mid_lat": round((nu["lat"] + nv["lat"]) / 2.0, 5),
-                "triggered_by": hits,
-            })
-        else:
-            clear_adj[u].append((v, dist_km, label))
-            clear_adj[v].append((u, dist_km, label))
-            edge_features.append({
-                "from_id": u,
-                "to_id": v,
-                "label": label,
-                "status": "clear",
-                "coordinates": coords,
-                "mid_lon": round((nu["lon"] + nv["lon"]) / 2.0, 5),
-                "mid_lat": round((nu["lat"] + nv["lat"]) / 2.0, 5),
-                "triggered_by": [],
-            })
+    for eidx in sorted(blocked_edge_ids):
+        edge = _ROAD_NET.edges[eidx]
+        hits = blocked_edge_hits[eidx]
+        label = edge.name or "通行止め街路区間"
+        blocked_segments.append({
+            "from_id": f"r{edge.u}",
+            "to_id": f"r{edge.v}",
+            "label": label,
+            "distance_km": round(edge.length_km, 3),
+            "coordinates": edge.coords,
+            "triggered_by": hits,
+        })
+        edge_features.append({
+            "from_id": f"r{edge.u}",
+            "to_id": f"r{edge.v}",
+            "label": label,
+            "status": "blocked",
+            "coordinates": edge.coords,
+            "mid_lon": edge.mid_lon,
+            "mid_lat": edge.mid_lat,
+            "triggered_by": hits,
+        })
 
     hubs: list[dict[str, Any]] = []
     for hid, meta in SHELTER_RELIEF_HUBS.items():
@@ -352,10 +708,10 @@ def _evaluate_network(
 
     return {
         "hazard_points": hazard_points,
-        "base_adj": base_adj,
-        "clear_adj": clear_adj,
+        "blocked_edge_ids": blocked_edge_ids,
         "blocked_segments": blocked_segments,
         "edge_features": edge_features,
+        "closure_markers": closure_markers,
         "hubs": hubs,
     }
 
@@ -365,10 +721,10 @@ def get_network_status(
     reports: list[dict[str, Any]],
     include_samples: bool = True,
     avoid_unverified: bool = True,
-    block_radius_m: float = 420.0,
+    block_radius_m: float = 48.0,
     store: Any | None = None,
 ) -> dict[str, Any]:
-    """Return full arterial closure overlay + shelter/relief hub statuses for map visualization."""
+    """Return active blocked street polylines + deduplicated markers + shelter hub statuses."""
     ev = _evaluate_network(
         reports=reports,
         include_samples=include_samples,
@@ -379,249 +735,23 @@ def get_network_status(
     return {
         "is_simulation": True,
         "simulation_disclaimer": ROUTE_SIMULATION_DISCLAIMER,
-        "blocked_count": len(ev["blocked_segments"]),
-        "total_segments": len(ev["edge_features"]),
+        "blocked_count": len(ev["closure_markers"]),
+        "total_segments": len(_ROAD_NET.edges),
         "edges": ev["edge_features"],
+        "closure_markers": ev["closure_markers"],
         "hubs": ev["hubs"],
     }
 
 
-def _format_dijkstra_route(
-    res: tuple[list[str], list[str], float] | None,
-    prefix_coord: tuple[float, float] | None = None,
-    suffix_coord: tuple[float, float] | None = None,
-    prefix_km: float = 0.0,
-    suffix_km: float = 0.0,
-    prefix_label: str | None = None,
-    suffix_label: str | None = None,
-) -> dict[str, Any]:
-    if not res:
-        return {
-            "reachable": False,
-            "node_ids": [],
-            "node_names": [],
-            "segments": [],
-            "coordinates": [],
-            "distance_km": None,
-        }
-    nids, segs, dist = res
-    coords = [[ARTERIAL_NODES[n]["lon"], ARTERIAL_NODES[n]["lat"]] for n in nids]
-    node_names = [ARTERIAL_NODES[n]["name"] for n in nids]
-    final_segs = list(segs)
-    total_km = dist
-    if prefix_coord is not None:
-        coords = [[prefix_coord[0], prefix_coord[1]], *coords]
-        total_km += prefix_km
-        if prefix_label:
-            final_segs = [prefix_label, *final_segs]
-    if suffix_coord is not None:
-        coords = [*coords, [suffix_coord[0], suffix_coord[1]]]
-        total_km += suffix_km
-        if suffix_label:
-            final_segs = [*final_segs, suffix_label]
-
+def _strip_internal(res: dict[str, Any]) -> dict[str, Any]:
     return {
-        "reachable": True,
-        "node_ids": nids,
-        "node_names": node_names,
-        "segments": final_segs,
-        "coordinates": coords,
-        "distance_km": round(total_km, 2),
+        "reachable": res["reachable"],
+        "node_ids": res["node_ids"],
+        "node_names": res["node_names"],
+        "segments": res["segments"],
+        "coordinates": res["coordinates"],
+        "distance_km": res["distance_km"],
     }
-
-
-def simulate_navigation(
-    *,
-    mode: str,
-    reports: list[dict[str, Any]],
-    origin_id: str | None = None,
-    destination_id: str | None = None,
-    start_lat: float | None = None,
-    start_lon: float | None = None,
-    target_lat: float | None = None,
-    target_lon: float | None = None,
-    target_report_id: str | None = None,
-    include_samples: bool = True,
-    avoid_unverified: bool = True,
-    block_radius_m: float = 420.0,
-    store: Any | None = None,
-) -> dict[str, Any]:
-    """Unified simulation supporting Evacuation (point->nearest open hub), Rescue Dispatch (hub->incident), and Custom."""
-    ev = _evaluate_network(
-        reports=reports,
-        include_samples=include_samples,
-        avoid_unverified=avoid_unverified,
-        block_radius_m=block_radius_m,
-        store=store,
-    )
-
-    if mode == "custom":
-        if not origin_id or not destination_id:
-            raise HTTPException(status_code=400, detail="出発拠点と目的拠点を指定してください。")
-        return simulate_alternative_route(
-            origin_id=origin_id,
-            destination_id=destination_id,
-            reports=reports,
-            include_samples=include_samples,
-            avoid_unverified=avoid_unverified,
-            block_radius_m=block_radius_m,
-            store=store,
-        )
-
-    hub_by_id = {h["id"]: h for h in ev["hubs"]}
-
-    if mode == "evacuate":
-        # Snap clicked coordinate OR chosen origin node -> find nearest reachable non-restricted hub
-        prefix_coord = None
-        prefix_km = 0.0
-        prefix_label = None
-        clear_node_set = {k for k, edges in ev["clear_adj"].items() if len(edges) > 0} or None
-        if start_lat is not None and start_lon is not None:
-            entry_id, prefix_km = find_nearest_node(start_lat, start_lon, allowed_nodes=clear_node_set)
-            prefix_coord = (float(start_lon), float(start_lat))
-            prefix_label = f"指定地点から最寄り幹線（{ARTERIAL_NODES[entry_id]['name']}へ約{prefix_km}km）"
-            origin_meta = {
-                "id": "clicked_point",
-                "name": "地図上の指定地点（現在地想定）",
-                "ward": ARTERIAL_NODES[entry_id]["ward"],
-                "lon": float(start_lon),
-                "lat": float(start_lat),
-            }
-        elif origin_id and origin_id in ARTERIAL_NODES:
-            entry_id = origin_id
-            origin_meta = {"id": entry_id, **ARTERIAL_NODES[entry_id]}
-        else:
-            raise HTTPException(status_code=400, detail="地図上の地点または出発拠点を指定してください。")
-
-        candidate_hubs = [h for h in ev["hubs"] if h["hub_status"] != "restricted"] or ev["hubs"]
-        best_alt: tuple[str, tuple[list[str], list[str], float]] | None = None
-        for h in candidate_hubs:
-            res = _dijkstra(ev["clear_adj"], entry_id, h["id"])
-            if res and (best_alt is None or res[2] < best_alt[1][2]):
-                best_alt = (h["id"], res)
-
-        if best_alt is None:
-            fallback_hub = candidate_hubs[0]
-            base_res = _dijkstra(ev["base_adj"], entry_id, fallback_hub["id"])
-            alt_res = None
-            chosen_hub_id = fallback_hub["id"]
-        else:
-            chosen_hub_id, alt_res = best_alt
-            base_res = _dijkstra(ev["base_adj"], entry_id, chosen_hub_id)
-
-        dest_hub = hub_by_id[chosen_hub_id]
-        dest_meta = {
-            "id": dest_hub["id"],
-            "name": dest_hub["name"],
-            "ward": dest_hub["ward"],
-            "lon": dest_hub["lon"],
-            "lat": dest_hub["lat"],
-        }
-        baseline = _format_dijkstra_route(base_res, prefix_coord=prefix_coord, prefix_km=prefix_km, prefix_label=prefix_label)
-        alternative = _format_dijkstra_route(alt_res, prefix_coord=prefix_coord, prefix_km=prefix_km, prefix_label=prefix_label)
-        return _build_nav_response(
-            mode="evacuate",
-            origin_meta=origin_meta,
-            dest_meta=dest_meta,
-            ev=ev,
-            baseline=baseline,
-            alternative=alternative,
-            include_samples=include_samples,
-            avoid_unverified=avoid_unverified,
-            block_radius_m=block_radius_m,
-            note=f"避難先候補: {dest_hub['name']}（{dest_hub['status_note']}）",
-        )
-
-    if mode == "rescue":
-        # From nearest clear relief/shelter hub -> clicked target OR specific incident report
-        target_name = "支援要請・被害報告現場"
-        target_ward = "京都市"
-        t_lon = target_lon
-        t_lat = target_lat
-        if target_report_id:
-            rep = next((r for r in reports if r.get("id") == target_report_id), None)
-            if not rep:
-                raise HTTPException(status_code=404, detail="指定された報告が見つかりません。")
-            target_name = f"現場: {rep['title']}"
-            target_ward = rep["ward_name"]
-            t_lon = rep.get("lon")
-            t_lat = rep.get("lat")
-            if (t_lon is None or t_lat is None) and rep.get("meshcode") and store is not None and getattr(store, "loaded", False):
-                md = store.get_mesh_detail(str(rep["meshcode"]))
-                if md:
-                    t_lon = md.get("centroid_lon")
-                    t_lat = md.get("centroid_lat")
-            if t_lon is None or t_lat is None:
-                from app.constants import WARD_CENTERS
-                wc = WARD_CENTERS.get(target_ward, WARD_CENTERS["京都市全域"])
-                t_lon, t_lat = wc["lon"], wc["lat"]
-
-        clear_node_set = {k for k, edges in ev["clear_adj"].items() if len(edges) > 0} or None
-        if t_lat is not None and t_lon is not None:
-            exit_id, suffix_km = find_nearest_node(float(t_lat), float(t_lon), allowed_nodes=clear_node_set)
-            suffix_coord = (float(t_lon), float(t_lat))
-            suffix_label = f"幹線出口（{ARTERIAL_NODES[exit_id]['name']}）→ 現場周辺（約{suffix_km}km）"
-            dest_meta = {
-                "id": target_report_id or "target_point",
-                "name": target_name,
-                "ward": target_ward,
-                "lon": float(t_lon),
-                "lat": float(t_lat),
-            }
-        elif destination_id and destination_id in ARTERIAL_NODES:
-            exit_id = destination_id
-            suffix_coord = None
-            suffix_km = 0.0
-            suffix_label = None
-            dest_meta = {"id": exit_id, **ARTERIAL_NODES[exit_id]}
-        else:
-            raise HTTPException(status_code=400, detail="救援先の報告または地図座標を指定してください。")
-
-        if origin_id and origin_id in hub_by_id:
-            chosen_hub = hub_by_id[origin_id]
-            alt_res = _dijkstra(ev["clear_adj"], origin_id, exit_id)
-            base_res = _dijkstra(ev["base_adj"], origin_id, exit_id)
-        else:
-            # Find nearest clear shelter/relief hub to dispatch rescue team/supplies
-            best_pair: tuple[dict[str, Any], tuple[list[str], list[str], float]] | None = None
-            for h in ev["hubs"]:
-                res = _dijkstra(ev["clear_adj"], h["id"], exit_id)
-                if res:
-                    # Prefer hubs other than the exact exit node unless it's the only option
-                    score = res[2] + (0.05 if h["hub_status"] == "open" else 1.5)
-                    if best_pair is None or score < best_pair[1][2] + (0.05 if best_pair[0]["hub_status"] == "open" else 1.5):
-                        best_pair = (h, res)
-            if best_pair is None:
-                chosen_hub = ev["hubs"][0]
-                alt_res = None
-                base_res = _dijkstra(ev["base_adj"], chosen_hub["id"], exit_id)
-            else:
-                chosen_hub, alt_res = best_pair
-                base_res = _dijkstra(ev["base_adj"], chosen_hub["id"], exit_id)
-
-        origin_meta = {
-            "id": chosen_hub["id"],
-            "name": chosen_hub["name"],
-            "ward": chosen_hub["ward"],
-            "lon": chosen_hub["lon"],
-            "lat": chosen_hub["lat"],
-        }
-        baseline = _format_dijkstra_route(base_res, suffix_coord=suffix_coord, suffix_km=suffix_km, suffix_label=suffix_label)
-        alternative = _format_dijkstra_route(alt_res, suffix_coord=suffix_coord, suffix_km=suffix_km, suffix_label=suffix_label)
-        return _build_nav_response(
-            mode="rescue",
-            origin_meta=origin_meta,
-            dest_meta=dest_meta,
-            ev=ev,
-            baseline=baseline,
-            alternative=alternative,
-            include_samples=include_samples,
-            avoid_unverified=avoid_unverified,
-            block_radius_m=block_radius_m,
-            note=f"出動元拠点: {chosen_hub['name']}（{chosen_hub['role']}）",
-        )
-
-    raise HTTPException(status_code=400, detail=f"不正なナビゲーションモードです: {mode}")
 
 
 def _build_nav_response(
@@ -641,7 +771,10 @@ def _build_nav_response(
     rerouted = False
     if baseline["reachable"] and alternative["reachable"]:
         detour_delta_km = round(float(alternative["distance_km"]) - float(baseline["distance_km"]), 2)
-        rerouted = baseline["node_ids"] != alternative["node_ids"]
+        rerouted = (
+            baseline["node_ids"] != alternative["node_ids"]
+            or baseline["coordinates"] != alternative["coordinates"]
+        )
     return {
         "mode": mode,
         "is_simulation": True,
@@ -652,15 +785,214 @@ def _build_nav_response(
         "settings": {
             "include_samples": include_samples,
             "avoid_unverified": avoid_unverified,
-            "block_radius_m": block_radius_m,
+            "block_radius_m": min(float(block_radius_m), 65.0),
             "active_road_hazard_points": len(ev["hazard_points"]),
         },
         "blocked_segments": ev["blocked_segments"],
         "rerouted": rerouted,
         "detour_delta_km": detour_delta_km,
-        "baseline_route": baseline,
-        "alternative_route": alternative,
+        "baseline_route": _strip_internal(baseline),
+        "alternative_route": _strip_internal(alternative),
     }
+
+
+def simulate_navigation(
+    *,
+    mode: str,
+    reports: list[dict[str, Any]],
+    origin_id: str | None = None,
+    destination_id: str | None = None,
+    start_lat: float | None = None,
+    start_lon: float | None = None,
+    target_lat: float | None = None,
+    target_lon: float | None = None,
+    target_report_id: str | None = None,
+    include_samples: bool = True,
+    avoid_unverified: bool = True,
+    block_radius_m: float = 48.0,
+    store: Any | None = None,
+) -> dict[str, Any]:
+    """Compute real-road evacuation, rescue dispatch, or custom two-point detour routes."""
+    ev = _evaluate_network(
+        reports=reports,
+        include_samples=include_samples,
+        avoid_unverified=avoid_unverified,
+        block_radius_m=block_radius_m,
+        store=store,
+    )
+    blocked_ids: set[int] = ev["blocked_edge_ids"]
+
+    if mode == "custom":
+        if not origin_id or not destination_id:
+            raise HTTPException(status_code=400, detail="出発拠点と目的拠点を指定してください。")
+        return simulate_alternative_route(
+            origin_id=origin_id,
+            destination_id=destination_id,
+            reports=reports,
+            include_samples=include_samples,
+            avoid_unverified=avoid_unverified,
+            block_radius_m=block_radius_m,
+            store=store,
+        )
+
+    hub_by_id = {h["id"]: h for h in ev["hubs"]}
+
+    if mode == "evacuate":
+        if start_lat is not None and start_lon is not None:
+            o_lat, o_lon = float(start_lat), float(start_lon)
+            origin_meta = {
+                "id": "clicked_point",
+                "name": "地図上の指定地点（現在地想定）",
+                "ward": "京都市",
+                "lon": o_lon,
+                "lat": o_lat,
+            }
+        elif origin_id and origin_id in ARTERIAL_NODES:
+            origin_meta = {"id": origin_id, **ARTERIAL_NODES[origin_id]}
+            o_lat, o_lon = float(origin_meta["lat"]), float(origin_meta["lon"])
+        else:
+            raise HTTPException(status_code=400, detail="地図上の地点または出発拠点を指定してください。")
+
+        start_clear = _ROAD_NET.snap_point(o_lat, o_lon, blocked_ids, prefer_clear=True)
+        start_base = _ROAD_NET.snap_point(o_lat, o_lon, None, prefer_clear=False)
+
+        candidate_hubs = [h for h in ev["hubs"] if h["hub_status"] != "restricted"] or ev["hubs"]
+        # Evaluate top 4 closest hubs by crow-fly first, running A* on all 4 to pick true road shortest
+        ranked_hubs = sorted(
+            candidate_hubs,
+            key=lambda h: _dist_km(o_lon, o_lat, h["lon"], h["lat"]),
+        )[:4]
+
+        best_choice: tuple[dict[str, Any], SnappedPoint, dict[str, Any]] | None = None
+        for h in ranked_hubs:
+            g_clear = _ROAD_NET.snap_point(h["lat"], h["lon"], blocked_ids, prefer_clear=True)
+            res = _ROAD_NET.route_between(start_clear, g_clear, blocked_ids)
+            if res["reachable"]:
+                if best_choice is None or res["weighted_cost"] < best_choice[2]["weighted_cost"]:
+                    best_choice = (h, g_clear, res)
+
+        if best_choice is None:
+            chosen_hub = ranked_hubs[0]
+            g_base = _ROAD_NET.snap_point(chosen_hub["lat"], chosen_hub["lon"], None, prefer_clear=False)
+            baseline = _ROAD_NET.route_between(start_base, g_base, set())
+            alternative = {"reachable": False, "node_ids": [], "node_names": [], "segments": [], "coordinates": [], "distance_km": None}
+        else:
+            chosen_hub, _, alternative = best_choice
+            g_base = _ROAD_NET.snap_point(chosen_hub["lat"], chosen_hub["lon"], None, prefer_clear=False)
+            baseline = _ROAD_NET.route_between(start_base, g_base, set())
+
+        dest_meta = {
+            "id": chosen_hub["id"],
+            "name": chosen_hub["name"],
+            "ward": chosen_hub["ward"],
+            "lon": chosen_hub["lon"],
+            "lat": chosen_hub["lat"],
+        }
+        return _build_nav_response(
+            mode="evacuate",
+            origin_meta=origin_meta,
+            dest_meta=dest_meta,
+            ev=ev,
+            baseline=baseline,
+            alternative=alternative,
+            include_samples=include_samples,
+            avoid_unverified=avoid_unverified,
+            block_radius_m=block_radius_m,
+            note=f"避難先候補: {chosen_hub['name']}（{chosen_hub['status_note']}）",
+        )
+
+    if mode == "rescue":
+        target_name = "支援要請・被害報告現場"
+        target_ward = "京都市"
+        t_lon = target_lon
+        t_lat = target_lat
+        if target_report_id:
+            rep = next((r for r in reports if r.get("id") == target_report_id), None)
+            if not rep:
+                raise HTTPException(status_code=404, detail="指定された報告が見つかりません。")
+            target_name = f"現場: {rep['title']}"
+            target_ward = rep["ward_name"]
+            t_lon = rep.get("lon")
+            t_lat = rep.get("lat")
+            if (t_lon is None or t_lat is None) and rep.get("meshcode") and store is not None and getattr(store, "loaded", False):
+                md = store.get_mesh_detail(str(rep["meshcode"]))
+                if md:
+                    t_lon = md.get("centroid_lon")
+                    t_lat = md.get("centroid_lat")
+            if t_lon is None or t_lat is None:
+                wc = WARD_CENTERS.get(target_ward, WARD_CENTERS["京都市全域"])
+                t_lon, t_lat = wc["lon"], wc["lat"]
+
+        if t_lat is not None and t_lon is not None:
+            d_lat, d_lon = float(t_lat), float(t_lon)
+            dest_meta = {
+                "id": target_report_id or "target_point",
+                "name": target_name,
+                "ward": target_ward,
+                "lon": d_lon,
+                "lat": d_lat,
+            }
+        elif destination_id and destination_id in ARTERIAL_NODES:
+            dest_meta = {"id": destination_id, **ARTERIAL_NODES[destination_id]}
+            d_lat, d_lon = float(dest_meta["lat"]), float(dest_meta["lon"])
+        else:
+            raise HTTPException(status_code=400, detail="救援先の報告または地図座標を指定してください。")
+
+        goal_clear = _ROAD_NET.snap_point(d_lat, d_lon, blocked_ids, prefer_clear=True)
+        goal_base = _ROAD_NET.snap_point(d_lat, d_lon, None, prefer_clear=False)
+
+        if origin_id and origin_id in hub_by_id:
+            chosen_hub = hub_by_id[origin_id]
+            s_clear = _ROAD_NET.snap_point(chosen_hub["lat"], chosen_hub["lon"], blocked_ids, prefer_clear=True)
+            s_base = _ROAD_NET.snap_point(chosen_hub["lat"], chosen_hub["lon"], None, prefer_clear=False)
+            alternative = _ROAD_NET.route_between(s_clear, goal_clear, blocked_ids, end_pin=(d_lon, d_lat))
+            baseline = _ROAD_NET.route_between(s_base, goal_base, set(), end_pin=(d_lon, d_lat))
+        else:
+            ranked_hubs = sorted(
+                ev["hubs"],
+                key=lambda h: _dist_km(d_lon, d_lat, h["lon"], h["lat"]),
+            )[:4]
+            best_pair: tuple[dict[str, Any], dict[str, Any], float] | None = None
+            for h in ranked_hubs:
+                s_clear = _ROAD_NET.snap_point(h["lat"], h["lon"], blocked_ids, prefer_clear=True)
+                res = _ROAD_NET.route_between(s_clear, goal_clear, blocked_ids, end_pin=(d_lon, d_lat))
+                if res["reachable"]:
+                    penalty = 0.0 if h["hub_status"] == "open" else (0.35 if h["hub_status"] == "support_needed" else 1.8)
+                    score = res["weighted_cost"] + penalty
+                    if best_pair is None or score < best_pair[2]:
+                        best_pair = (h, res, score)
+
+            if best_pair is None:
+                chosen_hub = ranked_hubs[0]
+                s_base = _ROAD_NET.snap_point(chosen_hub["lat"], chosen_hub["lon"], None, prefer_clear=False)
+                baseline = _ROAD_NET.route_between(s_base, goal_base, set(), end_pin=(d_lon, d_lat))
+                alternative = {"reachable": False, "node_ids": [], "node_names": [], "segments": [], "coordinates": [], "distance_km": None}
+            else:
+                chosen_hub, alternative, _ = best_pair
+                s_base = _ROAD_NET.snap_point(chosen_hub["lat"], chosen_hub["lon"], None, prefer_clear=False)
+                baseline = _ROAD_NET.route_between(s_base, goal_base, set(), end_pin=(d_lon, d_lat))
+
+        origin_meta = {
+            "id": chosen_hub["id"],
+            "name": chosen_hub["name"],
+            "ward": chosen_hub["ward"],
+            "lon": chosen_hub["lon"],
+            "lat": chosen_hub["lat"],
+        }
+        return _build_nav_response(
+            mode="rescue",
+            origin_meta=origin_meta,
+            dest_meta=dest_meta,
+            ev=ev,
+            baseline=baseline,
+            alternative=alternative,
+            include_samples=include_samples,
+            avoid_unverified=avoid_unverified,
+            block_radius_m=block_radius_m,
+            note=f"出動元拠点: {chosen_hub['name']}（{chosen_hub['role']}）",
+        )
+
+    raise HTTPException(status_code=400, detail=f"不正なナビゲーションモードです: {mode}")
 
 
 def simulate_alternative_route(
@@ -670,10 +1002,10 @@ def simulate_alternative_route(
     reports: list[dict[str, Any]],
     include_samples: bool = True,
     avoid_unverified: bool = True,
-    block_radius_m: float = 420.0,
+    block_radius_m: float = 48.0,
     store: Any | None = None,
 ) -> dict[str, Any]:
-    """Compute shortest arterial path and detour avoiding active road_blocked reports."""
+    """Compute street-following shortest path and detour avoiding active road_blocked reports."""
     if origin_id not in ARTERIAL_NODES:
         raise HTTPException(status_code=400, detail=f"未知の出発拠点IDです: {origin_id}")
     if destination_id not in ARTERIAL_NODES:
@@ -688,15 +1020,22 @@ def simulate_alternative_route(
         block_radius_m=block_radius_m,
         store=store,
     )
-    base_res = _dijkstra(ev["base_adj"], origin_id, destination_id)
-    alt_res = _dijkstra(ev["clear_adj"], origin_id, destination_id)
-    baseline = _format_dijkstra_route(base_res)
-    alternative = _format_dijkstra_route(alt_res)
+    ori = ARTERIAL_NODES[origin_id]
+    dst = ARTERIAL_NODES[destination_id]
+    blocked_ids: set[int] = ev["blocked_edge_ids"]
+
+    s_base = _ROAD_NET.snap_point(ori["lat"], ori["lon"], None, prefer_clear=False)
+    g_base = _ROAD_NET.snap_point(dst["lat"], dst["lon"], None, prefer_clear=False)
+    baseline = _ROAD_NET.route_between(s_base, g_base, set())
+
+    s_clear = _ROAD_NET.snap_point(ori["lat"], ori["lon"], blocked_ids, prefer_clear=True)
+    g_clear = _ROAD_NET.snap_point(dst["lat"], dst["lon"], blocked_ids, prefer_clear=True)
+    alternative = _ROAD_NET.route_between(s_clear, g_clear, blocked_ids)
 
     return _build_nav_response(
         mode="custom",
-        origin_meta={"id": origin_id, **ARTERIAL_NODES[origin_id]},
-        dest_meta={"id": destination_id, **ARTERIAL_NODES[destination_id]},
+        origin_meta={"id": origin_id, **ori},
+        dest_meta={"id": destination_id, **dst},
         ev=ev,
         baseline=baseline,
         alternative=alternative,
