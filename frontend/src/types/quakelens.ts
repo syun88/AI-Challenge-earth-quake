@@ -560,3 +560,17 @@ export interface RouteSimulationResponse {
   baseline_route: RoutePathResult;
   alternative_route: RoutePathResult;
 }
+
+export interface SnappedRoadInfo {
+  matched: boolean;
+  road_name: string;
+  highway: string;
+  highway_label: string;
+  ward_name: string;
+  meshcode: string | null;
+  snap_lat: number;
+  snap_lon: number;
+  distance_m: number | null;
+  coordinates: [number, number][];
+  preview_segments: [number, number][][];
+}

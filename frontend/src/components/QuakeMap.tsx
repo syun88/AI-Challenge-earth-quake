@@ -24,7 +24,7 @@ import {
   UsageGroup,
 } from "@/types/quakelens";
 
-export type MapPickMode = "none" | "report" | "evacuate" | "rescue";
+export type MapPickMode = "none" | "report" | "evacuate" | "rescue" | "road_block";
 export type VisualPreset = "crisis" | "risk";
 
 export interface PickedMapTarget {
@@ -33,6 +33,7 @@ export interface PickedMapTarget {
   buildingId?: string | null;
   meshcode?: string | null;
   wardName?: string | null;
+  roadName?: string | null;
   yearBuilt?: number | null;
   usageLabel?: string | null;
   structureLabel?: string | null;
@@ -95,6 +96,7 @@ interface QuakeMapProps {
   flyToTarget: { lon: number; lat: number; zoom: number; ts: number } | null;
   mapPickMode: MapPickMode;
   pickedCoords: { lat: number; lon: number } | null;
+  previewRoadSegments?: [number, number][][] | null;
   onCancelPickMode: () => void;
   onMapPicked: (target: PickedMapTarget) => void;
   onSelectBuilding: (buildingId: string) => void;
@@ -134,6 +136,7 @@ export function QuakeMap({
   flyToTarget,
   mapPickMode,
   pickedCoords,
+  previewRoadSegments,
   onCancelPickMode,
   onMapPicked,
   onSelectBuilding,
@@ -565,6 +568,32 @@ export function QuakeMap({
           "line-width": 2.4,
           "line-dasharray": [1.5, 1.5],
           "line-opacity": 0.95,
+        },
+      });
+
+      // Road preview highlight when selecting a road segment to mark damaged/blocked
+      map.addSource("preview-road", { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: "preview-road-glow",
+        type: "line",
+        source: "preview-road",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#f59e0b",
+          "line-width": 10,
+          "line-opacity": 0.75,
+        },
+      });
+      map.addLayer({
+        id: "preview-road-line",
+        type: "line",
+        source: "preview-road",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#fef08a",
+          "line-width": 4,
+          "line-dasharray": [2, 1],
+          "line-opacity": 1,
         },
       });
 
@@ -1288,6 +1317,26 @@ export function QuakeMap({
     };
   }, [pickedCoords, mapReady]);
 
+  // Road closure snap preview line highlight
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const src = map.getSource("preview-road") as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    if (!previewRoadSegments || previewRoadSegments.length === 0) {
+      src.setData(EMPTY_FC);
+      return;
+    }
+    src.setData({
+      type: "FeatureCollection",
+      features: previewRoadSegments.map((coords) => ({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: coords },
+        properties: {},
+      })),
+    });
+  }, [previewRoadSegments, mapReady]);
+
   // Navigation Route Lines + Start/End Pins
   useEffect(() => {
     const map = mapRef.current;
@@ -1378,13 +1427,15 @@ export function QuakeMap({
   }, [routeResult, mapReady]);
 
   const pickPrompt =
-    mapPickMode === "report"
-      ? "地図上の建物または道路をクリックして被害場所を指定してください"
-      : mapPickMode === "evacuate"
-        ? "地図上の現在地（出発地点）をクリックすると最寄り避難所へのルートを表示します"
-        : mapPickMode === "rescue"
-          ? "地図上の救助・支援先をクリックすると最寄り拠点からの救援ルートを表示します"
-          : null;
+    mapPickMode === "road_block"
+      ? "通行止め・損壊を設定する道路を地図上でクリックしてください"
+      : mapPickMode === "report"
+        ? "地図上の建物または道路をクリックして被害場所を指定してください"
+        : mapPickMode === "evacuate"
+          ? "地図上の現在地（出発地点）をクリックすると最寄り避難所へのルートを表示します"
+          : mapPickMode === "rescue"
+            ? "地図上の救助・支援先をクリックすると最寄り拠点からの救援ルートを表示します"
+            : null;
 
   return (
     <div className="relative h-full w-full bg-slate-950">

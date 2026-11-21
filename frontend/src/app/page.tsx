@@ -27,6 +27,7 @@ import { RiskStatsDrawer } from "@/components/RiskStatsDrawer";
 import { SelectedFeatureCard } from "@/components/SelectedFeatureCard";
 import { SourcesModal } from "@/components/SourcesModal";
 import { WARD_CENTERS } from "@/lib/colors";
+import { readLocalReportAuth } from "@/lib/reportAuth";
 import {
   getBoardSummary,
   getBuildingDetail,
@@ -42,6 +43,8 @@ import {
   getStats,
   simulateNavigation,
   simulateRoute,
+  snapRoadInfo,
+  updateDamageReport,
 } from "@/lib/api";
 import {
   AgeCategory,
@@ -61,6 +64,7 @@ import {
   PriorityArea,
   RouteSimulationResponse,
   ShelterHub,
+  SnappedRoadInfo,
   StatsResponse,
   UsageGroup,
 } from "@/types/quakelens";
@@ -120,6 +124,8 @@ export default function HomePage() {
 
   const [mapPickMode, setMapPickMode] = useState<MapPickMode>("none");
   const [pickedReportTarget, setPickedReportTarget] = useState<PickedMapTarget | null>(null);
+  const [snappedRoadTarget, setSnappedRoadTarget] = useState<SnappedRoadInfo | null>(null);
+  const [lastNavParams, setLastNavParams] = useState<Parameters<typeof simulateNavigation>[0] | null>(null);
   const [pickedEvacuateCoords, setPickedEvacuateCoords] = useState<{
     lat: number;
     lon: number;
@@ -394,14 +400,16 @@ export default function HomePage() {
 
   const handleDispatchRescueToReport = useCallback(
     async (rep: DamageReport) => {
+      const navParams: Parameters<typeof simulateNavigation>[0] = {
+        mode: "rescue",
+        targetReportId: rep.id,
+        includeSamples,
+        avoidUnverified: true,
+      };
       try {
         clearSelections();
-        const res = await simulateNavigation({
-          mode: "rescue",
-          targetReportId: rep.id,
-          includeSamples,
-          avoidUnverified: true,
-        });
+        const res = await simulateNavigation(navParams);
+        setLastNavParams(navParams);
         setRouteResult(res);
         setShowRoadClosures(true);
         setShowShelterHubs(true);
@@ -415,20 +423,22 @@ export default function HomePage() {
 
   const handleDispatchRescueToBuilding = useCallback(
     async (building: BuildingDetail) => {
+      const navParams: Parameters<typeof simulateNavigation>[0] = {
+        mode: "rescue",
+        targetLat: building.centroid_lat,
+        targetLon: building.centroid_lon,
+        includeSamples,
+        avoidUnverified: true,
+      };
       try {
         clearSelections();
-        const res = await simulateNavigation({
-          mode: "rescue",
-          targetLat: building.centroid_lat,
-          targetLon: building.centroid_lon,
-          includeSamples,
-          avoidUnverified: true,
-        });
+        const res = await simulateNavigation(navParams);
         setPickedRescueCoords({
           lat: building.centroid_lat,
           lon: building.centroid_lon,
           label: `${building.ward_name} (${building.building_id})`,
         });
+        setLastNavParams(navParams);
         setRouteResult(res);
         setShowRoadClosures(true);
         setShowShelterHubs(true);
@@ -438,6 +448,34 @@ export default function HomePage() {
       }
     },
     [includeSamples, clearSelections]
+  );
+
+  const handleRoadClosuresChanged = useCallback(async () => {
+    triggerDisasterRefresh();
+    if (routeResult && lastNavParams) {
+      try {
+        const refreshed = await simulateNavigation({ ...lastNavParams, includeSamples });
+        setRouteResult(refreshed);
+      } catch {
+        // ignore recalculation failure
+      }
+    }
+  }, [triggerDisasterRefresh, routeResult, lastNavParams, includeSamples]);
+
+  const handleResolveBlockedRoadFromMap = useCallback(
+    async (reportId: string) => {
+      const authMap = readLocalReportAuth();
+      const code = authMap[reportId] || window.prompt("通行止めを解除するための暗証番号を入力してください");
+      if (code === null) return;
+      try {
+        await updateDamageReport(reportId, { passcode: code, resolved: true });
+        clearSelections();
+        await handleRoadClosuresChanged();
+      } catch (err) {
+        window.alert(err instanceof Error ? err.message : "通行止めの解除に失敗しました。");
+      }
+    },
+    [clearSelections, handleRoadClosuresChanged]
   );
 
   const handleReportBuilding = useCallback((building: BuildingDetail) => {
@@ -470,9 +508,48 @@ export default function HomePage() {
 
   const handleMapPicked = useCallback(
     async (target: PickedMapTarget) => {
-      if (mapPickMode === "report") {
-        setPickedReportTarget(target);
+      if (mapPickMode === "road_block") {
         setMapPickMode("none");
+        try {
+          const snapped = await snapRoadInfo(target.lat, target.lon);
+          setSnappedRoadTarget(snapped);
+        } catch {
+          setSnappedRoadTarget({
+            matched: false,
+            road_name: "地図上の指定道路",
+            highway: "unknown",
+            highway_label: "道路",
+            ward_name: target.wardName || "伏見区",
+            meshcode: target.meshcode ?? null,
+            snap_lat: target.lat,
+            snap_lon: target.lon,
+            distance_m: null,
+            coordinates: [],
+            preview_segments: [],
+          });
+        }
+        setShowRoadClosures(true);
+        setActivePanel("nav");
+        return;
+      }
+
+      if (mapPickMode === "report") {
+        setMapPickMode("none");
+        let enriched = target;
+        if (!target.buildingId) {
+          try {
+            const snapped = await snapRoadInfo(target.lat, target.lon);
+            enriched = {
+              ...target,
+              wardName: target.wardName || snapped.ward_name,
+              meshcode: target.meshcode ?? snapped.meshcode,
+              roadName: snapped.matched ? snapped.road_name : null,
+            };
+          } catch {
+            // ignore
+          }
+        }
+        setPickedReportTarget(enriched);
         setReportCreateTrigger((n) => n + 1);
         setActivePanel("report");
         return;
@@ -487,14 +564,17 @@ export default function HomePage() {
             ? `${target.wardName} (${target.lat.toFixed(4)}, ${target.lon.toFixed(4)})`
             : undefined,
         });
+        const navParams: Parameters<typeof simulateNavigation>[0] = {
+          mode: "evacuate",
+          startLat: target.lat,
+          startLon: target.lon,
+          includeSamples,
+          avoidUnverified: true,
+        };
         try {
-          const res = await simulateNavigation({
-            mode: "evacuate",
-            startLat: target.lat,
-            startLon: target.lon,
-            includeSamples,
-            avoidUnverified: true,
-          });
+          const res = await simulateNavigation(navParams);
+          clearSelections();
+          setLastNavParams(navParams);
           setRouteResult(res);
           setActivePanel("nav");
         } catch {
@@ -514,14 +594,17 @@ export default function HomePage() {
               ? `${target.wardName} (${target.lat.toFixed(4)}, ${target.lon.toFixed(4)})`
               : undefined,
         });
+        const navParams: Parameters<typeof simulateNavigation>[0] = {
+          mode: "rescue",
+          targetLat: target.lat,
+          targetLon: target.lon,
+          includeSamples,
+          avoidUnverified: true,
+        };
         try {
-          const res = await simulateNavigation({
-            mode: "rescue",
-            targetLat: target.lat,
-            targetLon: target.lon,
-            includeSamples,
-            avoidUnverified: true,
-          });
+          const res = await simulateNavigation(navParams);
+          clearSelections();
+          setLastNavParams(navParams);
           setRouteResult(res);
           setActivePanel("nav");
         } catch {
@@ -529,7 +612,7 @@ export default function HomePage() {
         }
       }
     },
-    [mapPickMode, includeSamples]
+    [mapPickMode, includeSamples, clearSelections]
   );
 
   const handleSelectPriorityArea = useCallback(
@@ -707,6 +790,7 @@ export default function HomePage() {
         flyToTarget={flyToTarget}
         mapPickMode={mapPickMode}
         pickedCoords={pickedReportTarget}
+        previewRoadSegments={snappedRoadTarget?.preview_segments ?? null}
         onCancelPickMode={() => setMapPickMode("none")}
         onMapPicked={(target) => void handleMapPicked(target)}
         onSelectBuilding={(id) => void handleSelectBuilding(id)}
@@ -846,7 +930,7 @@ export default function HomePage() {
                 onFocusReport={handleFocusReport}
                 onReportCreated={handleReportCreated}
                 onDispatchRescue={(rep) => void handleDispatchRescueToReport(rep)}
-                onReportsChanged={triggerDisasterRefresh}
+                onReportsChanged={() => void handleRoadClosuresChanged()}
                 onOpenRouteSimulator={() => setActivePanel("nav")}
                 startInCreateMode={reportCreateTrigger > 0}
               />
@@ -874,8 +958,10 @@ export default function HomePage() {
                 includeSamples={includeSamples}
                 isPickingEvacuate={mapPickMode === "evacuate"}
                 isPickingRescue={mapPickMode === "rescue"}
+                isPickingRoadBlock={mapPickMode === "road_block"}
                 pickedEvacuateCoords={pickedEvacuateCoords}
                 pickedRescueCoords={pickedRescueCoords}
+                snappedRoadTarget={snappedRoadTarget}
                 onStartPickEvacuate={() => {
                   setShowShelterHubs(true);
                   setShowRoadClosures(true);
@@ -886,12 +972,25 @@ export default function HomePage() {
                   setShowRoadClosures(true);
                   setMapPickMode("rescue");
                 }}
+                onStartPickRoadBlock={() => {
+                  setShowRoadClosures(true);
+                  setSnappedRoadTarget(null);
+                  setMapPickMode("road_block");
+                }}
+                onClearRoadBlockTarget={() => setSnappedRoadTarget(null)}
                 onCancelPick={() => setMapPickMode("none")}
-                onChangeRouteResult={(res) => {
-                  if (res) clearSelections();
+                onChangeRouteResult={(res, params) => {
+                  if (res) {
+                    clearSelections();
+                    if (params) setLastNavParams(params);
+                  } else {
+                    setLastNavParams(null);
+                  }
                   setRouteResult(res);
                 }}
                 onSelectShelterHub={handleSelectShelterHub}
+                onFocusReport={handleFocusReport}
+                onRoadClosuresChanged={handleRoadClosuresChanged}
               />
             )}
 
@@ -985,6 +1084,19 @@ export default function HomePage() {
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
+                data-testid="summary-road-block-btn"
+                onClick={() => {
+                  setShowRoadClosures(true);
+                  setSnappedRoadTarget(null);
+                  setMapPickMode("road_block");
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-rose-500/50 bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-100 hover:bg-rose-500/35"
+              >
+                <Ban className="h-3 w-3 text-rose-300" />
+                道路被害設定
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   setReportCreateTrigger((n) => n + 1);
                   setActivePanel("report");
@@ -1027,6 +1139,13 @@ export default function HomePage() {
           setMapPickMode("evacuate");
           setFlyToTarget({ lon: hub.lon, lat: hub.lat, zoom: 13.8, ts: Date.now() });
         }}
+        onStartPickRoadBlock={() => {
+          clearSelections();
+          setShowRoadClosures(true);
+          setSnappedRoadTarget(null);
+          setMapPickMode("road_block");
+        }}
+        onResolveBlockedRoad={(reportId) => void handleResolveBlockedRoadFromMap(reportId)}
         onOpenNavPanel={() => setActivePanel("nav")}
         onOpenSafetyForWard={(w) => {
           if (w && WARD_CENTERS[w]) setSelectedWard(w);

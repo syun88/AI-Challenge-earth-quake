@@ -716,6 +716,82 @@ def _evaluate_network(
     }
 
 
+HIGHWAY_JP_LABELS: dict[str, str] = {
+    "trunk": "主要幹線（国道・自動車専用等）",
+    "trunk_link": "幹線連絡路",
+    "primary": "主要幹線道路",
+    "primary_link": "主要幹線連絡路",
+    "secondary": "幹線道路（府道・主要市道）",
+    "secondary_link": "幹線連絡路",
+    "tertiary": "補助幹線・地域幹線",
+    "tertiary_link": "地域幹線連絡路",
+    "unclassified": "一般市道・地区道路",
+    "residential": "生活道路・住宅街路",
+}
+
+
+def _infer_ward_mesh(lat: float, lon: float, store: Any | None = None) -> tuple[str, str | None]:
+    if store is not None and getattr(store, "loaded", False) and hasattr(store, "meshes"):
+        try:
+            sub = store.meshes.cx[lon : lon, lat : lat]
+            if not sub.empty:
+                r = sub.iloc[0]
+                return str(r["ward_name"]), str(r["meshcode"])
+        except Exception:
+            pass
+    best_ward = "伏見区"
+    best_d = float("inf")
+    for w, meta in WARD_CENTERS.items():
+        if w == "all":
+            continue
+        d = _dist_km(lon, lat, float(meta["lon"]), float(meta["lat"]))
+        if d < best_d:
+            best_d = d
+            best_ward = w
+    return best_ward, None
+
+
+def snap_road_info(lat: float, lon: float, store: Any | None = None) -> dict[str, Any]:
+    """Snap a map click coordinate onto the nearest real Kyoto OSM street & preview closure geometry."""
+    _ROAD_NET.ensure_loaded()
+    matches = _ROAD_NET.find_edges_for_closure(
+        float(lon), float(lat), radius_m=48.0, fallback_nearest_m=220.0
+    )
+    if not matches:
+        ward_name, meshcode = _infer_ward_mesh(float(lat), float(lon), store=store)
+        return {
+            "matched": False,
+            "road_name": "地図上の指定地点周辺",
+            "highway": "unknown",
+            "highway_label": "周辺地点",
+            "ward_name": ward_name,
+            "meshcode": meshcode,
+            "snap_lat": round(float(lat), 5),
+            "snap_lon": round(float(lon), 5),
+            "distance_m": None,
+            "coordinates": [],
+            "preview_segments": [],
+        }
+
+    primary_eidx, dist_m, p_lon, p_lat = matches[0]
+    primary_edge = _ROAD_NET.edges[primary_eidx]
+    road_name = primary_edge.name or HIGHWAY_JP_LABELS.get(primary_edge.highway, "京都市街路")
+    ward_name, meshcode = _infer_ward_mesh(p_lat, p_lon, store=store)
+    return {
+        "matched": True,
+        "road_name": road_name,
+        "highway": primary_edge.highway,
+        "highway_label": HIGHWAY_JP_LABELS.get(primary_edge.highway, "一般道路"),
+        "ward_name": ward_name,
+        "meshcode": meshcode,
+        "snap_lat": p_lat,
+        "snap_lon": p_lon,
+        "distance_m": round(dist_m, 1),
+        "coordinates": primary_edge.coords,
+        "preview_segments": [_ROAD_NET.edges[m[0]].coords for m in matches],
+    }
+
+
 def get_network_status(
     *,
     reports: list[dict[str, Any]],

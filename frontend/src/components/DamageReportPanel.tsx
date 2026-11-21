@@ -39,6 +39,7 @@ import {
   REPORT_SEVERITY_META,
   VERIFICATION_META,
 } from "@/lib/colors";
+import { readLocalReportAuth, saveLocalReportAuth } from "@/lib/reportAuth";
 import type { PickedMapTarget } from "@/components/QuakeMap";
 import {
   DamageReport,
@@ -47,13 +48,6 @@ import {
   ReportSeverity,
   VerificationStatus,
 } from "@/types/quakelens";
-
-const REPORT_HISTORY_KEY = "quakelens_damage_report_history_v1";
-
-interface LocalReportAuth {
-  id: string;
-  passcode: string;
-}
 
 const PREFILL_TEMPLATES: Record<
   ReportCategory,
@@ -110,37 +104,6 @@ const PREFILL_TEMPLATES: Record<
     },
   ],
 };
-
-function readLocalReportAuth(): Record<string, string> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(REPORT_HISTORY_KEY);
-    if (!raw) return {};
-    const arr = JSON.parse(raw) as LocalReportAuth[];
-    if (!Array.isArray(arr)) return {};
-    const out: Record<string, string> = {};
-    for (const item of arr) {
-      if (item?.id && item?.passcode) out[item.id] = item.passcode;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-function saveLocalReportAuth(id: string, passcode: string) {
-  if (typeof window === "undefined" || !passcode) return;
-  try {
-    const prev = readLocalReportAuth();
-    prev[id] = passcode;
-    const list: LocalReportAuth[] = Object.entries(prev)
-      .slice(-30)
-      .map(([k, v]) => ({ id: k, passcode: v }));
-    window.localStorage.setItem(REPORT_HISTORY_KEY, JSON.stringify(list));
-  } catch {
-    // ignore
-  }
-}
 
 function CategoryIcon({
   category,
@@ -923,6 +886,25 @@ export function DamageReportPanel({
                     {pickedTarget.lat.toFixed(5)}, {pickedTarget.lon.toFixed(5)}
                     {pickedTarget.wardName && ` (${pickedTarget.wardName})`}
                   </div>
+                  {pickedTarget.roadName && (
+                    <div className="flex items-center justify-between gap-2 rounded-lg border border-rose-500/40 bg-rose-950/30 px-2.5 py-1.5 text-[11px] text-rose-100">
+                      <span>
+                        最寄り道路: <strong>{pickedTarget.roadName}</strong>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLocationLabel(pickedTarget.roadName || "");
+                          if (!title.trim()) {
+                            setTitle(`${pickedTarget.roadName} 通行止め・道路損壊`);
+                          }
+                        }}
+                        className="shrink-0 rounded bg-rose-500/30 px-2 py-0.5 text-[10px] font-bold text-rose-100 hover:bg-rose-500/50"
+                      >
+                        見出しに反映
+                      </button>
+                    </div>
+                  )}
                   {pickedTarget.buildingId && (
                     <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-orange-500/40 bg-orange-500/15 p-2 text-[11px] text-orange-100">
                       <input

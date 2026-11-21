@@ -20,6 +20,7 @@ import {
   ReportSeverity,
   RouteNode,
   RouteSimulationResponse,
+  SnappedRoadInfo,
   StatsResponse,
   VerificationStatus,
 } from "@/types/quakelens";
@@ -538,6 +539,14 @@ export function getNetworkStatus(params?: {
     avoid_unverified: params?.avoidUnverified === false ? "false" : "true",
   });
   return fetchJson<NetworkStatusResponse>(`/api/network/status?${sp.toString()}`);
+}
+
+export function snapRoadInfo(lat: number, lon: number) {
+  const sp = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lon),
+  });
+  return fetchJson<SnappedRoadInfo>(`/api/network/snap-road?${sp.toString()}`);
 }
 
 export function simulateRoute(params: {

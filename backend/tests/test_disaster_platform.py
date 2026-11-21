@@ -509,3 +509,39 @@ def test_ai_aggregation_grounding_and_route_simulation(isolated_env, monkeypatch
     assert resc["mode"] == "rescue"
     assert resc["alternative_route"]["reachable"] is True
     assert "出動元拠点" in (resc.get("note") or "")
+
+    # 6) Snap road endpoint + interactive user road-block creation & resolution lifecycle
+    r_snap = client.get("/api/network/snap-road?lat=34.9404&lon=135.7640")
+    assert r_snap.status_code == 200
+    snap_data = r_snap.json()
+    assert snap_data["matched"] is True
+    assert len(snap_data["preview_segments"]) >= 1
+    assert snap_data["road_name"]
+
+    r_road_rep = client.post(
+        "/api/reports",
+        json={
+            "category": "road_blocked",
+            "severity": "critical",
+            "title": f"{snap_data['road_name']} 路面陥没による通行止め",
+            "description": "地図から設定された道路被害テスト",
+            "ward_name": snap_data["ward_name"],
+            "lat": snap_data["snap_lat"],
+            "lon": snap_data["snap_lon"],
+            "location_consent": True,
+            "passcode": "9988",
+        },
+    )
+    assert r_road_rep.status_code == 200
+    road_rep_id = r_road_rep.json()["report"]["id"]
+    r_net_after = client.get("/api/network/status?include_samples=true")
+    assert r_net_after.json()["blocked_count"] >= 2
+    assert any(cm["id"] == road_rep_id for cm in r_net_after.json().get("closure_markers", []))
+
+    r_road_res = client.patch(
+        f"/api/reports/{road_rep_id}",
+        json={"passcode": "9988", "resolved": True},
+    )
+    assert r_road_res.status_code == 200
+    r_net_reopened = client.get("/api/network/status?include_samples=true")
+    assert not any(cm["id"] == road_rep_id for cm in r_net_reopened.json().get("closure_markers", []))

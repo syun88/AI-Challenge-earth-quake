@@ -6,26 +6,66 @@ import {
   Ambulance,
   Ban,
   Building2,
+  CheckCircle2,
   Compass,
+  Construction,
   Loader2,
   MapPin,
   Navigation,
   Route as RouteIcon,
   ShieldAlert,
   Tent,
+  Trash2,
   XCircle,
 } from "lucide-react";
-import { getRouteNodes, simulateNavigation } from "@/lib/api";
+import {
+  createDamageReport,
+  deleteDamageReport,
+  getRouteNodes,
+  simulateNavigation,
+  updateDamageReport,
+} from "@/lib/api";
 import { REPORT_CATEGORY_META, VERIFICATION_META } from "@/lib/colors";
+import { readLocalReportAuth, saveLocalReportAuth } from "@/lib/reportAuth";
 import {
   DamageReport,
   NetworkStatusResponse,
+  ReportSeverity,
   RouteNode,
   RouteSimulationResponse,
   ShelterHub,
+  SnappedRoadInfo,
 } from "@/types/quakelens";
 
 export type NavMode = "evacuate" | "rescue" | "custom";
+
+const ROAD_CAUSE_PRESETS: Array<{ label: string; desc: string; severity: ReportSeverity }> = [
+  {
+    label: "路面陥没・段差",
+    desc: "道路の亀裂・段差・陥没により車両の通行ができない状態です。",
+    severity: "critical",
+  },
+  {
+    label: "倒壊建物・塀による閉塞",
+    desc: "沿道のブロック塀や建物の崩落物により道路が塞がれています。",
+    severity: "critical",
+  },
+  {
+    label: "電柱傾斜・倒木",
+    desc: "電柱の傾斜や倒木・垂下線により通行危険（迂回必要）な状態です。",
+    severity: "high",
+  },
+  {
+    label: "橋梁・高架の損傷危険",
+    desc: "橋梁や跨線橋に段差・破損が見られ、通行止めとなっています。",
+    severity: "critical",
+  },
+  {
+    label: "冠水・土砂流出",
+    desc: "水道管破損による冠水または土砂流出のため通行困難です。",
+    severity: "high",
+  },
+];
 
 interface NavigationPanelProps {
   reports: DamageReport[];
@@ -34,13 +74,22 @@ interface NavigationPanelProps {
   includeSamples: boolean;
   isPickingEvacuate: boolean;
   isPickingRescue: boolean;
+  isPickingRoadBlock: boolean;
   pickedEvacuateCoords: { lat: number; lon: number; label?: string } | null;
   pickedRescueCoords: { lat: number; lon: number; label?: string } | null;
+  snappedRoadTarget: SnappedRoadInfo | null;
   onStartPickEvacuate: () => void;
   onStartPickRescue: () => void;
+  onStartPickRoadBlock: () => void;
+  onClearRoadBlockTarget: () => void;
   onCancelPick: () => void;
-  onChangeRouteResult: (res: RouteSimulationResponse | null) => void;
+  onChangeRouteResult: (
+    res: RouteSimulationResponse | null,
+    params?: Parameters<typeof simulateNavigation>[0]
+  ) => void;
   onSelectShelterHub: (hub: ShelterHub) => void;
+  onFocusReport: (report: DamageReport) => void;
+  onRoadClosuresChanged: () => Promise<void> | void;
   onFocusMap?: () => void;
 }
 
@@ -51,13 +100,19 @@ export function NavigationPanel({
   includeSamples,
   isPickingEvacuate,
   isPickingRescue,
+  isPickingRoadBlock,
   pickedEvacuateCoords,
   pickedRescueCoords,
+  snappedRoadTarget,
   onStartPickEvacuate,
   onStartPickRescue,
+  onStartPickRoadBlock,
+  onClearRoadBlockTarget,
   onCancelPick,
   onChangeRouteResult,
   onSelectShelterHub,
+  onFocusReport,
+  onRoadClosuresChanged,
   onFocusMap,
 }: NavigationPanelProps) {
   const [navMode, setNavMode] = useState<NavMode>(
@@ -74,6 +129,21 @@ export function NavigationPanel({
   const [avoidUnverified, setAvoidUnverified] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Quick road-closure creator state
+  const [causeIdx, setCauseIdx] = useState(0);
+  const [roadConsent, setRoadConsent] = useState(false);
+  const [customRoadNote, setCustomRoadNote] = useState("");
+  const [savingRoadBlock, setSavingRoadBlock] = useState(false);
+  const [roadFeedback, setRoadFeedback] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [busyReportId, setBusyReportId] = useState<string | null>(null);
+  const [localAuthMap, setLocalAuthMap] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      setLocalAuthMap(readLocalReportAuth());
+    });
+  }, [reports.length]);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,12 +163,13 @@ export function NavigationPanel({
     setLoading(true);
     setError(null);
     try {
-      const res = await simulateNavigation({
+      const fullParams = {
         ...params,
         includeSamples,
         avoidUnverified,
-      });
-      onChangeRouteResult(res);
+      };
+      const res = await simulateNavigation(fullParams);
+      onChangeRouteResult(res, fullParams);
       onFocusMap?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "経路計算に失敗しました。");
@@ -107,7 +178,104 @@ export function NavigationPanel({
     }
   };
 
-  // Prioritize active rescue / building damage reports with location for 1-click dispatch
+  const handleSubmitRoadBlock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!snappedRoadTarget || savingRoadBlock) return;
+    if (!roadConsent) {
+      setRoadFeedback({
+        type: "err",
+        text: "地図上に通行止め情報を記録・表示するには、下の同意チェックを入れてください。",
+      });
+      return;
+    }
+
+    const preset = ROAD_CAUSE_PRESETS[causeIdx] ?? ROAD_CAUSE_PRESETS[0];
+    const effPasscode = String(Math.floor(1000 + Math.random() * 9000));
+    const descText = customRoadNote.trim()
+      ? `${preset.desc}（補足: ${customRoadNote.trim()}）`
+      : preset.desc;
+
+    setSavingRoadBlock(true);
+    setRoadFeedback(null);
+    try {
+      const res = await createDamageReport({
+        category: "road_blocked",
+        severity: preset.severity,
+        title: `${snappedRoadTarget.road_name} ${preset.label}による通行止め`,
+        description: descText,
+        ward_name: snappedRoadTarget.ward_name,
+        meshcode: snappedRoadTarget.meshcode,
+        location_label: snappedRoadTarget.road_name,
+        lat: snappedRoadTarget.snap_lat,
+        lon: snappedRoadTarget.snap_lon,
+        location_consent: true,
+        passcode: effPasscode,
+        force_duplicate: true,
+      });
+      saveLocalReportAuth(res.report.id, effPasscode);
+      setLocalAuthMap(readLocalReportAuth());
+      setCustomRoadNote("");
+      setRoadConsent(false);
+      onClearRoadBlockTarget();
+      await onRoadClosuresChanged();
+      setRoadFeedback({
+        type: "ok",
+        text: `${snappedRoadTarget.road_name} を通行止めに設定しました（管理用暗証番号: ${effPasscode}）。`,
+      });
+    } catch (err) {
+      setRoadFeedback({
+        type: "err",
+        text: err instanceof Error ? err.message : "通行止めの設定に失敗しました。",
+      });
+    } finally {
+      setSavingRoadBlock(false);
+    }
+  };
+
+  const handleResolveRoad = async (rep: DamageReport) => {
+    const code = localAuthMap[rep.id] || window.prompt("解除用の暗証番号を入力してください");
+    if (code === null) return;
+    setBusyReportId(rep.id);
+    setRoadFeedback(null);
+    try {
+      await updateDamageReport(rep.id, { passcode: code, resolved: true });
+      await onRoadClosuresChanged();
+      setRoadFeedback({
+        type: "ok",
+        text: `${rep.title} の通行止めを解除（復旧済み）しました。`,
+      });
+    } catch (err) {
+      setRoadFeedback({
+        type: "err",
+        text: err instanceof Error ? err.message : "解除に失敗しました。",
+      });
+    } finally {
+      setBusyReportId(null);
+    }
+  };
+
+  const handleDeleteRoad = async (rep: DamageReport) => {
+    const code = localAuthMap[rep.id] || window.prompt("削除用の暗証番号を入力してください");
+    if (code === null) return;
+    setBusyReportId(rep.id);
+    setRoadFeedback(null);
+    try {
+      await deleteDamageReport(rep.id, code);
+      await onRoadClosuresChanged();
+      setRoadFeedback({
+        type: "ok",
+        text: `通行止め設定（${rep.title}）を削除しました。`,
+      });
+    } catch (err) {
+      setRoadFeedback({
+        type: "err",
+        text: err instanceof Error ? err.message : "削除に失敗しました。",
+      });
+    } finally {
+      setBusyReportId(null);
+    }
+  };
+
   const dispatchTargets = reports
     .filter(
       (r) =>
@@ -123,12 +291,13 @@ export function NavigationPanel({
       return (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9);
     });
 
+  const activeRoadBlocks = reports.filter((r) => !r.resolved && r.category === "road_blocked");
   const hubs = networkStatus?.hubs ?? [];
   const blockedCount = networkStatus?.blocked_count ?? 0;
 
   return (
     <div className="space-y-4 p-4 text-sm text-slate-200">
-      {/* Header + Clear */}
+      {/* Header + Clear Route */}
       <div className="flex items-start justify-between gap-2">
         <div>
           <h2 className="flex items-center gap-2 text-base font-bold text-white">
@@ -136,7 +305,7 @@ export function NavigationPanel({
             <span>避難・救援ルート案内</span>
           </h2>
           <p className="mt-0.5 text-xs text-slate-400">
-            通行止め報告（現在 <strong className="text-rose-300">{blockedCount}区間</strong>）を避けて経路を計算します
+            実道路上の通行止め（現在 <strong className="text-rose-300">{blockedCount}か所</strong>）を避けて計算します
           </p>
         </div>
         {routeResult && (
@@ -157,9 +326,184 @@ export function NavigationPanel({
         <div>
           <span className="font-bold text-amber-300">訓練・研究用シミュレーション</span>
           <p className="mt-0.5 text-[11px] text-amber-100/90">
-            主要幹線モデルと報告データに基づく試算です。実災害時の道路の安全性や実際の避難所開設状況を保証するものではありません。
+            OpenStreetMap実道路網と報告データに基づく試算です。実災害時の道路安全性や避難所開設を保証するものではありません。
           </p>
         </div>
+      </div>
+
+      {/* Damaged / Closed Road Setup Card */}
+      <div className="space-y-2.5 rounded-xl border border-rose-500/40 bg-rose-950/20 p-3.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-rose-200">
+            <Construction className="h-4 w-4 text-rose-400" />
+            <span>壊れた道路（通行止め）の設定・管理</span>
+          </div>
+          <span className="rounded-full bg-rose-500/20 px-2 py-0.5 font-mono text-[10px] font-bold text-rose-200">
+            {activeRoadBlocks.length}件
+          </span>
+        </div>
+
+        <button
+          type="button"
+          data-testid="nav-pick-road-block-btn"
+          onClick={isPickingRoadBlock ? onCancelPick : onStartPickRoadBlock}
+          className={`flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-bold transition ${
+            isPickingRoadBlock
+              ? "border-amber-400 bg-amber-500/25 text-amber-100"
+              : "border-rose-500/60 bg-rose-500/20 text-rose-100 hover:bg-rose-500/30"
+          }`}
+        >
+          <Ban className="h-4 w-4 text-rose-300" />
+          {isPickingRoadBlock
+            ? "地図上の道路をクリックしてください（押下で中止）"
+            : "地図上の道路をクリックして通行止めを追加"}
+        </button>
+
+        {snappedRoadTarget && (
+          <form
+            onSubmit={handleSubmitRoadBlock}
+            data-testid="road-block-quick-form"
+            className="space-y-2.5 rounded-xl border border-amber-400/60 bg-slate-950/90 p-3 text-xs"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wide text-amber-300">
+                  選択した実道路セグメント
+                </div>
+                <div className="mt-0.5 text-sm font-bold text-white">
+                  {snappedRoadTarget.road_name}
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  {snappedRoadTarget.ward_name} ／ {snappedRoadTarget.highway_label}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onClearRoadBlockTarget}
+                className="rounded px-1.5 py-0.5 text-[11px] text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-[11px] font-semibold text-slate-300">損壊・通行止めの状況</div>
+              <div className="flex flex-wrap gap-1">
+                {ROAD_CAUSE_PRESETS.map((preset, idx) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => setCauseIdx(idx)}
+                    className={`rounded-lg border px-2 py-1 text-[11px] font-semibold transition ${
+                      causeIdx === idx
+                        ? "border-rose-400 bg-rose-500/25 text-white"
+                        : "border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <input
+              type="text"
+              maxLength={120}
+              value={customRoadNote}
+              onChange={(e) => setCustomRoadNote(e.target.value)}
+              placeholder="補足メモ（任意：片側車線崩落・迂回方向など）"
+              className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-white placeholder-slate-500"
+            />
+
+            <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-slate-700 bg-slate-900/70 p-2 text-[11px] text-slate-200">
+              <input
+                type="checkbox"
+                data-testid="road-block-consent-checkbox"
+                checked={roadConsent}
+                onChange={(e) => setRoadConsent(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5 accent-rose-500"
+              />
+              <span>
+                この道路地点を<strong>「未確認（市民報告）」</strong>として記録・地図公開することに同意する
+              </span>
+            </label>
+
+            <button
+              type="submit"
+              data-testid="road-block-submit-btn"
+              disabled={savingRoadBlock}
+              className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-rose-500 py-2 text-xs font-bold text-white transition hover:bg-rose-400 disabled:opacity-50"
+            >
+              {savingRoadBlock ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="h-3.5 w-3.5" />
+              )}
+              この道路を通行止めに設定（表示ルートも自動再計算）
+            </button>
+          </form>
+        )}
+
+        {roadFeedback && (
+          <div
+            className={`rounded-lg border px-2.5 py-2 text-[11px] ${
+              roadFeedback.type === "ok"
+                ? "border-emerald-500/50 bg-emerald-950/40 text-emerald-100"
+                : "border-rose-500/50 bg-rose-950/50 text-rose-100"
+            }`}
+          >
+            {roadFeedback.text}
+          </div>
+        )}
+
+        {activeRoadBlocks.length > 0 && (
+          <div className="max-h-36 space-y-1.5 overflow-y-auto pr-0.5 pt-0.5">
+            {activeRoadBlocks.map((rep) => {
+              const canManage = !rep.is_sample && Boolean(localAuthMap[rep.id] || rep.has_passcode);
+              return (
+                <div
+                  key={rep.id}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-rose-500/30 bg-slate-950/80 px-2.5 py-1.5 text-[11px]"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onFocusReport(rep)}
+                    className="min-w-0 flex-1 truncate text-left font-medium text-rose-100 hover:underline"
+                    title={rep.title}
+                  >
+                    {rep.ward_name}：{rep.title}
+                  </button>
+                  {canManage ? (
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        data-testid={`resolve-road-${rep.id}`}
+                        disabled={busyReportId === rep.id}
+                        onClick={() => void handleResolveRoad(rep)}
+                        className="rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/25"
+                      >
+                        解除
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyReportId === rep.id}
+                        onClick={() => void handleDeleteRoad(rep)}
+                        aria-label="通行止めを削除"
+                        className="rounded border border-rose-500/40 px-1 py-0.5 text-rose-300 hover:bg-rose-500/25"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="shrink-0 text-[10px] text-slate-400">
+                      {rep.is_sample ? "訓練例" : "報告済"}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Mode Selector Tabs */}
@@ -289,10 +633,8 @@ export function NavigationPanel({
       {/* Mode 2: Shelter-to-Incident Rescue Dispatch */}
       {navMode === "rescue" && (
         <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-semibold text-emerald-300">
-              避難・支援拠点 → 要救助・倒壊現場への救援ルート
-            </span>
+          <div className="text-xs font-semibold text-emerald-300">
+            避難・支援拠点 → 要救助・倒壊現場への救援ルート
           </div>
 
           <button
@@ -537,11 +879,11 @@ export function NavigationPanel({
             <div className="space-y-1">
               <div className="flex items-center gap-1 text-[11px] font-semibold text-rose-300">
                 <Ban className="h-3.5 w-3.5" />
-                <span>回避中の通行止め区間 ({routeResult.blocked_segments.length}件)</span>
+                <span>回避中の通行止め区間 ({routeResult.blocked_segments.length}区間)</span>
               </div>
-              {routeResult.blocked_segments.map((seg) => (
+              {routeResult.blocked_segments.slice(0, 6).map((seg, i) => (
                 <div
-                  key={`${seg.from_id}-${seg.to_id}`}
+                  key={`${seg.from_id}-${seg.to_id}-${i}`}
                   className="rounded-lg border border-rose-500/30 bg-rose-950/25 px-2.5 py-1.5 text-[11px] text-rose-200"
                 >
                   <span className="font-semibold">{seg.label}</span>
@@ -557,7 +899,7 @@ export function NavigationPanel({
 
           {routeResult.alternative_route.reachable ? (
             <div className="space-y-1.5">
-              <div className="text-[11px] font-semibold text-slate-300">推奨経由ルート</div>
+              <div className="text-[11px] font-semibold text-slate-300">推奨経由ルート（実道路）</div>
               <ol className="space-y-1 pl-1 text-xs text-slate-200">
                 {routeResult.alternative_route.segments.map((seg, i) => (
                   <li key={`${seg}-${i}`} className="flex items-center gap-2">

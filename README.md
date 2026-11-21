@@ -134,7 +134,7 @@ Google AI Challenge 2026 応募作品として開発された、平時の建物�
 | `POST` | `/api/reports/similar`, `/api/reports/{id}/confirm` | 類似/重複報告事前チェック・既存報告への `+1 同種確認` |
 | `GET` | `/api/disaster-overview` | 安否伝言板と被害状況報告の統合サマリー取得 |
 | `GET` | `/api/exports/disaster-summary.csv`, `.xlsx` | 統合状況／報告一覧の CSV（UTF-8 BOM）・Excel（`.xlsx`）ダウンロード |
-| `GET` | `/api/network/status`, `/api/routes/navigate`, `/api/routes/simulate` | 道路通行止めネットワーク・双方向避難/救援ルート案内（訓練用） |
+| `GET` | `/api/network/status`, `/api/network/snap-road`, `/api/routes/navigate`, `/api/routes/simulate` | 実道路スナップ・通行止め設定連動・双方向避難/救援ルート案内（訓練用） |
 | `POST` | `/api/chat`, `/api/chat/stream` | Gemini AI 状況分析（REST / SSEストリーミング） |
 
 ---

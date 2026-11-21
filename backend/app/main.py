@@ -35,6 +35,7 @@ from app.route_sim import (
     list_route_nodes,
     simulate_alternative_route,
     simulate_navigation,
+    snap_road_info,
 )
 from app.security import (
     ai_guard,
@@ -701,6 +702,14 @@ def export_disaster_xlsx(
 @app.get("/api/routes/nodes")
 def get_route_nodes() -> dict[str, Any]:
     return {"is_simulation": True, "nodes": list_route_nodes()}
+
+
+@app.get("/api/network/snap-road")
+def snap_road_endpoint(
+    lat: float = Query(..., ge=34.78, le=35.33),
+    lon: float = Query(..., ge=135.42, le=135.95),
+) -> dict[str, Any]:
+    return snap_road_info(lat=lat, lon=lon, store=store if store.loaded else None)
 
 
 @app.get("/api/network/status")

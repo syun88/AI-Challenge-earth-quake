@@ -39,6 +39,8 @@ interface SelectedFeatureCardProps {
   onDispatchToBuilding: (building: BuildingDetail) => void;
   onDispatchToReport: (report: DamageReport) => void;
   onEvacuateToHub: (hub: ShelterHub) => void;
+  onStartPickRoadBlock: () => void;
+  onResolveBlockedRoad: (reportId: string) => void;
   onOpenNavPanel: () => void;
   onOpenSafetyForWard: (ward: string) => void;
   onOpenReportForMesh: (mesh: MeshDetail) => void;
@@ -58,6 +60,8 @@ export function SelectedFeatureCard({
   onDispatchToBuilding,
   onDispatchToReport,
   onEvacuateToHub,
+  onStartPickRoadBlock,
+  onResolveBlockedRoad,
   onOpenNavPanel,
   onOpenSafetyForWard,
   onOpenReportForMesh,
@@ -230,20 +234,41 @@ export function SelectedFeatureCard({
             {selectedBlockedRoad.triggered_by.map((t) => (
               <div
                 key={t.report_id}
-                className="rounded-lg border border-rose-500/30 bg-rose-950/30 px-2.5 py-1.5 text-[11px] text-rose-200"
+                className="flex items-center justify-between gap-2 rounded-lg border border-rose-500/30 bg-rose-950/30 px-2.5 py-1.5 text-[11px] text-rose-200"
               >
-                <span className="font-semibold">[{t.verification_label}]</span> {t.title}
+                <span className="min-w-0 truncate">
+                  <span className="font-semibold">[{t.verification_label}]</span> {t.title}
+                </span>
+                {!t.is_sample && (
+                  <button
+                    type="button"
+                    onClick={() => onResolveBlockedRoad(t.report_id)}
+                    className="shrink-0 rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/35"
+                  >
+                    通行止め解除
+                  </button>
+                )}
               </div>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={onOpenNavPanel}
-            className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-emerald-500 py-2 text-xs font-bold text-slate-950 hover:bg-emerald-400"
-          >
-            <Compass className="h-3.5 w-3.5" />
-            この区間を避けて迂回ナビを開く
-          </button>
+          <div className="grid grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              onClick={onOpenNavPanel}
+              className="flex items-center justify-center gap-1 rounded-xl bg-emerald-500 py-2 text-[11px] font-bold text-slate-950 hover:bg-emerald-400"
+            >
+              <Compass className="h-3.5 w-3.5" />
+              迂回ナビを開く
+            </button>
+            <button
+              type="button"
+              onClick={onStartPickRoadBlock}
+              className="flex items-center justify-center gap-1 rounded-xl border border-rose-500/50 bg-rose-500/15 py-2 text-[11px] font-bold text-rose-100 hover:bg-rose-500/25"
+            >
+              <Ban className="h-3.5 w-3.5" />
+              別の道路を通行止め
+            </button>
+          </div>
         </div>
       )}
 
