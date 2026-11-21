@@ -733,5 +733,67 @@ def test_grounding_verification_and_metadata_accuracy(
     assert meta["hazard_summary"]["min_t30_i55_ps"] == 0.54
 
 
+def test_disaster_board_crud_and_passcode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import main as main_mod
+    from app.board_store import DisasterBoardStore
+
+    isolated_board = DisasterBoardStore(db_path=tmp_path / "test_board.db")
+    monkeypatch.setattr(main_mod, "board_store", isolated_board)
+
+    client = TestClient(app)
+
+    # Initial seeded drill sample entries exist
+    r0 = client.get("/api/board")
+    assert r0.status_code == 200
+    d0 = r0.json()
+    assert d0["count"] == 3
+    assert any(e["is_sample"] for e in d0["entries"])
+
+    # Create a new entry with hyphens & full-width digits
+    r_create = client.post(
+        "/api/board",
+        json={
+            "phone": "０９０-１２３４-５６７８",
+            "name": "テスト 花子",
+            "status": "shelter",
+            "ward_name": "中京区",
+            "meshcode": "5235461024",
+            "message": "無事です。小学校にいます。",
+            "passcode": "4321",
+        },
+    )
+    assert r_create.status_code == 200
+    created = r_create.json()["entry"]
+    assert created["phone_masked"] == "090-****-5678"
+    assert created["status"] == "shelter"
+    assert created["has_passcode"] is True
+    assert "passcode_hash" not in created
+
+    # Exact normalized phone lookup matches
+    r_search = client.get("/api/board?phone=09012345678")
+    assert r_search.status_code == 200
+    assert r_search.json()["count"] == 1
+    assert r_search.json()["entries"][0]["id"] == created["id"]
+
+    # Wrong passcode is rejected (403)
+    r_bad_del = client.delete(f"/api/board/{created['id']}?passcode=0000")
+    assert r_bad_del.status_code == 403
+
+    # Seeded drill sample cannot be deleted (403)
+    r_sample_del = client.delete("/api/board/sample-001")
+    assert r_sample_del.status_code == 403
+
+    # Correct passcode deletes successfully
+    r_del = client.delete(f"/api/board/{created['id']}?passcode=4321")
+    assert r_del.status_code == 200
+    assert r_del.json()["deleted"] is True
+
+    # Deleted entry is no longer returned
+    r_after = client.get("/api/board?phone=09012345678")
+    assert r_after.status_code == 200
+    assert r_after.json()["count"] == 0
+
+
+
 
 

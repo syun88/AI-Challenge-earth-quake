@@ -284,3 +284,25 @@ export type ChatStreamEvent =
   | ({ type: "verification" } & GroundingVerification)
   | ({ type: "done" } & ChatResponse)
   | { type: "error"; message: string };
+
+export type BoardStatus = "safe" | "shelter" | "home" | "minor_injury" | "waiting";
+
+export interface BoardEntry {
+  id: string;
+  phone_masked: string;
+  name: string;
+  status: BoardStatus;
+  status_label: string;
+  ward_name: string;
+  meshcode: string | null;
+  message: string;
+  has_passcode: boolean;
+  is_sample: boolean;
+  created_at: string;
+}
+
+export interface BoardListResponse {
+  count: number;
+  status_labels: Record<string, string>;
+  entries: BoardEntry[];
+}

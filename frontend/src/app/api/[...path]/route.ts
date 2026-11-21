@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 
-export async function GET(
+async function forwardProxyRequest(
   req: NextRequest,
   context: { params: Promise<{ path: string[] }> }
 ) {
@@ -9,15 +9,26 @@ export async function GET(
     process.env.BACKEND_INTERNAL_URL?.replace(/\/$/, "") || "http://127.0.0.1:8000";
 
   const target = `${backendUrl}/api/${path.join("/")}${req.nextUrl.search}`;
+  const forwardHeaders: Record<string, string> = {
+    // Request identity encoding between server & backend so Node fetch never double-decompresses
+    "Accept-Encoding": "identity",
+  };
+  const contentTypeIn = req.headers.get("content-type");
+  if (contentTypeIn) {
+    forwardHeaders["Content-Type"] = contentTypeIn;
+  }
+
+  let body: string | undefined;
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    body = await req.text();
+  }
 
   let upstream: Response;
   try {
     upstream = await fetch(target, {
-      method: "GET",
-      headers: {
-        // Request identity encoding between server & backend so Node fetch never double-decompresses
-        "Accept-Encoding": "identity",
-      },
+      method: req.method,
+      headers: forwardHeaders,
+      body,
       cache: "no-store",
       signal: req.signal,
     });
@@ -39,4 +50,25 @@ export async function GET(
     status: upstream.status,
     headers,
   });
+}
+
+export async function GET(
+  req: NextRequest,
+  context: { params: Promise<{ path: string[] }> }
+) {
+  return forwardProxyRequest(req, context);
+}
+
+export async function POST(
+  req: NextRequest,
+  context: { params: Promise<{ path: string[] }> }
+) {
+  return forwardProxyRequest(req, context);
+}
+
+export async function DELETE(
+  req: NextRequest,
+  context: { params: Promise<{ path: string[] }> }
+) {
+  return forwardProxyRequest(req, context);
 }

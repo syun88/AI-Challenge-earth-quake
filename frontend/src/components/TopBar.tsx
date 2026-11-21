@@ -1,7 +1,15 @@
 "use client";
 
 import React from "react";
-import { ShieldAlert, Info, Building2, HelpCircle, Layers, Sparkles } from "lucide-react";
+import {
+  ShieldAlert,
+  Info,
+  Building2,
+  HelpCircle,
+  Layers,
+  Sparkles,
+  MessageSquareHeart,
+} from "lucide-react";
 import { StatsResponse } from "@/types/quakelens";
 
 interface TopBarProps {
@@ -10,6 +18,7 @@ interface TopBarProps {
   geminiConfigured: boolean;
   onOpenSources: () => void;
   onOpenAiTab?: () => void;
+  onOpenBoard?: () => void;
   onToggleMobileLeft?: () => void;
   onToggleMobileRight?: () => void;
 }
@@ -20,6 +29,7 @@ export function TopBar({
   geminiConfigured,
   onOpenSources,
   onOpenAiTab,
+  onOpenBoard,
   onToggleMobileLeft,
   onToggleMobileRight,
 }: TopBarProps) {
@@ -101,6 +111,17 @@ export function TopBar({
           >
             統計・AI
           </button>
+          {onOpenBoard && (
+            <button
+              type="button"
+              onClick={onOpenBoard}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/15 px-2.5 py-1.5 text-xs font-semibold text-sky-200 transition hover:border-sky-400/60 hover:bg-sky-500/25"
+            >
+              <MessageSquareHeart className="h-3.5 w-3.5 text-sky-400" />
+              <span className="hidden sm:inline">災害用伝言板</span>
+              <span className="sm:hidden">伝言板</span>
+            </button>
+          )}
           {onOpenAiTab && (
             <button
               type="button"

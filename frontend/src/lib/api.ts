@@ -1,5 +1,8 @@
 import {
   AiProtectionStatus,
+  BoardEntry,
+  BoardListResponse,
+  BoardStatus,
   BuildingDetail,
   ChatResponse,
   ChatStreamEvent,
@@ -282,4 +285,44 @@ export async function streamChatMessage(
   if (!sawTerminalEvent && !signal?.aborted) {
     throw new Error("ストリーミング応答が完了前に切断されました（未完了）。");
   }
+}
+
+export function getBoardEntries(params?: {
+  phone?: string;
+  q?: string;
+  ward?: string;
+  ids?: string[];
+  limit?: number;
+}) {
+  const sp = new URLSearchParams();
+  if (params?.phone?.trim()) sp.set("phone", params.phone.trim());
+  if (params?.q?.trim()) sp.set("q", params.q.trim());
+  if (params?.ward && params.ward !== "all") sp.set("ward", params.ward);
+  if (params?.ids && params.ids.length > 0) sp.set("ids", params.ids.join(","));
+  if (params?.limit) sp.set("limit", String(params.limit));
+  const qs = sp.toString();
+  return fetchJson<BoardListResponse>(`/api/board${qs ? `?${qs}` : ""}`);
+}
+
+export function createBoardEntry(body: {
+  phone: string;
+  name: string;
+  status: BoardStatus;
+  message: string;
+  ward_name: string;
+  meshcode?: string | null;
+  passcode?: string;
+}) {
+  return fetchJson<{ entry: BoardEntry }>("/api/board", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteBoardEntry(entryId: string, passcode?: string) {
+  const qs = passcode?.trim() ? `?passcode=${encodeURIComponent(passcode.trim())}` : "";
+  return fetchJson<{ deleted: boolean; id: string }>(
+    `/api/board/${encodeURIComponent(entryId)}${qs}`,
+    { method: "DELETE" }
+  );
 }

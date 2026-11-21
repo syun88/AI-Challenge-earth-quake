@@ -16,6 +16,7 @@ frontend/out/
 # Raw/cached large downloads (reproducible via script)
 backend/data/raw/
 backend/data/jshis_cache/
+backend/data/*.db
 
 # OS
 .DS_Store

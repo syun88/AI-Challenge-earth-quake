@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.ai_assistant import ask_quakelens_ai, stream_quakelens_ai
+from app.board_store import BOARD_STATUS_LABELS, DisasterBoardStore
 from app.constants import OFFICIAL_RETROFIT_PROGRAMS
 from app.data_store import QuakeLensDataStore
 from app.security import (
@@ -38,11 +39,13 @@ JMA_QUAKE_LIST_URL = "https://www.jma.go.jp/bosai/quake/data/list.json"
 COD_RE = re.compile(r"^([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)(?:([+-]\d+(?:\.\d+)?))?/")
 
 store = QuakeLensDataStore()
+board_store = DisasterBoardStore()
 _quake_cache: dict[str, Any] = {"fetched_at": 0.0, "data": []}
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    board_store.ensure_initialized()
     if store.buildings_path.exists() and store.meshes_path.exists():
         store.load()
     yield
@@ -59,7 +62,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_cors_allow_origins(),
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-Gemini-Api-Key", "X-Ai-Access-Code"],
 )
 
@@ -326,6 +329,60 @@ async def get_recent_earthquakes(limit: int = Query(default=40, ge=1, le=100)) -
         "source": "気象庁 地震情報 (https://www.jma.go.jp/bosai/quake/data/list.json)",
         "earthquakes": _quake_cache["data"][:limit],
     }
+
+
+class BoardEntryCreateRequest(BaseModel):
+    phone: str
+    name: str
+    status: str
+    message: str
+    ward_name: str = "京都市全域"
+    meshcode: str | None = None
+    passcode: str | None = None
+
+
+@app.get("/api/board")
+def list_board_entries(
+    phone: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    ward: str | None = Query(default=None),
+    ids: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict[str, Any]:
+    entries = board_store.list_entries(
+        phone=phone,
+        q=q,
+        ward=ward,
+        ids=_split_csv(ids),
+        limit=limit,
+    )
+    return {
+        "count": len(entries),
+        "status_labels": BOARD_STATUS_LABELS,
+        "entries": entries,
+    }
+
+
+@app.post("/api/board")
+def create_board_entry(req: BoardEntryCreateRequest) -> dict[str, Any]:
+    entry = board_store.create_entry(
+        phone=req.phone,
+        name=req.name,
+        status=req.status,
+        message=req.message,
+        ward_name=req.ward_name,
+        meshcode=req.meshcode,
+        passcode=req.passcode,
+    )
+    return {"entry": entry}
+
+
+@app.delete("/api/board/{entry_id}")
+def delete_board_entry(
+    entry_id: str,
+    passcode: str | None = Query(default=None),
+) -> dict[str, Any]:
+    return board_store.delete_entry(entry_id=entry_id, passcode=passcode)
 
 
 class ChatRequest(BaseModel):

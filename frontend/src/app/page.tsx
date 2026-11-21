@@ -7,6 +7,7 @@ import { LeftFilterPanel } from "@/components/LeftFilterPanel";
 import { QuakeMap } from "@/components/QuakeMap";
 import { RightPanel, RightTab } from "@/components/RightPanel";
 import { SourcesModal } from "@/components/SourcesModal";
+import { DisasterBoard } from "@/components/DisasterBoard";
 import { WARD_CENTERS } from "@/lib/colors";
 import {
   getBuildingDetail,
@@ -71,6 +72,7 @@ export default function HomePage() {
     ts: number;
   } | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [boardOpen, setBoardOpen] = useState(false);
   const [mobileLeftOpen, setMobileLeftOpen] = useState(false);
   const [mobileRightOpen, setMobileRightOpen] = useState(false);
   const [queuedAiPrompt, setQueuedAiPrompt] = useState<{ text: string; ts: number } | null>(null);
@@ -321,6 +323,34 @@ export default function HomePage() {
     }
   }, []);
 
+  const handleFocusBoardArea = useCallback(
+    async (wardName: string, meshcode: string | null) => {
+      setBoardOpen(false);
+      if (wardName && wardName !== "京都市全域" && WARD_CENTERS[wardName]) {
+        setSelectedWard(wardName);
+      }
+      if (meshcode) {
+        setSelectedMeshcode(meshcode);
+        try {
+          const detail = await getMeshDetail(meshcode);
+          setSelectedMesh(detail);
+          setFlyToTarget({
+            lon: detail.centroid_lon,
+            lat: detail.centroid_lat,
+            zoom: 15.6,
+            ts: Date.now(),
+          });
+          return;
+        } catch {
+          // fallback to ward center
+        }
+      }
+      const center = WARD_CENTERS[wardName] || WARD_CENTERS.all;
+      setFlyToTarget({ ...center, ts: Date.now() });
+    },
+    []
+  );
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-950">
       <TopBar
@@ -329,6 +359,7 @@ export default function HomePage() {
         geminiConfigured={geminiConfigured}
         onOpenSources={() => setSourcesOpen(true)}
         onOpenAiTab={handleOpenAiTab}
+        onOpenBoard={() => setBoardOpen(true)}
         onToggleMobileLeft={() => setMobileLeftOpen((v) => !v)}
         onToggleMobileRight={() => setMobileRightOpen((v) => !v)}
       />
@@ -528,6 +559,25 @@ export default function HomePage() {
         onClose={() => setSourcesOpen(false)}
         metadata={metadata}
       />
+
+      {boardOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm sm:p-6"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setBoardOpen(false);
+          }}
+        >
+          <div className="h-[min(88vh,760px)] w-full max-w-md">
+            <DisasterBoard
+              onBack={() => setBoardOpen(false)}
+              wards={metadata?.wards || Object.keys(WARD_CENTERS).filter((k) => k !== "all")}
+              defaultWard={selectedWard}
+              defaultMeshcode={selectedMeshcode}
+              onFocusArea={handleFocusBoardArea}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
