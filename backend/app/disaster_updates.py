@@ -30,6 +30,7 @@ ARCHIVE_PATH = (
 )
 
 YAHOO_KYOTO_QUAKE_LIST_URL = "https://typhoon.yahoo.co.jp/weather/jp/earthquake/list/?e=511"
+YAHOO_KYOTO_NORTH_QUAKE_LIST_URL = "https://typhoon.yahoo.co.jp/weather/jp/earthquake/list/?e=510"
 JMA_QUAKE_LIST_URL = "https://www.jma.go.jp/bosai/quake/data/list.json"
 KYOTO_BOUSAI_NEWS_URLS = [
     "https://www.bousai.city.kyoto.lg.jp/news/0001.html",
@@ -39,6 +40,10 @@ KYOTO_BOUSAI_NEWS_URLS = [
 KYOTO_HAZARD_MAP_PAGE_URL = "https://www.bousai.city.kyoto.lg.jp/0000000196.html"
 
 RECENT_TARGET_YEARS = {2025, 2026}
+
+
+def _is_kyoto_epicenter(name: Any) -> bool:
+    return "京都" in str(name or "")
 
 
 def _strip_tags(raw: str) -> str:
@@ -53,8 +58,10 @@ def _parse_year_month_day(text: str) -> tuple[int | None, str]:
     return y, f"{y:04d}-{mo:02d}-{d:02d}"
 
 
-def _parse_yahoo_quake_list_html(html: str) -> list[dict[str, Any]]:
-    """Parse rows from Yahoo Weather Kyoto earthquake list HTML (`?e=511`)."""
+def _parse_yahoo_quake_list_html(
+    html: str, *, source_label: str = "気象庁 / Yahoo!天気・災害（京都府南部 地震履歴）"
+) -> list[dict[str, Any]]:
+    """Parse rows from Yahoo Weather Kyoto earthquake list HTML (`?e=511` / `?e=510`)."""
     events: list[dict[str, Any]] = []
     trs = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S)
     for tr in trs:
@@ -63,6 +70,8 @@ def _parse_yahoo_quake_list_html(html: str) -> list[dict[str, Any]]:
             continue
         occurred_text = _strip_tags(tds[0])
         epicenter = _strip_tags(tds[1])
+        if not _is_kyoto_epicenter(epicenter):
+            continue
         mag_text = _strip_tags(tds[2])
         maxi_text = _strip_tags(tds[3])
         year, iso_date = _parse_year_month_day(occurred_text)
@@ -90,7 +99,7 @@ def _parse_yahoo_quake_list_html(html: str) -> list[dict[str, Any]]:
                 "lat": None,
                 "lon": None,
                 "observed_kyoto": [],
-                "source": "気象庁 / Yahoo!天気・災害（京都府南部 地震履歴）",
+                "source": source_label,
                 "url": detail_url,
             }
         )
@@ -198,20 +207,15 @@ def _parse_jma_cod(cod: str | None) -> tuple[float | None, float | None, float |
 
 
 def _parse_jma_recent_kyoto(raw_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Extract Kyoto-epicenter or recent notable JMA events from list.json, deduplicated by eid."""
+    """Extract ONLY Kyoto-epicenter JMA events from list.json, deduplicated by eid."""
     by_eid: dict[str, dict[str, Any]] = {}
     for item in raw_items:
         anm = str(item.get("anm") or "").strip()
+        if not _is_kyoto_epicenter(anm):
+            continue
         at_str = str(item.get("at") or "")
         lat, lon, depth_km = _parse_jma_cod(item.get("cod"))
         maxi = str(item.get("maxi") or "")
-        is_kyoto = "京都" in anm
-        is_strong = maxi in {"4", "5-", "5+", "6-", "6+", "7"}
-        # Skip preliminary 震度速報 entries with empty epicenter when no coordinates
-        if not anm or (lat is None and not is_kyoto):
-            continue
-        if not (is_kyoto or is_strong):
-            continue
         try:
             year = int(at_str[:4]) if len(at_str) >= 4 else 2026
         except ValueError:
@@ -235,9 +239,9 @@ def _parse_jma_recent_kyoto(raw_items: list[dict[str, Any]]) -> list[dict[str, A
             "lat": lat,
             "lon": lon,
             "observed_kyoto": [],
-            "source": "気象庁 防災情報JSON（リアルタイム速報）",
+            "source": "気象庁 防災情報JSON（京都震源速報）",
             "url": f"https://www.jma.go.jp/bosai/map.html#contents=earthquake_map&id={eid}",
-            "is_kyoto_local": is_kyoto,
+            "is_kyoto_local": True,
         }
         prev = by_eid.get(eid)
         if prev is None or (candidate["mag"] is not None and prev["mag"] is None):
@@ -254,20 +258,37 @@ async def fetch_live_archive_payload(
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
         tasks = [
             client.get(YAHOO_KYOTO_QUAKE_LIST_URL),
+            client.get(YAHOO_KYOTO_NORTH_QUAKE_LIST_URL),
             client.get(JMA_QUAKE_LIST_URL),
             client.get(KYOTO_HAZARD_MAP_PAGE_URL),
             *[client.get(u) for u in KYOTO_BOUSAI_NEWS_URLS],
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    yahoo_resp = results[0]
-    jma_resp = results[1]
-    hazard_resp = results[2]
-    news_resps = results[3:]
+    yahoo_south_resp = results[0]
+    yahoo_north_resp = results[1]
+    jma_resp = results[2]
+    hazard_resp = results[3]
+    news_resps = results[4:]
 
     kyoto_quakes: list[dict[str, Any]] = []
-    if isinstance(yahoo_resp, httpx.Response) and yahoo_resp.status_code == 200:
-        kyoto_quakes = _parse_yahoo_quake_list_html(yahoo_resp.text)
+    seen_ids: set[str] = set()
+    if isinstance(yahoo_south_resp, httpx.Response) and yahoo_south_resp.status_code == 200:
+        for q in _parse_yahoo_quake_list_html(
+            yahoo_south_resp.text,
+            source_label="気象庁 / Yahoo!天気・災害（京都府南部 地震履歴）",
+        ):
+            if q["id"] not in seen_ids:
+                kyoto_quakes.append(q)
+                seen_ids.add(q["id"])
+    if isinstance(yahoo_north_resp, httpx.Response) and yahoo_north_resp.status_code == 200:
+        for q in _parse_yahoo_quake_list_html(
+            yahoo_north_resp.text,
+            source_label="気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+        ):
+            if q["id"] not in seen_ids:
+                kyoto_quakes.append(q)
+                seen_ids.add(q["id"])
 
     # Enrich 2025-2026 (plus any missing recent events up to 15 items) with exact lat/lon/depth
     to_enrich = [
@@ -381,9 +402,13 @@ class DisasterUpdatesStore:
         period: str = "all",
         kind: str = "all",
     ) -> dict[str, Any]:
-        """Filter cached earthquakes and municipality notices by period (`all`, `recent_2y`, `2026`, `2025`, `archive`)."""
+        """Filter cached earthquakes (Kyoto epicenters only) and municipality notices by period."""
         self.ensure_loaded()
-        all_quakes: list[dict[str, Any]] = list(self._payload.get("earthquakes") or [])
+        all_quakes: list[dict[str, Any]] = [
+            q
+            for q in (self._payload.get("earthquakes") or [])
+            if _is_kyoto_epicenter(q.get("epicenter"))
+        ]
         all_notices: list[dict[str, Any]] = list(self._payload.get("municipality_updates") or [])
 
         def _match_period(item: dict[str, Any]) -> bool:

@@ -740,11 +740,22 @@ def test_disaster_updates_recent_and_archive(isolated_env, monkeypatch: pytest.M
     all_data = r_all.json()
     assert all_data["counts"]["recent_2y_earthquakes"] >= 5
     assert all_data["counts"]["archive_earthquakes"] >= 20
+    assert all("京都" in q["epicenter"] for q in all_data["earthquakes"])
     assert all_data["counts"]["recent_2y_municipality_updates"] >= 5
     assert all_data["counts"]["archive_municipality_updates"] >= 10
     assert "typhoon.yahoo.co.jp/weather/jp/earthquake/list/?e=511" in (
         all_data["sources"].get("yahoo_kyoto_earthquakes") or ""
     )
+
+    from app import disaster_updates as du_mod
+
+    # Ensure JMA parser drops non-Kyoto epicenters (e.g. Kumamoto / Shizuoka) even if maxi >= 4
+    jma_filtered = du_mod._parse_jma_recent_kyoto([
+        {"eid": "1", "at": "2026-11-20T21:46:00+09:00", "anm": "熊本県天草・芦北地方", "mag": "4.1", "maxi": "4", "cod": "+32.3+130.5-10000/"},
+        {"eid": "2", "at": "2026-11-21T10:00:00+09:00", "anm": "京都府南部", "mag": "3.1", "maxi": "2", "cod": "+35.0+135.7-10000/"},
+    ])
+    assert len(jma_filtered) == 1
+    assert jma_filtered[0]["epicenter"] == "京都府南部"
 
     # 2) Period filtering cleanly separates recent_2y vs archive
     r_2y = client.get("/api/updates/disaster?period=recent_2y")

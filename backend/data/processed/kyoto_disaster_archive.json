@@ -1,5 +1,5 @@
 {
-  "last_updated_at": "2026-11-24T09:05:05.722458+00:00",
+  "last_updated_at": "2026-11-24T09:21:55.002411+00:00",
   "sources": {
     "yahoo_kyoto_earthquakes": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/list/?e=511",
     "jma_bosai_json": "https://www.jma.go.jp/bosai/quake/data/list.json",
@@ -7,91 +7,6 @@
     "kyoto_hazard_map": "https://www.bousai.city.kyoto.lg.jp/0000000196.html"
   },
   "earthquakes": [
-    {
-      "id": "jma-20261120214603",
-      "occurred_at": "2026-11-20 21:46:00 JST",
-      "date_iso": "2026-11-20",
-      "year": 2026,
-      "is_recent_2y": true,
-      "epicenter": "熊本県天草・芦北地方",
-      "mag": 4.1,
-      "maxi": "4",
-      "depth_km": 0.0,
-      "lat": 32.3,
-      "lon": 130.5,
-      "observed_kyoto": [],
-      "source": "気象庁 防災情報JSON（リアルタイム速報）",
-      "url": "https://www.jma.go.jp/bosai/map.html#contents=earthquake_map&id=20261120214603",
-      "is_kyoto_local": false
-    },
-    {
-      "id": "jma-20261119022225",
-      "occurred_at": "2026-11-19 02:22:00 JST",
-      "date_iso": "2026-11-19",
-      "year": 2026,
-      "is_recent_2y": true,
-      "epicenter": "熊本県天草・芦北地方",
-      "mag": 5.7,
-      "maxi": "5-",
-      "depth_km": 10.0,
-      "lat": 32.3,
-      "lon": 130.4,
-      "observed_kyoto": [],
-      "source": "気象庁 防災情報JSON（リアルタイム速報）",
-      "url": "https://www.jma.go.jp/bosai/map.html#contents=earthquake_map&id=20261119022225",
-      "is_kyoto_local": false
-    },
-    {
-      "id": "jma-20261108105319",
-      "occurred_at": "2026-11-08 10:53:00 JST",
-      "date_iso": "2026-11-08",
-      "year": 2026,
-      "is_recent_2y": true,
-      "epicenter": "熊本県天草・芦北地方",
-      "mag": 4.3,
-      "maxi": "4",
-      "depth_km": 10.0,
-      "lat": 32.6,
-      "lon": 130.6,
-      "observed_kyoto": [],
-      "source": "気象庁 防災情報JSON（リアルタイム速報）",
-      "url": "https://www.jma.go.jp/bosai/map.html#contents=earthquake_map&id=20261108105319",
-      "is_kyoto_local": false
-    },
-    {
-      "id": "jma-20261108010441",
-      "occurred_at": "2026-11-08 01:04:00 JST",
-      "date_iso": "2026-11-08",
-      "year": 2026,
-      "is_recent_2y": true,
-      "epicenter": "静岡県西部",
-      "mag": 5.7,
-      "maxi": "5+",
-      "depth_km": 40.0,
-      "lat": 34.9,
-      "lon": 137.7,
-      "observed_kyoto": [],
-      "source": "気象庁 防災情報JSON（リアルタイム速報）",
-      "url": "https://www.jma.go.jp/bosai/map.html#contents=earthquake_map&id=20261108010441",
-      "is_kyoto_local": false
-    },
-    {
-      "id": "jma-20261029000759",
-      "occurred_at": "2026-10-29 00:07:00 JST",
-      "date_iso": "2026-10-29",
-      "year": 2026,
-      "is_recent_2y": true,
-      "epicenter": "千葉県北東部",
-      "mag": 5.4,
-      "maxi": "5-",
-      "depth_km": 50.0,
-      "lat": 35.7,
-      "lon": 140.7,
-      "observed_kyoto": [],
-      "source": "気象庁 防災情報JSON（リアルタイム速報）",
-      "url": "https://www.jma.go.jp/bosai/map.html#contents=earthquake_map&id=20261029000759",
-      "is_kyoto_local": false
-    },
     {
       "id": "yahoo-20260720042142",
       "occurred_at": "2026年7月20日 4時21分ごろ",
@@ -200,6 +115,22 @@
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20260521010824.html?e=511"
     },
     {
+      "id": "yahoo-20251021040451",
+      "occurred_at": "2025年10月21日 4時04分ごろ",
+      "date_iso": "2025-10-21",
+      "year": 2025,
+      "is_recent_2y": true,
+      "epicenter": "京都府北部",
+      "mag": 4.9,
+      "maxi": "1",
+      "depth_km": 360.0,
+      "lat": 35.4,
+      "lon": 135.5,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20251021040451.html?e=510"
+    },
+    {
       "id": "yahoo-20250822013006",
       "occurred_at": "2025年8月22日 1時30分ごろ",
       "date_iso": "2025-08-22",
@@ -253,6 +184,24 @@
       ],
       "source": "気象庁 / Yahoo!天気・災害（京都府南部 地震履歴）",
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20250425080147.html?e=511"
+    },
+    {
+      "id": "yahoo-20250224052414",
+      "occurred_at": "2025年2月24日 5時24分ごろ",
+      "date_iso": "2025-02-24",
+      "year": 2025,
+      "is_recent_2y": true,
+      "epicenter": "京都府北部",
+      "mag": 3.8,
+      "maxi": "2",
+      "depth_km": 10.0,
+      "lat": 35.3,
+      "lon": 135.3,
+      "observed_kyoto": [
+        "震度2: 舞鶴市 京丹波町"
+      ],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20250224052414.html?e=510"
     },
     {
       "id": "yahoo-20250206181650",
@@ -349,6 +298,22 @@
       "observed_kyoto": [],
       "source": "気象庁 / Yahoo!天気・災害（京都府南部 地震履歴）",
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20240815001421.html?e=511"
+    },
+    {
+      "id": "yahoo-20240721201842",
+      "occurred_at": "2024年7月21日 20時18分ごろ",
+      "date_iso": "2024-07-21",
+      "year": 2024,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 3.1,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20240721201842.html?e=510"
     },
     {
       "id": "yahoo-20240710035536",
@@ -543,6 +508,22 @@
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20240214152903.html?e=511"
     },
     {
+      "id": "yahoo-20231111024451",
+      "occurred_at": "2023年11月11日 2時44分ごろ",
+      "date_iso": "2023-11-11",
+      "year": 2023,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 3.4,
+      "maxi": "2",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20231111024451.html?e=510"
+    },
+    {
       "id": "yahoo-20231025215821",
       "occurred_at": "2023年10月25日 21時58分ごろ",
       "date_iso": "2023-10-25",
@@ -591,6 +572,22 @@
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20231009143258.html?e=511"
     },
     {
+      "id": "yahoo-20230830195928",
+      "occurred_at": "2023年8月30日 19時59分ごろ",
+      "date_iso": "2023-08-30",
+      "year": 2023,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 2.8,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20230830195928.html?e=510"
+    },
+    {
       "id": "yahoo-20230629022738",
       "occurred_at": "2023年6月29日 2時27分ごろ",
       "date_iso": "2023-06-29",
@@ -621,6 +618,22 @@
       "observed_kyoto": [],
       "source": "気象庁 / Yahoo!天気・災害（京都府南部 地震履歴）",
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20230421030723.html?e=511"
+    },
+    {
+      "id": "yahoo-20221226102748",
+      "occurred_at": "2022年12月26日 10時27分ごろ",
+      "date_iso": "2022-12-26",
+      "year": 2022,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 3.0,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20221226102748.html?e=510"
     },
     {
       "id": "yahoo-20221101005508",
@@ -975,6 +988,22 @@
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20220313210638.html?e=511"
     },
     {
+      "id": "yahoo-20220118074744",
+      "occurred_at": "2022年1月18日 7時47分ごろ",
+      "date_iso": "2022-01-18",
+      "year": 2022,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 2.9,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20220118074744.html?e=510"
+    },
+    {
       "id": "yahoo-20211229092218",
       "occurred_at": "2021年12月29日 9時22分ごろ",
       "date_iso": "2021-12-29",
@@ -1005,6 +1034,38 @@
       "observed_kyoto": [],
       "source": "気象庁 / Yahoo!天気・災害（京都府南部 地震履歴）",
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20211229042313.html?e=511"
+    },
+    {
+      "id": "yahoo-20211217032907",
+      "occurred_at": "2021年12月17日 3時29分ごろ",
+      "date_iso": "2021-12-17",
+      "year": 2021,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 3.0,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20211217032907.html?e=510"
+    },
+    {
+      "id": "yahoo-20211211165952",
+      "occurred_at": "2021年12月11日 16時59分ごろ",
+      "date_iso": "2021-12-11",
+      "year": 2021,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 3.7,
+      "maxi": "3",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20211211165952.html?e=510"
     },
     {
       "id": "yahoo-20211210061623",
@@ -1231,6 +1292,22 @@
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20201126135619.html?e=511"
     },
     {
+      "id": "yahoo-20201105074034",
+      "occurred_at": "2020年11月5日 7時40分ごろ",
+      "date_iso": "2020-11-05",
+      "year": 2020,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 2.4,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20201105074034.html?e=510"
+    },
+    {
       "id": "yahoo-20201006083306",
       "occurred_at": "2020年10月6日 8時33分ごろ",
       "date_iso": "2020-10-06",
@@ -1295,6 +1372,22 @@
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20200529010647.html?e=511"
     },
     {
+      "id": "yahoo-20200515221710",
+      "occurred_at": "2020年5月15日 22時17分ごろ",
+      "date_iso": "2020-05-15",
+      "year": 2020,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 2.8,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20200515221710.html?e=510"
+    },
+    {
       "id": "yahoo-20200508104218",
       "occurred_at": "2020年5月8日 10時42分ごろ",
       "date_iso": "2020-05-08",
@@ -1309,6 +1402,22 @@
       "observed_kyoto": [],
       "source": "気象庁 / Yahoo!天気・災害（京都府南部 地震履歴）",
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20200508104218.html?e=511"
+    },
+    {
+      "id": "yahoo-20200416145758",
+      "occurred_at": "2020年4月16日 14時57分ごろ",
+      "date_iso": "2020-04-16",
+      "year": 2020,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 2.4,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20200416145758.html?e=510"
     },
     {
       "id": "yahoo-20200414034938",
@@ -1423,6 +1532,22 @@
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20190922024904.html?e=511"
     },
     {
+      "id": "yahoo-20190916103043",
+      "occurred_at": "2019年9月16日 10時31分ごろ",
+      "date_iso": "2019-09-16",
+      "year": 2019,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 3.0,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20190916103043.html?e=510"
+    },
+    {
       "id": "yahoo-20190517162129",
       "occurred_at": "2019年5月17日 16時21分ごろ",
       "date_iso": "2019-05-17",
@@ -1485,6 +1610,22 @@
       "observed_kyoto": [],
       "source": "気象庁 / Yahoo!天気・災害（京都府南部 地震履歴）",
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20190326061945.html?e=511"
+    },
+    {
+      "id": "yahoo-20181229171701",
+      "occurred_at": "2018年12月29日 17時17分ごろ",
+      "date_iso": "2018-12-29",
+      "year": 2018,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 2.8,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20181229171701.html?e=510"
     },
     {
       "id": "yahoo-20181128143224",
@@ -1709,11 +1850,171 @@
       "observed_kyoto": [],
       "source": "気象庁 / Yahoo!天気・災害（京都府南部 地震履歴）",
       "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20180310172754.html?e=511"
+    },
+    {
+      "id": "yahoo-20140916041907",
+      "occurred_at": "2014年9月16日 4時19分ごろ",
+      "date_iso": "2014-09-16",
+      "year": 2014,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 3.0,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20140916041907.html?e=510"
+    },
+    {
+      "id": "yahoo-20140501222011",
+      "occurred_at": "2014年5月1日 22時20分ごろ",
+      "date_iso": "2014-05-01",
+      "year": 2014,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 3.1,
+      "maxi": "2",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20140501222011.html?e=510"
+    },
+    {
+      "id": "yahoo-20130403093730",
+      "occurred_at": "2013年4月3日 9時37分ごろ",
+      "date_iso": "2013-04-03",
+      "year": 2013,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 2.6,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20130403093730.html?e=510"
+    },
+    {
+      "id": "yahoo-20120708083436",
+      "occurred_at": "2012年7月8日 8時34分ごろ",
+      "date_iso": "2012-07-08",
+      "year": 2012,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 2.6,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20120708083436.html?e=510"
+    },
+    {
+      "id": "yahoo-20120323214422",
+      "occurred_at": "2012年3月23日 21時44分ごろ",
+      "date_iso": "2012-03-23",
+      "year": 2012,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 3.6,
+      "maxi": "2",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20120323214422.html?e=510"
+    },
+    {
+      "id": "yahoo-20100712030902",
+      "occurred_at": "2010年7月12日 3時09分ごろ",
+      "date_iso": "2010-07-12",
+      "year": 2010,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 3.6,
+      "maxi": "2",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20100712030902.html?e=510"
+    },
+    {
+      "id": "yahoo-20100430075021",
+      "occurred_at": "2010年4月30日 7時50分ごろ",
+      "date_iso": "2010-04-30",
+      "year": 2010,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 3.6,
+      "maxi": "3",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20100430075021.html?e=510"
+    },
+    {
+      "id": "yahoo-20080825070659",
+      "occurred_at": "2008年8月25日 7時06分ごろ",
+      "date_iso": "2008-08-25",
+      "year": 2008,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 3.2,
+      "maxi": "3",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20080825070659.html?e=510"
+    },
+    {
+      "id": "yahoo-20060721023141",
+      "occurred_at": "2006年7月21日 2時31分ごろ",
+      "date_iso": "2006-07-21",
+      "year": 2006,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 2.6,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20060721023141.html?e=510"
+    },
+    {
+      "id": "yahoo-20050419013135",
+      "occurred_at": "2005年4月19日 1時31分ごろ",
+      "date_iso": "2005-04-19",
+      "year": 2005,
+      "is_recent_2y": false,
+      "epicenter": "京都府北部",
+      "mag": 2.9,
+      "maxi": "1",
+      "depth_km": null,
+      "lat": null,
+      "lon": null,
+      "observed_kyoto": [],
+      "source": "気象庁 / Yahoo!天気・災害（京都府北部 地震履歴）",
+      "url": "https://typhoon.yahoo.co.jp/weather/jp/earthquake/20050419013135.html?e=510"
     }
   ],
   "municipality_updates": [
     {
-      "id": "kyoto-news-2026-10-27-51661",
+      "id": "kyoto-news-2026-10-27-50947",
       "date_text": "2026-10-27",
       "year": 2026,
       "is_recent_2y": true,
@@ -1723,7 +2024,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000810.html"
     },
     {
-      "id": "kyoto-news-2026-09-17-18614",
+      "id": "kyoto-news-2026-09-17-14639",
       "date_text": "2026-09-17",
       "year": 2026,
       "is_recent_2y": true,
@@ -1733,7 +2034,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000808.html"
     },
     {
-      "id": "kyoto-news-2026-08-07-38381",
+      "id": "kyoto-news-2026-08-07-30051",
       "date_text": "2026-08-07",
       "year": 2026,
       "is_recent_2y": true,
@@ -1753,7 +2054,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000196.html"
     },
     {
-      "id": "kyoto-news-2026-03-26-81062",
+      "id": "kyoto-news-2026-03-26-96760",
       "date_text": "2026-03-26",
       "year": 2026,
       "is_recent_2y": true,
@@ -1763,7 +2064,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000762.html"
     },
     {
-      "id": "kyoto-news-2026-03-09-16761",
+      "id": "kyoto-news-2026-03-09-03231",
       "date_text": "2026-03-09",
       "year": 2026,
       "is_recent_2y": true,
@@ -1773,7 +2074,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000789.html"
     },
     {
-      "id": "kyoto-news-2026-02-09-41966",
+      "id": "kyoto-news-2026-02-09-07265",
       "date_text": "2026-02-09",
       "year": 2026,
       "is_recent_2y": true,
@@ -1783,7 +2084,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000787.html"
     },
     {
-      "id": "kyoto-news-2025-11-19-61252",
+      "id": "kyoto-news-2025-11-19-15317",
       "date_text": "2025-11-19",
       "year": 2025,
       "is_recent_2y": true,
@@ -1793,7 +2094,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000785.html"
     },
     {
-      "id": "kyoto-news-2025-09-04-20263",
+      "id": "kyoto-news-2025-09-04-19576",
       "date_text": "2025-09-04",
       "year": 2025,
       "is_recent_2y": true,
@@ -1803,7 +2104,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000782.html"
     },
     {
-      "id": "kyoto-news-2025-09-04-97465",
+      "id": "kyoto-news-2025-09-04-48039",
       "date_text": "2025-09-04",
       "year": 2025,
       "is_recent_2y": true,
@@ -1813,7 +2114,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000781.html"
     },
     {
-      "id": "kyoto-news-2025-08-27-78406",
+      "id": "kyoto-news-2025-08-27-05720",
       "date_text": "2025-08-27",
       "year": 2025,
       "is_recent_2y": true,
@@ -1823,7 +2124,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000778.html"
     },
     {
-      "id": "kyoto-news-2025-06-10-04422",
+      "id": "kyoto-news-2025-06-10-79035",
       "date_text": "2025-06-10",
       "year": 2025,
       "is_recent_2y": true,
@@ -1833,7 +2134,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000773.html"
     },
     {
-      "id": "kyoto-news-2024-10-18-71627",
+      "id": "kyoto-news-2024-10-18-25402",
       "date_text": "2024-10-18",
       "year": 2024,
       "is_recent_2y": false,
@@ -1843,7 +2144,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000533.html"
     },
     {
-      "id": "kyoto-news-2024-04-04-93042",
+      "id": "kyoto-news-2024-04-04-12392",
       "date_text": "2024-04-04",
       "year": 2024,
       "is_recent_2y": false,
@@ -1853,7 +2154,7 @@
       "url": "https://www.city.kyoto.lg.jp/tokei/page/0000324382.html"
     },
     {
-      "id": "kyoto-news-2023-09-13-61127",
+      "id": "kyoto-news-2023-09-13-03958",
       "date_text": "2023-09-13",
       "year": 2023,
       "is_recent_2y": false,
@@ -1863,7 +2164,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000320.html"
     },
     {
-      "id": "kyoto-news-2023-05-22-35706",
+      "id": "kyoto-news-2023-05-22-82199",
       "date_text": "2023-05-22",
       "year": 2023,
       "is_recent_2y": false,
@@ -1873,7 +2174,7 @@
       "url": "https://www.city.kyoto.lg.jp/hokenfukushi/page/0000312462.html"
     },
     {
-      "id": "kyoto-news-2023-03-28-46565",
+      "id": "kyoto-news-2023-03-28-79451",
       "date_text": "2023-03-28",
       "year": 2023,
       "is_recent_2y": false,
@@ -1883,7 +2184,7 @@
       "url": "https://www.city.kyoto.lg.jp/minami/page/0000310352.html"
     },
     {
-      "id": "kyoto-news-2023-02-20-11215",
+      "id": "kyoto-news-2023-02-20-72630",
       "date_text": "2023-02-20",
       "year": 2023,
       "is_recent_2y": false,
@@ -1893,7 +2194,7 @@
       "url": "https://www.city.kyoto.lg.jp/sankan/page/0000308262.html"
     },
     {
-      "id": "kyoto-news-2022-10-04-92395",
+      "id": "kyoto-news-2022-10-04-61363",
       "date_text": "2022-10-04",
       "year": 2022,
       "is_recent_2y": false,
@@ -1903,7 +2204,7 @@
       "url": "https://www.city.kyoto.lg.jp/fushimi/page/0000304513.html"
     },
     {
-      "id": "kyoto-news-2022-04-05-02775",
+      "id": "kyoto-news-2022-04-05-24764",
       "date_text": "2022-04-05",
       "year": 2022,
       "is_recent_2y": false,
@@ -1913,7 +2214,7 @@
       "url": "https://www.wings-kyoto.jp/publish/bousai/"
     },
     {
-      "id": "kyoto-news-2022-03-30-16398",
+      "id": "kyoto-news-2022-03-30-99010",
       "date_text": "2022-03-30",
       "year": 2022,
       "is_recent_2y": false,
@@ -1923,7 +2224,7 @@
       "url": "https://www.city.kyoto.lg.jp/nisikyo/page/0000296023.html"
     },
     {
-      "id": "kyoto-news-2022-03-30-82926",
+      "id": "kyoto-news-2022-03-30-97600",
       "date_text": "2022-03-30",
       "year": 2022,
       "is_recent_2y": false,
@@ -1933,7 +2234,7 @@
       "url": "https://www.city.kyoto.lg.jp/kensetu/page/0000296321.html"
     },
     {
-      "id": "kyoto-news-2022-03-30-57915",
+      "id": "kyoto-news-2022-03-30-83020",
       "date_text": "2022-03-30",
       "year": 2022,
       "is_recent_2y": false,
@@ -1943,7 +2244,7 @@
       "url": "https://www.city.kyoto.lg.jp/kensetu/page/0000295880.html"
     },
     {
-      "id": "kyoto-news-2022-03-30-46622",
+      "id": "kyoto-news-2022-03-30-53870",
       "date_text": "2022-03-30",
       "year": 2022,
       "is_recent_2y": false,
@@ -1953,7 +2254,7 @@
       "url": "https://www.city.kyoto.lg.jp/tokei/page/0000267317.html"
     },
     {
-      "id": "kyoto-news-2022-03-30-42369",
+      "id": "kyoto-news-2022-03-30-15575",
       "date_text": "2022-03-30",
       "year": 2022,
       "is_recent_2y": false,
@@ -1963,7 +2264,7 @@
       "url": "https://www.city.kyoto.lg.jp/suido/page/0000266642.html"
     },
     {
-      "id": "kyoto-news-2022-03-25-01370",
+      "id": "kyoto-news-2022-03-25-05343",
       "date_text": "2022-03-25",
       "year": 2022,
       "is_recent_2y": false,
@@ -1973,7 +2274,7 @@
       "url": "https://www.city.kyoto.lg.jp/shobo/page/0000296332.html"
     },
     {
-      "id": "kyoto-news-2022-01-17-70374",
+      "id": "kyoto-news-2022-01-17-50839",
       "date_text": "2022-01-17",
       "year": 2022,
       "is_recent_2y": false,
@@ -1983,7 +2284,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000540.html"
     },
     {
-      "id": "kyoto-news-2022-01-11-27037",
+      "id": "kyoto-news-2022-01-11-35993",
       "date_text": "2022-01-11",
       "year": 2022,
       "is_recent_2y": false,
@@ -1993,7 +2294,7 @@
       "url": "https://www.city.kyoto.lg.jp/shobo/page/0000292907.html"
     },
     {
-      "id": "kyoto-news-2021-12-07-88036",
+      "id": "kyoto-news-2021-12-07-34920",
       "date_text": "2021-12-07",
       "year": 2021,
       "is_recent_2y": false,
@@ -2003,7 +2304,7 @@
       "url": "https://www.bousai.city.kyoto.lg.jp/0000000531.html"
     },
     {
-      "id": "kyoto-news-2021-09-01-54584",
+      "id": "kyoto-news-2021-09-01-58525",
       "date_text": "2021-09-01",
       "year": 2021,
       "is_recent_2y": false,
@@ -2013,7 +2314,7 @@
       "url": "https://www.city.kyoto.lg.jp/hokenfukushi/page/0000288859.html"
     },
     {
-      "id": "kyoto-news-2021-08-27-93892",
+      "id": "kyoto-news-2021-08-27-36187",
       "date_text": "2021-08-27",
       "year": 2021,
       "is_recent_2y": false,

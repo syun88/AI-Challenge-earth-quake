@@ -124,7 +124,7 @@ export default function DisasterUpdatesPanel({
               <span>気象庁・京都市 防災情報アップデート掲示板</span>
             </div>
             <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
-              直近2年間（2025〜2026年）および過去の地震履歴（京都府南部 `e=511`＋JMA速報）と京都市公式の防災更新情報を一元掲示・ライブ更新します。
+              直近2年間（2025〜2026年）および過去の<strong>震源地＝京都のみ</strong>の地震履歴（京都府南部 `e=511`・北部 `e=510`＋JMA速報）と京都市公式の防災更新情報を一元掲示・ライブ更新します。
             </p>
           </div>
         </div>
@@ -174,7 +174,7 @@ export default function DisasterUpdatesPanel({
               </div>
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-950/75 px-2.5 py-1.5">
-              <div className="text-slate-400">気象庁/京都 地震履歴</div>
+              <div className="text-slate-400">京都震源 地震履歴（京都のみ）</div>
               <div className="mt-0.5 font-mono font-bold text-slate-100">
                 計{counts.total_earthquakes}件
                 <span className="ml-1.5 text-cyan-300">
@@ -301,7 +301,7 @@ export default function DisasterUpdatesPanel({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
               <Activity className="h-3.5 w-3.5 text-amber-400" />
-              <span>気象庁・京都府南部 地震履歴一覧</span>
+              <span>気象庁・京都震源限定 地震履歴一覧（京都のみ）</span>
             </div>
             <a
               href={

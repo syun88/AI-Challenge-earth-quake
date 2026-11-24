@@ -310,16 +310,20 @@ def get_official_programs() -> dict[str, Any]:
 
 @app.get("/api/earthquakes")
 async def get_recent_earthquakes(limit: int = Query(default=40, ge=1, le=100)) -> dict[str, Any]:
-    """Fetch recent earthquakes from JMA Bosai JSON API (5-minute cache)."""
+    """Fetch Kyoto-epicenter earthquakes from JMA Bosai JSON API (5-min cache) + Kyoto archive."""
     now = time.time()
     if now - _quake_cache["fetched_at"] > 300 or not _quake_cache["data"]:
+        parsed: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str]] = set()
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(JMA_QUAKE_LIST_URL)
                 resp.raise_for_status()
                 raw = resp.json()
-            parsed = []
             for item in raw:
+                anm = str(item.get("anm") or "")
+                if "京都" not in anm:
+                    continue
                 lat, lon, depth_km = _parse_jma_cod(item.get("cod"))
                 if lat is None or lon is None:
                     continue
@@ -327,10 +331,11 @@ async def get_recent_earthquakes(limit: int = Query(default=40, ge=1, le=100)) -
                     mag = float(item["mag"]) if item.get("mag") not in (None, "") else None
                 except (TypeError, ValueError):
                     mag = None
+                at_val = str(item.get("at") or "")
                 parsed.append({
                     "eid": item.get("eid"),
-                    "at": item.get("at"),
-                    "anm": item.get("anm"),
+                    "at": at_val,
+                    "anm": anm,
                     "en_anm": item.get("en_anm"),
                     "ttl": item.get("ttl"),
                     "mag": mag,
@@ -339,18 +344,35 @@ async def get_recent_earthquakes(limit: int = Query(default=40, ge=1, le=100)) -
                     "lon": lon,
                     "depth_km": depth_km,
                 })
-            _quake_cache["data"] = parsed
-            _quake_cache["fetched_at"] = now
-        except Exception as exc:
-            if not _quake_cache["data"]:
-                return {
-                    "source": "気象庁 地震情報 (取得失敗)",
-                    "error": str(exc),
-                    "earthquakes": [],
-                }
+                seen_keys.add((at_val[:10], anm))
+        except Exception:
+            pass
+
+        # Include Kyoto-epicenter earthquakes with coordinates from the Kyoto archive (2025-2026 + history)
+        for q in updates_store.query_updates(period="all", kind="earthquakes").get("earthquakes", []):
+            if q.get("lat") is None or q.get("lon") is None:
+                continue
+            key = (str(q.get("date_iso") or ""), str(q.get("epicenter") or ""))
+            if key in seen_keys:
+                continue
+            parsed.append({
+                "eid": q.get("id"),
+                "at": q.get("occurred_at"),
+                "anm": q.get("epicenter"),
+                "ttl": q.get("source"),
+                "mag": q.get("mag"),
+                "maxi": q.get("maxi"),
+                "lat": q.get("lat"),
+                "lon": q.get("lon"),
+                "depth_km": q.get("depth_km"),
+            })
+            seen_keys.add(key)
+
+        _quake_cache["data"] = parsed
+        _quake_cache["fetched_at"] = now
 
     return {
-        "source": "気象庁 地震情報 (https://www.jma.go.jp/bosai/quake/data/list.json)",
+        "source": "気象庁 地震情報 / 京都府震源アーカイブ（震源地：京都のみ）",
         "earthquakes": _quake_cache["data"][:limit],
     }
 
