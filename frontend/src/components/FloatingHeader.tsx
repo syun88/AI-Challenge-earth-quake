@@ -11,10 +11,18 @@ import {
   Map as MapIcon,
   MessageSquareHeart,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
 } from "lucide-react";
 
-export type WorkspacePanel = "none" | "report" | "safety" | "nav" | "ai" | "stats";
+export type WorkspacePanel =
+  | "none"
+  | "report"
+  | "safety"
+  | "shelter"
+  | "nav"
+  | "ai"
+  | "stats";
 
 interface FloatingHeaderProps {
   activePanel: WorkspacePanel;
@@ -118,6 +126,14 @@ export function FloatingHeader({
             activeClass="bg-sky-500/20 text-sky-100 border-sky-400/70"
           />
           <NavPill
+            testId="nav-tab-shelter"
+            active={activePanel === "shelter"}
+            onClick={() => toggle("shelter")}
+            icon={<ShieldCheck className="h-3.5 w-3.5 text-teal-400" />}
+            label="避難場所推薦"
+            activeClass="bg-teal-500/20 text-teal-100 border-teal-400/70"
+          />
+          <NavPill
             testId="nav-tab-nav"
             active={activePanel === "nav"}
             onClick={() => toggle("nav")}
@@ -191,7 +207,7 @@ export function FloatingHeader({
       {/* Mobile Bottom Dock (< lg) */}
       <nav
         aria-label="モバイルナビゲーション"
-        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-6 border-t border-slate-800 bg-slate-950/95 px-1 py-1.5 backdrop-blur-xl lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-7 border-t border-slate-800 bg-slate-950/95 px-1 py-1.5 backdrop-blur-xl lg:hidden"
       >
         <MobileDockBtn
           active={activePanel === "none"}
@@ -212,6 +228,13 @@ export function FloatingHeader({
           onClick={() => toggle("safety")}
           icon={<MessageSquareHeart className="h-4 w-4 text-sky-400" />}
           label="安否確認"
+        />
+        <MobileDockBtn
+          testId="mobile-tab-shelter"
+          active={activePanel === "shelter"}
+          onClick={() => toggle("shelter")}
+          icon={<ShieldCheck className="h-4 w-4 text-teal-400" />}
+          label="避難推薦"
         />
         <MobileDockBtn
           testId="mobile-tab-nav"

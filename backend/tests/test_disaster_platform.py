@@ -639,3 +639,93 @@ def test_interactive_roads_corridor_stroke_and_consent(isolated_env) -> None:
     assert client.delete(f"/api/reports/{corr_rep['id']}?passcode=5544").status_code == 200
     r_status_clean = client.get("/api/network/status?include_samples=true")
     assert not any(cm["id"] == corr_rep["id"] for cm in r_status_clean.json()["closure_markers"])
+
+
+def test_official_shelters_and_hazard_map_recommendations(isolated_env) -> None:
+    client, s_store, _, r_store = isolated_env
+
+    # 1) Official GSI Kyoto City designated emergency evacuation sites list
+    r_list = client.get("/api/shelters")
+    assert r_list.status_code == 200
+    data_list = r_list.json()
+    assert data_list["count"] >= 500
+    assert "0000000196.html" in data_list["kyoto_hazard_map_url"]
+    assert len(data_list["shelters"]) == data_list["count"]
+
+    r_fire_list = client.get("/api/shelters?wide_area_only=true")
+    assert r_fire_list.status_code == 200
+    fire_shelters = r_fire_list.json()["shelters"]
+    assert 50 <= len(fire_shelters) <= 100
+    assert all(s["is_wide_area"] is True for s in fire_shelters)
+
+    # 2) Earthquake scenario inside synthetic mesh polygon (35.0116, 135.7601)
+    r_eq = client.get(
+        "/api/shelters/recommend?lat=35.0116&lon=135.7601&scenario=earthquake&limit=5"
+    )
+    assert r_eq.status_code == 200
+    eq_rec = r_eq.json()
+    assert eq_rec["scenario"] == "earthquake"
+    assert eq_rec["origin"]["hazard"] is not None
+    assert eq_rec["origin"]["hazard"]["meshcode"] in ("5235362024", "5235461024")
+    links = eq_rec["origin"]["hazard_map_links"]
+    assert "0000000196.html" in links["earthquake_page_url"]
+    assert links["ward_map_pdf"].endswith(".pdf")
+    assert links["ward_info_pdf"].endswith(".pdf")
+    assert len(eq_rec["recommendations"]) == 5
+    first_rec = eq_rec["recommendations"][0]
+    assert first_rec["rank"] == 1
+    assert first_rec["disasters"]["earthquake"] is True
+    assert first_rec["road_distance_km"] is not None and first_rec["road_distance_km"] > 0
+    assert first_rec["walk_minutes"] is not None and first_rec["walk_minutes"] >= 1
+    assert len(first_rec["reasons"]) >= 1
+    assert len(first_rec["nav_route"]["alternative_route"]["coordinates"]) >= 2
+
+    # 3) Post-quake fire scenario prioritizes large-fire wide-area sites
+    r_fire = client.get(
+        "/api/shelters/recommend?lat=35.0116&lon=135.7681&scenario=post_quake_fire&limit=5"
+    )
+    assert r_fire.status_code == 200
+    fire_rec = r_fire.json()
+    assert len(fire_rec["recommendations"]) == 5
+    assert all(item["disasters"]["large_fire"] is True for item in fire_rec["recommendations"])
+    assert all(item["is_wide_area"] is True for item in fire_rec["recommendations"])
+
+    # 4) Road closure triggers detour-aware shelter recommendation
+    top_coords = first_rec["nav_route"]["alternative_route"]["coordinates"]
+    mid_lon, mid_lat = top_coords[len(top_coords) // 2]
+    r_blk = client.post(
+        "/api/reports",
+        json={
+            "category": "road_blocked",
+            "severity": "critical",
+            "title": "避難ルート途中の道路損壊",
+            "description": "建物倒壊による通行止めテスト",
+            "ward_name": "伏見区",
+            "lat": mid_lat,
+            "lon": mid_lon,
+            "location_consent": True,
+            "passcode": "2468",
+            "force_duplicate": True,
+        },
+    )
+    assert r_blk.status_code == 200
+    blk_id = r_blk.json()["report"]["id"]
+    r_eq_detour = client.get(
+        "/api/shelters/recommend?lat=34.9355&lon=135.7615&scenario=earthquake&avoid_unverified=true&limit=5"
+    )
+    assert r_eq_detour.status_code == 200
+    assert r_eq_detour.json()["active_blocked_count"] >= 1
+    assert client.delete(f"/api/reports/{blk_id}?passcode=2468").status_code == 200
+
+    # 5) AI assistant tool recommend_evacuation_shelters works end-to-end
+    from app import ai_assistant
+
+    tool_out = ai_assistant._execute_tool(
+        s_store,
+        "recommend_evacuation_shelters",
+        {"lat": 35.0116, "lon": 135.7681, "scenario": "earthquake"},
+        reports_store=r_store,
+    )
+    assert tool_out["scenario"] == "earthquake"
+    assert len(tool_out["recommendations"]) == 5
+    assert "ward_map_pdf" in tool_out["origin"]["hazard_map_links"]

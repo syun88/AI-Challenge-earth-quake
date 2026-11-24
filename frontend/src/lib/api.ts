@@ -16,12 +16,15 @@ import {
   MeshDetail,
   MetadataResponse,
   NetworkStatusResponse,
+  OfficialSheltersListResponse,
   PriorityArea,
   ReportCategory,
   ReportSeverity,
   RoadSelectionResult,
   RouteNode,
   RouteSimulationResponse,
+  ShelterRecommendationResponse,
+  ShelterScenario,
   SnappedRoadInfo,
   StatsResponse,
   VerificationStatus,
@@ -633,4 +636,44 @@ export function simulateNavigation(params: {
   }
   if (params.targetReportId) sp.set("target_report_id", params.targetReportId);
   return fetchJson<RouteSimulationResponse>(`/api/routes/navigate?${sp.toString()}`);
+}
+
+export function getOfficialShelters(params?: {
+  ward?: string;
+  disasterType?: string;
+  wideAreaOnly?: boolean;
+}) {
+  const sp = new URLSearchParams();
+  if (params?.ward && params.ward !== "all") sp.set("ward", params.ward);
+  if (params?.disasterType && params.disasterType !== "all") {
+    sp.set("disaster_type", params.disasterType);
+  }
+  if (params?.wideAreaOnly) sp.set("wide_area_only", "true");
+  const qs = sp.toString();
+  return fetchJson<OfficialSheltersListResponse>(`/api/shelters${qs ? `?${qs}` : ""}`);
+}
+
+export function recommendShelters(params: {
+  lat?: number;
+  lon?: number;
+  ward?: string;
+  scenario?: ShelterScenario;
+  includeSamples?: boolean;
+  avoidUnverified?: boolean;
+  limit?: number;
+}) {
+  const sp = new URLSearchParams({
+    scenario: params.scenario ?? "earthquake",
+    include_samples: params.includeSamples === false ? "false" : "true",
+    avoid_unverified: params.avoidUnverified === false ? "false" : "true",
+    limit: String(params.limit ?? 5),
+  });
+  if (params.lat != null && params.lon != null) {
+    sp.set("lat", String(params.lat));
+    sp.set("lon", String(params.lon));
+  }
+  if (params.ward && params.ward !== "all") {
+    sp.set("ward", params.ward);
+  }
+  return fetchJson<ShelterRecommendationResponse>(`/api/shelters/recommend?${sp.toString()}`);
 }

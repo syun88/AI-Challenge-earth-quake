@@ -612,3 +612,98 @@ export interface InteractiveRoadsGeoJSON {
     };
   }>;
 }
+
+export type ShelterScenario = "earthquake" | "post_quake_fire" | "multi_hazard";
+
+export interface ShelterHazardContext {
+  meshcode: string;
+  ward_name: string;
+  hazard_tier: HazardTier;
+  hazard_label: string;
+  t30_i55_ps: number | null;
+  arv: number | null;
+  jname: string;
+  pre_1981_count: number;
+  pre_1981_share_known: number | null;
+}
+
+export interface OfficialShelter {
+  id: string;
+  name: string;
+  address: string;
+  ward: string;
+  lon: number;
+  lat: number;
+  remarks?: string | null;
+  disasters: {
+    flood: boolean;
+    landslide: boolean;
+    storm_surge: boolean;
+    earthquake: boolean;
+    tsunami: boolean;
+    large_fire: boolean;
+    inland_flood: boolean;
+  };
+  disaster_labels: string[];
+  is_wide_area: boolean;
+  hazard?: ShelterHazardContext | null;
+}
+
+export interface OfficialSheltersListResponse {
+  source: string;
+  source_url: string;
+  kyoto_hazard_map_url: string;
+  web_hazard_map_url: string;
+  count: number;
+  returned: number;
+  shelters: OfficialShelter[];
+}
+
+export interface ShelterRecommendationItem extends OfficialShelter {
+  rank: number;
+  crow_fly_km: number;
+  road_distance_km: number | null;
+  baseline_distance_km: number | null;
+  walk_minutes: number | null;
+  rerouted: boolean;
+  detour_delta_km: number | null;
+  reachable: boolean;
+  shelter_hazard: ShelterHazardContext | null;
+  shelter_status: "open" | "restricted" | "support_needed";
+  status_note: string;
+  related_reports: Array<{
+    report_id: string;
+    title: string;
+    verification_label: string;
+  }>;
+  reasons: string[];
+  nav_route: RouteSimulationResponse;
+}
+
+export interface HazardMapLinks {
+  earthquake_page_url: string;
+  web_hazard_map_url: string;
+  ward_name: string;
+  ward_map_pdf: string;
+  ward_info_pdf: string;
+  keihoku_map_pdf?: string;
+  keihoku_info_pdf?: string;
+}
+
+export interface ShelterRecommendationResponse {
+  scenario: ShelterScenario;
+  scenario_label: string;
+  is_simulation: boolean;
+  simulation_disclaimer: string;
+  origin: {
+    lat: number;
+    lon: number;
+    ward_name: string;
+    meshcode: string | null;
+    hazard: ShelterHazardContext | null;
+    hazard_map_links: HazardMapLinks;
+  };
+  active_blocked_count: number;
+  total_candidates: number;
+  recommendations: ShelterRecommendationItem[];
+}

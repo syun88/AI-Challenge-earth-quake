@@ -26,6 +26,7 @@ import {
 import { RiskStatsDrawer } from "@/components/RiskStatsDrawer";
 import { ROAD_CAUSE_PRESETS, RoadDamageToolbar } from "@/components/RoadDamageToolbar";
 import { SelectedFeatureCard } from "@/components/SelectedFeatureCard";
+import ShelterRecommendPanel from "@/components/ShelterRecommendPanel";
 import { SourcesModal } from "@/components/SourcesModal";
 import { WARD_CENTERS } from "@/lib/colors";
 import { readLocalReportAuth, saveLocalReportAuth } from "@/lib/reportAuth";
@@ -42,8 +43,10 @@ import {
   getMeshesGeoJson,
   getMetadata,
   getNetworkStatus,
+  getOfficialShelters,
   getPriorityAreas,
   getStats,
+  recommendShelters,
   resolveRoadCorridor,
   resolveRoadStroke,
   simulateNavigation,
@@ -66,10 +69,14 @@ import {
   MetadataResponse,
   NetworkEdgeFeature,
   NetworkStatusResponse,
+  OfficialShelter,
   PriorityArea,
   RoadPaintTool,
   RouteSimulationResponse,
   ShelterHub,
+  ShelterRecommendationItem,
+  ShelterRecommendationResponse,
+  ShelterScenario,
   SnappedRoadInfo,
   StatsResponse,
   UsageGroup,
@@ -116,10 +123,26 @@ export default function HomePage() {
   const [meshOverlayMode, setMeshOverlayMode] = useState<MeshOverlayMode>("hazard");
   const [showRoadClosures, setShowRoadClosures] = useState(true);
   const [showShelterHubs, setShowShelterHubs] = useState(true);
+  const [showOfficialShelters, setShowOfficialShelters] = useState(true);
   const [showReports, setShowReports] = useState(true);
   const [showSafetyLayer, setShowSafetyLayer] = useState(true);
   const [showEarthquakes, setShowEarthquakes] = useState(false);
   const [is3D, setIs3D] = useState(false);
+
+  const [officialShelters, setOfficialShelters] = useState<OfficialShelter[]>([]);
+  const [selectedOfficialShelter, setSelectedOfficialShelter] = useState<OfficialShelter | null>(null);
+  const [shelterOrigin, setShelterOrigin] = useState<{ lat: number; lon: number; label: string }>({
+    lat: 35.0116,
+    lon: 135.7681,
+    label: "京都市役所周辺（中京区）",
+  });
+  const [shelterScenario, setShelterScenario] = useState<ShelterScenario>("earthquake");
+  const [shelterAvoidUnverified, setShelterAvoidUnverified] = useState(true);
+  const [shelterRecommendation, setShelterRecommendation] =
+    useState<ShelterRecommendationResponse | null>(null);
+  const [shelterLoading, setShelterLoading] = useState(false);
+  const [shelterError, setShelterError] = useState<string | null>(null);
+  const [selectedRecShelterId, setSelectedRecShelterId] = useState<string | null>(null);
 
   // Active Selections & Map Pickers
   const [selectedBuilding, setSelectedBuilding] = useState<BuildingDetail | null>(null);
@@ -178,14 +201,16 @@ export default function HomePage() {
       getMetadata(),
       getMeshesGeoJson("all"),
       getEarthquakes(40).catch(() => ({ earthquakes: [] })),
+      getOfficialShelters().catch(() => ({ shelters: [] as OfficialShelter[] })),
     ])
-      .then(([h, m, mj, eq]) => {
+      .then(([h, m, mj, eq, sh]) => {
         if (cancelled) return;
         setGeminiConfigured(h.gemini_configured);
         setAiProtection(h.ai_protection ?? null);
         setMetadata(m);
         setMeshesGeoJson(mj);
         setEarthquakes(eq.earthquakes || []);
+        setOfficialShelters(sh.shelters || []);
         setApiError(null);
       })
       .catch((err) => {
@@ -296,7 +321,172 @@ export default function HomePage() {
     setSelectedReport(null);
     setSelectedBlockedRoad(null);
     setSelectedShelterHub(null);
+    setSelectedOfficialShelter(null);
   }, []);
+
+  const runShelterRecommendation = useCallback(
+    async (opts?: {
+      lat?: number;
+      lon?: number;
+      scenario?: ShelterScenario;
+      avoidUnverified?: boolean;
+      samples?: boolean;
+      autoSelectTop?: boolean;
+    }) => {
+      const lat = opts?.lat ?? shelterOrigin.lat;
+      const lon = opts?.lon ?? shelterOrigin.lon;
+      const scenario = opts?.scenario ?? shelterScenario;
+      const avoid = opts?.avoidUnverified ?? shelterAvoidUnverified;
+      const samples = opts?.samples ?? includeSamples;
+      setShelterLoading(true);
+      setShelterError(null);
+      try {
+        const res = await recommendShelters({
+          lat,
+          lon,
+          scenario,
+          includeSamples: samples,
+          avoidUnverified: avoid,
+          limit: 5,
+        });
+        setShelterRecommendation(res);
+        if (opts?.autoSelectTop && res.recommendations.length > 0) {
+          const top = res.recommendations[0];
+          setSelectedRecShelterId(top.id);
+          setRouteResult(top.nav_route);
+        }
+      } catch (err) {
+        setShelterError(
+          err instanceof Error ? err.message : "避難場所推薦の取得に失敗しました。"
+        );
+      } finally {
+        setShelterLoading(false);
+      }
+    },
+    [
+      shelterOrigin.lat,
+      shelterOrigin.lon,
+      shelterScenario,
+      shelterAvoidUnverified,
+      includeSamples,
+    ]
+  );
+
+  useEffect(() => {
+    if (activePanel !== "shelter") return;
+    let cancelled = false;
+    recommendShelters({
+      lat: shelterOrigin.lat,
+      lon: shelterOrigin.lon,
+      scenario: shelterScenario,
+      includeSamples,
+      avoidUnverified: shelterAvoidUnverified,
+      limit: 5,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setShelterRecommendation(res);
+        setShelterError(null);
+        setShelterLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setShelterError(
+          err instanceof Error ? err.message : "避難場所推薦の取得に失敗しました。"
+        );
+        setShelterLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activePanel,
+    shelterOrigin.lat,
+    shelterOrigin.lon,
+    shelterScenario,
+    shelterAvoidUnverified,
+    includeSamples,
+    disasterNonce,
+  ]);
+
+  const handleSelectOfficialShelterFromMap = useCallback(
+    (shelter: OfficialShelter) => {
+      clearSelections();
+      setSelectedOfficialShelter(shelter);
+    },
+    [clearSelections]
+  );
+
+  const handleSelectRecommendedShelter = useCallback(
+    (item: ShelterRecommendationItem) => {
+      clearSelections();
+      setSelectedRecShelterId(item.id);
+      setSelectedOfficialShelter(item);
+      setRouteResult(item.nav_route);
+      setShowRoadClosures(true);
+      setShowOfficialShelters(true);
+    },
+    [clearSelections]
+  );
+
+  const handleRouteToOfficialShelter = useCallback(
+    async (shelter: OfficialShelter) => {
+      try {
+        const res = await simulateNavigation({
+          mode: "custom",
+          startLat: shelterOrigin.lat,
+          startLon: shelterOrigin.lon,
+          targetLat: shelter.lat,
+          targetLon: shelter.lon,
+          includeSamples,
+          avoidUnverified: shelterAvoidUnverified,
+        });
+        setRouteResult(res);
+        setShowRoadClosures(true);
+      } catch {
+        // ignore transient error
+      }
+    },
+    [shelterOrigin.lat, shelterOrigin.lon, includeSamples, shelterAvoidUnverified]
+  );
+
+  const handleRecommendFromTarget = useCallback(
+    (target: { lat: number; lon: number; label: string }) => {
+      clearSelections();
+      setShelterOrigin(target);
+      setShowOfficialShelters(true);
+      setActivePanel("shelter");
+      void runShelterRecommendation({
+        lat: target.lat,
+        lon: target.lon,
+        autoSelectTop: true,
+      });
+    },
+    [clearSelections, runShelterRecommendation]
+  );
+
+  const handleUseGpsForShelter = useCallback(() => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setShelterError("このブラウザではGPS現在地取得が利用できません。");
+      return;
+    }
+    setShelterLoading(true);
+    setShelterError(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = Number(pos.coords.latitude.toFixed(5));
+        const lon = Number(pos.coords.longitude.toFixed(5));
+        setShelterOrigin({ lat, lon, label: `GPS現在地 (${lat}, ${lon})` });
+        setFlyToTarget({ lat, lon, zoom: 14.8, ts: Date.now() });
+        void runShelterRecommendation({ lat, lon, autoSelectTop: true });
+      },
+      () => {
+        setShelterLoading(false);
+        setShelterError("現在地の位置情報権限が許可されていないため取得できませんでした。");
+      },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  }, [runShelterRecommendation]);
 
   const handleSelectWard = useCallback((ward: string) => {
     setSelectedWard(ward);
@@ -848,6 +1038,25 @@ export default function HomePage() {
         return;
       }
 
+      if (mapPickMode === "shelter_origin") {
+        setMapPickMode("none");
+        const label = target.buildingId
+          ? `${target.wardName ?? "選択地点"} 建物 (${target.buildingId})`
+          : target.wardName
+            ? `${target.wardName} (${target.lat.toFixed(4)}, ${target.lon.toFixed(4)})`
+            : `指定地点 (${target.lat.toFixed(4)}, ${target.lon.toFixed(4)})`;
+        setShelterOrigin({ lat: target.lat, lon: target.lon, label });
+        clearSelections();
+        setShowOfficialShelters(true);
+        setActivePanel("shelter");
+        await runShelterRecommendation({
+          lat: target.lat,
+          lon: target.lon,
+          autoSelectTop: true,
+        });
+        return;
+      }
+
       if (mapPickMode === "rescue") {
         setMapPickMode("none");
         setPickedRescueCoords({
@@ -877,7 +1086,7 @@ export default function HomePage() {
         }
       }
     },
-    [mapPickMode, includeSamples, clearSelections]
+    [mapPickMode, includeSamples, clearSelections, runShelterRecommendation]
   );
 
   const handleSelectPriorityArea = useCallback(
@@ -1049,6 +1258,11 @@ export default function HomePage() {
         showRoadClosures={showRoadClosures}
         showSafetyLayer={showSafetyLayer}
         showShelterHubs={showShelterHubs}
+        showOfficialShelters={showOfficialShelters}
+        officialShelters={officialShelters}
+        recommendedShelters={
+          activePanel === "shelter" ? shelterRecommendation?.recommendations ?? [] : []
+        }
         is3D={is3D}
         selectedBuildingId={selectedBuilding?.building_id ?? null}
         selectedMeshcode={selectedMeshcode}
@@ -1070,6 +1284,7 @@ export default function HomePage() {
         onSelectReport={handleSelectReportFromMap}
         onSelectBlockedRoad={handleSelectBlockedRoad}
         onSelectShelterHub={handleSelectShelterHub}
+        onSelectOfficialShelter={handleSelectOfficialShelterFromMap}
         onSelectSafetyWard={handleSelectSafetyWardFromMap}
       />
 
@@ -1129,6 +1344,8 @@ export default function HomePage() {
         onToggleRoadClosures={() => setShowRoadClosures((v) => !v)}
         showShelterHubs={showShelterHubs}
         onToggleShelterHubs={() => setShowShelterHubs((v) => !v)}
+        showOfficialShelters={showOfficialShelters}
+        onToggleOfficialShelters={() => setShowOfficialShelters((v) => !v)}
         showReports={showReports}
         onToggleReports={() => setShowReports((v) => !v)}
         showSafetyLayer={showSafetyLayer}
@@ -1163,11 +1380,13 @@ export default function HomePage() {
                 ? "被害状況の報告・確認"
                 : activePanel === "safety"
                   ? "災害用伝言板（安否確認）"
-                  : activePanel === "nav"
-                    ? "避難・救援ルート案内"
-                    : activePanel === "ai"
-                      ? "Gemini AI 状況分析"
-                      : "災害統計・建物リスク分析"}
+                  : activePanel === "shelter"
+                    ? "ハザードマップ連動・避難場所推薦"
+                    : activePanel === "nav"
+                      ? "避難・救援ルート案内"
+                      : activePanel === "ai"
+                        ? "Gemini AI 状況分析"
+                        : "災害統計・建物リスク分析"}
             </span>
             <button
               type="button"
@@ -1220,6 +1439,59 @@ export default function HomePage() {
                 onSelectWardFilter={handleSelectWard}
                 onDataMutated={triggerDisasterRefresh}
               />
+            )}
+
+            {activePanel === "shelter" && (
+              <div className="p-3.5">
+                <ShelterRecommendPanel
+                  wards={wards}
+                  selectedWard={selectedWard}
+                  origin={shelterOrigin}
+                  scenario={shelterScenario}
+                  avoidUnverified={shelterAvoidUnverified}
+                  includeSamples={includeSamples}
+                  isPickingOrigin={mapPickMode === "shelter_origin"}
+                  loading={shelterLoading}
+                  error={shelterError}
+                  recommendation={shelterRecommendation}
+                  selectedShelterId={selectedRecShelterId}
+                  onChangeScenario={(next) => {
+                    setShelterLoading(true);
+                    setShelterScenario(next);
+                  }}
+                  onChangeAvoidUnverified={(next) => {
+                    setShelterLoading(true);
+                    setShelterAvoidUnverified(next);
+                  }}
+                  onChangeIncludeSamples={(next) => {
+                    setShelterLoading(true);
+                    setIncludeSamples(next);
+                  }}
+                  onTogglePickOrigin={() => {
+                    setShowOfficialShelters(true);
+                    setMapPickMode((m) => (m === "shelter_origin" ? "none" : "shelter_origin"));
+                  }}
+                  onUseGpsOrigin={handleUseGpsForShelter}
+                  onSelectWardOrigin={(ward) => {
+                    const center = WARD_CENTERS[ward];
+                    if (!center) return;
+                    setSelectedWard(ward);
+                    setShelterOrigin({
+                      lat: center.lat,
+                      lon: center.lon,
+                      label: `${ward} 中心付近`,
+                    });
+                    setFlyToTarget({ ...center, zoom: 14.3, ts: Date.now() });
+                    void runShelterRecommendation({
+                      lat: center.lat,
+                      lon: center.lon,
+                      autoSelectTop: true,
+                    });
+                  }}
+                  onRefresh={() => void runShelterRecommendation()}
+                  onSelectRecommendation={handleSelectRecommendedShelter}
+                />
+              </div>
             )}
 
             {activePanel === "nav" && (
@@ -1395,6 +1667,7 @@ export default function HomePage() {
         selectedReport={selectedReport}
         selectedBlockedRoad={selectedBlockedRoad}
         selectedShelterHub={selectedShelterHub}
+        selectedOfficialShelter={selectedOfficialShelter}
         routeResult={routeResult}
         onClearSelection={clearSelections}
         onClearRoute={() => setRouteResult(null)}
@@ -1409,6 +1682,8 @@ export default function HomePage() {
           setMapPickMode("evacuate");
           setFlyToTarget({ lon: hub.lon, lat: hub.lat, zoom: 13.8, ts: Date.now() });
         }}
+        onRouteToOfficialShelter={(s) => void handleRouteToOfficialShelter(s)}
+        onRecommendFromTarget={handleRecommendFromTarget}
         onStartPickRoadBlock={() => {
           clearSelections();
           setShowRoadClosures(true);

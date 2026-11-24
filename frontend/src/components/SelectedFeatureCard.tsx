@@ -22,6 +22,7 @@ import {
   DamageReport,
   MeshDetail,
   NetworkEdgeFeature,
+  OfficialShelter,
   RouteSimulationResponse,
   ShelterHub,
 } from "@/types/quakelens";
@@ -32,6 +33,7 @@ interface SelectedFeatureCardProps {
   selectedReport: DamageReport | null;
   selectedBlockedRoad: NetworkEdgeFeature | null;
   selectedShelterHub: ShelterHub | null;
+  selectedOfficialShelter: OfficialShelter | null;
   routeResult: RouteSimulationResponse | null;
   onClearSelection: () => void;
   onClearRoute: () => void;
@@ -39,6 +41,8 @@ interface SelectedFeatureCardProps {
   onDispatchToBuilding: (building: BuildingDetail) => void;
   onDispatchToReport: (report: DamageReport) => void;
   onEvacuateToHub: (hub: ShelterHub) => void;
+  onRouteToOfficialShelter: (shelter: OfficialShelter) => void;
+  onRecommendFromTarget: (target: { lat: number; lon: number; label: string }) => void;
   onStartPickRoadBlock: () => void;
   onResolveBlockedRoad: (reportId: string) => void;
   onOpenNavPanel: () => void;
@@ -53,6 +57,7 @@ export function SelectedFeatureCard({
   selectedReport,
   selectedBlockedRoad,
   selectedShelterHub,
+  selectedOfficialShelter,
   routeResult,
   onClearSelection,
   onClearRoute,
@@ -60,6 +65,8 @@ export function SelectedFeatureCard({
   onDispatchToBuilding,
   onDispatchToReport,
   onEvacuateToHub,
+  onRouteToOfficialShelter,
+  onRecommendFromTarget,
   onStartPickRoadBlock,
   onResolveBlockedRoad,
   onOpenNavPanel,
@@ -72,7 +79,8 @@ export function SelectedFeatureCard({
       selectedMesh ||
       selectedReport ||
       selectedBlockedRoad ||
-      selectedShelterHub
+      selectedShelterHub ||
+      selectedOfficialShelter
   );
 
   if (!hasSelection && !routeResult) return null;
@@ -316,7 +324,94 @@ export function SelectedFeatureCard({
         </div>
       )}
 
-      {!selectedReport && !selectedBlockedRoad && !selectedShelterHub && selectedBuilding && (
+      {!selectedReport &&
+        !selectedBlockedRoad &&
+        !selectedShelterHub &&
+        selectedOfficialShelter && (
+          <div
+            data-testid="selected-feature-card"
+            className="pointer-events-auto rounded-2xl border border-emerald-500/60 bg-slate-900/95 p-3.5 text-xs text-slate-100 shadow-2xl backdrop-blur-xl space-y-2.5"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-1.5 font-bold text-emerald-300">
+                <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                <span>指定緊急避難場所（国土地理院・京都市公式）</span>
+              </div>
+              <button
+                type="button"
+                onClick={onClearSelection}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <h3 className="text-sm font-bold text-white">
+                  {selectedOfficialShelter.name}
+                </h3>
+                {selectedOfficialShelter.is_wide_area && (
+                  <span className="rounded-full border border-orange-500/60 bg-orange-500/20 px-2 py-0.5 text-[10px] font-bold text-orange-200">
+                    広域避難場所
+                  </span>
+                )}
+              </div>
+              <div className="mt-0.5 text-[11px] text-slate-400">
+                {selectedOfficialShelter.ward} ／ {selectedOfficialShelter.address}
+              </div>
+              {selectedOfficialShelter.disaster_labels.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {selectedOfficialShelter.disaster_labels.map((lbl) => (
+                    <span
+                      key={lbl}
+                      className="rounded-md border border-emerald-500/35 bg-emerald-950/50 px-1.5 py-0.5 text-[10px] text-emerald-200"
+                    >
+                      {lbl}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {selectedOfficialShelter.hazard && (
+                <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/70 px-2.5 py-1.5 text-[11px] text-slate-300">
+                  J-SHIS地盤: {selectedOfficialShelter.hazard.hazard_label} ／ ARV{" "}
+                  {selectedOfficialShelter.hazard.arv != null
+                    ? selectedOfficialShelter.hazard.arv.toFixed(2)
+                    : "—"}
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                data-testid="selected-official-shelter-route-btn"
+                onClick={() => onRouteToOfficialShelter(selectedOfficialShelter)}
+                className="inline-flex items-center justify-center gap-1 rounded-xl bg-emerald-500 py-2 text-[11px] font-bold text-slate-950 hover:bg-emerald-400"
+              >
+                <Compass className="h-3.5 w-3.5" />
+                現在地からの避難経路
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  onRecommendFromTarget({
+                    lat: selectedOfficialShelter.lat,
+                    lon: selectedOfficialShelter.lon,
+                    label: `${selectedOfficialShelter.name}周辺`,
+                  })
+                }
+                className="rounded-xl border border-slate-700 px-2 py-2 text-[11px] font-semibold text-slate-200 hover:bg-slate-800"
+              >
+                ここから他候補を探す
+              </button>
+            </div>
+          </div>
+        )}
+
+      {!selectedReport &&
+        !selectedBlockedRoad &&
+        !selectedShelterHub &&
+        !selectedOfficialShelter &&
+        selectedBuilding && (
         <div
           data-testid="selected-feature-card"
           className="pointer-events-auto rounded-2xl border border-slate-700 bg-slate-900/95 p-3.5 text-xs text-slate-100 shadow-2xl backdrop-blur-xl space-y-2.5"
@@ -392,6 +487,22 @@ export function SelectedFeatureCard({
 
           <button
             type="button"
+            data-testid="selected-building-recommend-btn"
+            onClick={() =>
+              onRecommendFromTarget({
+                lat: selectedBuilding.centroid_lat,
+                lon: selectedBuilding.centroid_lon,
+                label: `${selectedBuilding.ward_name} 建物 ${selectedBuilding.building_id}`,
+              })
+            }
+            className="flex w-full items-center justify-center gap-1 rounded-xl border border-emerald-500/45 bg-emerald-500/15 py-1.5 text-[11px] font-bold text-emerald-200 hover:bg-emerald-500/25"
+          >
+            <ShieldCheck className="h-3.5 w-3.5" />
+            この地点から推奨避難場所Top5を検索
+          </button>
+
+          <button
+            type="button"
             onClick={() =>
               onRequestAiExplain(
                 `建物 ${selectedBuilding.building_id}（${selectedBuilding.ward_name}）の耐震区分・地盤・京都市公式補助制度を解説してください。`
@@ -423,6 +534,7 @@ export function SelectedFeatureCard({
       {!selectedReport &&
         !selectedBlockedRoad &&
         !selectedShelterHub &&
+        !selectedOfficialShelter &&
         !selectedBuilding &&
         selectedMesh && (
           <div
@@ -493,6 +605,20 @@ export function SelectedFeatureCard({
                 AI解説
               </button>
             </div>
+            <button
+              type="button"
+              onClick={() =>
+                onRecommendFromTarget({
+                  lat: selectedMesh.centroid_lat,
+                  lon: selectedMesh.centroid_lon,
+                  label: `${selectedMesh.ward_name} (${selectedMesh.meshcode})`,
+                })
+              }
+              className="flex w-full items-center justify-center gap-1 rounded-xl border border-emerald-500/45 bg-emerald-500/15 py-1.5 text-[11px] font-bold text-emerald-200 hover:bg-emerald-500/25"
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+              この地域の推奨避難場所Top5を検索
+            </button>
           </div>
         )}
     </div>

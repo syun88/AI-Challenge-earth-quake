@@ -19,13 +19,21 @@ import {
   MeshOverlayMode,
   NetworkEdgeFeature,
   NetworkStatusResponse,
+  OfficialShelter,
   RoadPaintTool,
   RouteSimulationResponse,
   ShelterHub,
+  ShelterRecommendationItem,
   UsageGroup,
 } from "@/types/quakelens";
 
-export type MapPickMode = "none" | "report" | "evacuate" | "rescue" | "road_block";
+export type MapPickMode =
+  | "none"
+  | "report"
+  | "evacuate"
+  | "rescue"
+  | "road_block"
+  | "shelter_origin";
 export type VisualPreset = "crisis" | "risk";
 
 export interface PickedMapTarget {
@@ -91,6 +99,9 @@ interface QuakeMapProps {
   showRoadClosures: boolean;
   showSafetyLayer: boolean;
   showShelterHubs: boolean;
+  showOfficialShelters: boolean;
+  officialShelters: OfficialShelter[];
+  recommendedShelters: ShelterRecommendationItem[];
   is3D: boolean;
   selectedBuildingId: string | null;
   selectedMeshcode: string | null;
@@ -117,6 +128,7 @@ interface QuakeMapProps {
   onSelectReport: (report: DamageReport) => void;
   onSelectBlockedRoad: (edge: NetworkEdgeFeature) => void;
   onSelectShelterHub: (hub: ShelterHub) => void;
+  onSelectOfficialShelter: (shelter: OfficialShelter) => void;
   onSelectSafetyWard: (wardName: string) => void;
   onZoomChange?: (zoom: number, totalInView: number | null) => void;
 }
@@ -143,6 +155,9 @@ export function QuakeMap({
   showRoadClosures,
   showSafetyLayer,
   showShelterHubs,
+  showOfficialShelters,
+  officialShelters,
+  recommendedShelters,
   is3D,
   selectedBuildingId,
   selectedMeshcode,
@@ -163,6 +178,7 @@ export function QuakeMap({
   onSelectReport,
   onSelectBlockedRoad,
   onSelectShelterHub,
+  onSelectOfficialShelter,
   onSelectSafetyWard,
   onZoomChange,
 }: QuakeMapProps) {
@@ -222,6 +238,7 @@ export function QuakeMap({
     onSelectReport,
     onSelectBlockedRoad,
     onSelectShelterHub,
+    onSelectOfficialShelter,
     onSelectSafetyWard,
     onZoomChange,
   });
@@ -235,6 +252,7 @@ export function QuakeMap({
       onSelectReport,
       onSelectBlockedRoad,
       onSelectShelterHub,
+      onSelectOfficialShelter,
       onSelectSafetyWard,
       onZoomChange,
     };
@@ -247,9 +265,15 @@ export function QuakeMap({
     onSelectReport,
     onSelectBlockedRoad,
     onSelectShelterHub,
+    onSelectOfficialShelter,
     onSelectSafetyWard,
     onZoomChange,
   ]);
+
+  const officialSheltersRef = useRef<OfficialShelter[]>(officialShelters);
+  useEffect(() => {
+    officialSheltersRef.current = officialShelters;
+  }, [officialShelters]);
 
   const roadPaintToolRef = useRef<RoadPaintTool>(roadPaintTool);
   useEffect(() => {
@@ -296,6 +320,7 @@ export function QuakeMap({
   const blockedMarkersRef = useRef<maplibregl.Marker[]>([]);
   const hubMarkersRef = useRef<maplibregl.Marker[]>([]);
   const safetyMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const recMarkersRef = useRef<maplibregl.Marker[]>([]);
   const routeMarkersRef = useRef<maplibregl.Marker[]>([]);
   const pickMarkerRef = useRef<maplibregl.Marker | null>(null);
   const corridorStartMarkerRef = useRef<maplibregl.Marker | null>(null);
@@ -804,6 +829,52 @@ export function QuakeMap({
         },
       });
 
+      // Kyoto Official Designated Emergency Evacuation Sites (514 GSI shelters)
+      map.addSource("official-shelters", { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: "official-shelters-wide-ring",
+        type: "circle",
+        source: "official-shelters",
+        filter: ["==", ["get", "is_wide_area"], true],
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 4.5, 13, 7, 16, 10],
+          "circle-color": "transparent",
+          "circle-stroke-color": "#fb923c",
+          "circle-stroke-width": 1.8,
+          "circle-stroke-opacity": 0.9,
+        },
+      });
+      map.addLayer({
+        id: "official-shelters-circle",
+        type: "circle",
+        source: "official-shelters",
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 2.5, 13, 4.5, 16, 6.5],
+          "circle-color": [
+            "case",
+            ["==", ["get", "is_wide_area"], true],
+            "#f97316",
+            "#14b8a6",
+          ],
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 1.2,
+          "circle-opacity": 0.85,
+        },
+      });
+      map.addLayer({
+        id: "official-shelters-recommended",
+        type: "circle",
+        source: "official-shelters",
+        filter: [">", ["get", "rank"], 0],
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 9, 13, 12, 16, 14],
+          "circle-color": "#10b981",
+          "circle-stroke-color": "#fef08a",
+          "circle-stroke-width": 2.5,
+          "circle-opacity": 0.95,
+        },
+      });
+
       // Unified Click Handler
       map.on("click", (e) => {
         if (roadPaintToolRef.current === "click" || roadPaintToolRef.current === "corridor") {
@@ -837,6 +908,20 @@ export function QuakeMap({
             structureLabel: bp?.structure_label ? String(bp.structure_label) : null,
           });
           return;
+        }
+
+        const shelterHits = map.queryRenderedFeatures(e.point, {
+          layers: ["official-shelters-recommended", "official-shelters-circle"],
+        });
+        if (shelterHits.length > 0) {
+          const sid = shelterHits[0].properties?.id;
+          if (sid) {
+            const matched = officialSheltersRef.current.find((s) => s.id === String(sid));
+            if (matched) {
+              callbacksRef.current.onSelectOfficialShelter(matched);
+              return;
+            }
+          }
         }
 
         const eqHits = map.queryRenderedFeatures(e.point, { layers: ["earthquakes-circle"] });
@@ -908,6 +993,18 @@ export function QuakeMap({
         }
         if (pickModeRef.current !== "none") {
           map.getCanvas().style.cursor = "crosshair";
+          return;
+        }
+        const shelterHoverHits = map.queryRenderedFeatures(e.point, {
+          layers: ["official-shelters-recommended", "official-shelters-circle"],
+        });
+        if (shelterHoverHits.length > 0) {
+          map.getCanvas().style.cursor = "pointer";
+          const sp = shelterHoverHits[0].properties || {};
+          const rankPrefix = Number(sp.rank || 0) > 0 ? `★推奨${sp.rank}位 ` : "";
+          setHoverInfo(
+            `${rankPrefix}指定緊急避難場所: ${sp.name || ""} (${sp.ward || ""}) | ${sp.disasters_summary || ""}`
+          );
           return;
         }
         const bHits = map.queryRenderedFeatures(e.point, {
@@ -1171,6 +1268,72 @@ export function QuakeMap({
     };
   }, [networkStatus, showShelterHubs, selectedWard, mapReady]);
 
+  // Update 514 official Kyoto shelters GeoJSON + Top-5 recommendation rank badges
+  useEffect(() => {
+    const map = mapRef.current;
+    recMarkersRef.current.forEach((m) => m.remove());
+    recMarkersRef.current = [];
+    if (!map || !mapReady) return;
+
+    const src = map.getSource("official-shelters") as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+
+    const recMap = new Map<string, ShelterRecommendationItem>();
+    for (const r of recommendedShelters) {
+      recMap.set(r.id, r);
+    }
+
+    const filtered =
+      selectedWard && selectedWard !== "all"
+        ? officialShelters.filter((s) => s.ward === selectedWard || recMap.has(s.id))
+        : officialShelters;
+
+    src.setData({
+      type: "FeatureCollection",
+      features: filtered.map((s) => {
+        const rec = recMap.get(s.id);
+        return {
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [s.lon, s.lat] },
+          properties: {
+            id: s.id,
+            name: s.name,
+            ward: s.ward,
+            is_wide_area: s.is_wide_area,
+            rank: rec ? rec.rank : 0,
+            disasters_summary: s.disaster_labels.join("・"),
+          },
+        };
+      }),
+    });
+
+    if (recommendedShelters.length > 0) {
+      const markers: maplibregl.Marker[] = [];
+      for (const rec of recommendedShelters) {
+        const el = document.createElement("button");
+        el.type = "button";
+        el.className =
+          "group flex items-center gap-1 rounded-full border-2 border-yellow-200 bg-emerald-600 px-2 py-0.5 text-[11px] font-extrabold text-white shadow-xl hover:bg-emerald-500 transition";
+        el.title = `${rec.name} (${rec.walk_minutes ?? "—"}分)`;
+        el.innerHTML = `<span class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-yellow-300 text-[10px] font-black text-emerald-950">${rec.rank}</span><span class="max-w-[110px] truncate">${rec.name}</span>`;
+        el.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          callbacksRef.current.onSelectOfficialShelter(rec);
+        });
+        const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })
+          .setLngLat([rec.lon, rec.lat])
+          .addTo(map);
+        markers.push(marker);
+      }
+      recMarkersRef.current = markers;
+    }
+
+    return () => {
+      recMarkersRef.current.forEach((m) => m.remove());
+      recMarkersRef.current = [];
+    };
+  }, [officialShelters, recommendedShelters, selectedWard, mapReady]);
+
   // Update layer visibility, preset mesh opacity, and mesh/building colors & filters
   useEffect(() => {
     const map = mapRef.current;
@@ -1213,6 +1376,16 @@ export function QuakeMap({
       showBuildings && is3D ? "visible" : "none"
     );
     map.setLayoutProperty("earthquakes-circle", "visibility", showEarthquakes ? "visible" : "none");
+    if (map.getLayer("official-shelters-circle")) {
+      const shVis = showOfficialShelters ? "visible" : "none";
+      map.setLayoutProperty("official-shelters-circle", "visibility", shVis);
+      map.setLayoutProperty("official-shelters-wide-ring", "visibility", shVis);
+    }
+    if (map.getLayer("official-shelters-recommended")) {
+      const recVis =
+        showOfficialShelters || recommendedShelters.length > 0 ? "visible" : "none";
+      map.setLayoutProperty("official-shelters-recommended", "visibility", recVis);
+    }
 
     if (meshOverlayMode === "arv") {
       map.setPaintProperty("meshes-fill", "fill-color", [
@@ -1297,6 +1470,8 @@ export function QuakeMap({
     showHazardMesh,
     showBuildings,
     showEarthquakes,
+    showOfficialShelters,
+    recommendedShelters.length,
     is3D,
     meshOverlayMode,
     selectedWard,
@@ -1797,11 +1972,13 @@ export function QuakeMap({
       ? "通行止め・損壊を設定する道路を地図上でクリックしてください"
       : mapPickMode === "report"
         ? "地図上の建物または道路をクリックして被害場所を指定してください"
-        : mapPickMode === "evacuate"
-          ? "地図上の現在地（出発地点）をクリックすると最寄り避難所へのルートを表示します"
-          : mapPickMode === "rescue"
-            ? "地図上の救助・支援先をクリックすると最寄り拠点からの救援ルートを表示します"
-            : null;
+        : mapPickMode === "shelter_origin"
+          ? "地図上の現在地（出発地点）をクリックするとハザードマップ連動の推奨避難場所Top5を検索します"
+          : mapPickMode === "evacuate"
+            ? "地図上の現在地（出発地点）をクリックすると最寄り避難所へのルートを表示します"
+            : mapPickMode === "rescue"
+              ? "地図上の救助・支援先をクリックすると最寄り拠点からの救援ルートを表示します"
+              : null;
 
   return (
     <div className="relative h-full w-full bg-slate-950">

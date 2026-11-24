@@ -280,6 +280,33 @@ TOOLS = [
             "required": ["origin_id", "destination_id"],
         },
     },
+    {
+        "type": "function",
+        "name": "recommend_evacuation_shelters",
+        "description": "指定地点・行政区について、国土地理院の京都市公式指定緊急避難場所（514件）、J-SHIS地震ハザード・表層地盤ARV、通行止め道路、京都市公式地震ハザードマップURLに基づく避難場所推薦（Top5）を取得します。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ward": {
+                    "type": "string",
+                    "description": "京都市の行政区名（例: '中京区', '伏見区'）",
+                },
+                "lat": {
+                    "type": "number",
+                    "description": "現在地緯度（省略時は区の中心座標）",
+                },
+                "lon": {
+                    "type": "number",
+                    "description": "現在地経度（省略時は区の中心座標）",
+                },
+                "scenario": {
+                    "type": "string",
+                    "description": "災害シナリオ: 'earthquake'（地震）, 'post_quake_fire'（地震後大規模火災・広域避難場所）, 'multi_hazard'（複合災害）",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -330,6 +357,13 @@ def _summarize_tool_call(name: str, args: dict[str, Any], result: Any) -> str:
         if alt.get("reachable"):
             return f"代替経路シミュレーション（訓練用）: {alt.get('distance_km')}km（回避箇所 {len(result.get('blocked_segments', []))}区間）"
         return "代替経路シミュレーション（訓練用）: 回避経路なし"
+    if name == "recommend_evacuation_shelters" and isinstance(result, dict):
+        recs = result.get("recommendations") or []
+        origin_w = (result.get("origin") or {}).get("ward_name", "京都市")
+        if recs:
+            top = recs[0]
+            return f"避難場所推薦（{origin_w}）: 1位 {top.get('name')}（約{top.get('road_distance_km')}km・徒歩{top.get('walk_minutes')}分）"
+        return f"避難場所推薦（{origin_w}）: 候補なし"
     return f"{name} 実行完了"
 
 
@@ -672,6 +706,47 @@ def _execute_tool(
             include_samples=include_samples,
             store=store,
         )
+
+    if name == "recommend_evacuation_shelters":
+        from app.shelter_rec import recommend_shelters
+
+        r_store = _resolve_reports_store(reports_store)
+        ward = args.get("ward")
+        lat = args.get("lat")
+        lon = args.get("lon")
+        scenario = str(args.get("scenario") or "earthquake")
+        if scenario not in {"earthquake", "post_quake_fire", "multi_hazard"}:
+            scenario = "earthquake"
+        reports = r_store.list_reports(
+            include_samples=True,
+            include_resolved=False,
+            limit=300,
+        )
+        res = recommend_shelters(
+            lat=float(lat) if lat is not None else None,
+            lon=float(lon) if lon is not None else None,
+            ward=str(ward) if ward else None,
+            scenario=scenario,
+            reports=reports,
+            include_samples=True,
+            avoid_unverified=True,
+            limit=5,
+            store=store,
+        )
+        return {
+            "scenario": res["scenario"],
+            "scenario_label": res["scenario_label"],
+            "origin": res["origin"],
+            "active_blocked_count": res["active_blocked_count"],
+            "recommendations": [
+                {
+                    k: v
+                    for k, v in item.items()
+                    if k != "nav_route"
+                }
+                for item in res["recommendations"]
+            ],
+        }
 
     return {"error": f"Unknown tool: {name}"}
 

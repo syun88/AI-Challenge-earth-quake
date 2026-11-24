@@ -12,6 +12,7 @@ import {
   MapPin,
   MessageSquareHeart,
   RotateCcw,
+  ShieldCheck,
   Tent,
   X,
 } from "lucide-react";
@@ -49,6 +50,8 @@ interface MapDisplayPopoverProps {
   onToggleRoadClosures: () => void;
   showShelterHubs: boolean;
   onToggleShelterHubs: () => void;
+  showOfficialShelters: boolean;
+  onToggleOfficialShelters: () => void;
   showReports: boolean;
   onToggleReports: () => void;
   showSafetyLayer: boolean;
@@ -85,6 +88,8 @@ export function MapDisplayPopover({
   onToggleRoadClosures,
   showShelterHubs,
   onToggleShelterHubs,
+  showOfficialShelters,
+  onToggleOfficialShelters,
   showReports,
   onToggleReports,
   showSafetyLayer,
@@ -210,6 +215,12 @@ export function MapDisplayPopover({
               onClick={onToggleShelterHubs}
               icon={<Tent className="h-3.5 w-3.5 text-emerald-400" />}
               label="防災・避難拠点"
+            />
+            <LayerChip
+              active={showOfficialShelters}
+              onClick={onToggleOfficialShelters}
+              icon={<ShieldCheck className="h-3.5 w-3.5 text-teal-400" />}
+              label="指定緊急避難場所(514)"
             />
             <LayerChip
               active={showReports}

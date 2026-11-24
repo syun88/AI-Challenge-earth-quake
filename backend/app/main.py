@@ -48,6 +48,7 @@ from app.security import (
     redact_secrets,
     validate_chat_inputs,
 )
+from app.shelter_rec import recommend_shelters, shelter_store
 
 # Load .env from repo root or backend directory
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
@@ -66,6 +67,7 @@ _quake_cache: dict[str, Any] = {"fetched_at": 0.0, "data": []}
 async def lifespan(_: FastAPI):
     board_store.ensure_initialized()
     reports_store.ensure_initialized()
+    shelter_store.ensure_loaded()
     if store.buildings_path.exists() and store.meshes_path.exists():
         store.load()
     yield
@@ -870,6 +872,56 @@ def get_navigation_simulation(
         include_samples=include_samples,
         avoid_unverified=avoid_unverified,
         block_radius_m=block_radius_m,
+        store=store if store.loaded else None,
+    )
+
+
+@app.get("/api/shelters")
+def list_official_shelters(
+    ward: str | None = Query(default=None),
+    disaster_type: str | None = Query(default=None),
+    wide_area_only: bool = Query(default=False),
+) -> dict[str, Any]:
+    shelters = shelter_store.list_shelters(
+        ward=ward,
+        disaster_type=disaster_type,
+        wide_area_only=wide_area_only,
+        store=store if store.loaded else None,
+    )
+    meta = shelter_store.get_meta()
+    return {
+        **meta,
+        "returned": len(shelters),
+        "shelters": shelters,
+    }
+
+
+@app.get("/api/shelters/recommend")
+def get_shelter_recommendations(
+    lat: float | None = Query(default=None, ge=34.5, le=35.5),
+    lon: float | None = Query(default=None, ge=135.0, le=136.5),
+    ward: str | None = Query(default=None),
+    scenario: str = Query(default="earthquake"),
+    include_samples: bool = Query(default=True),
+    avoid_unverified: bool = Query(default=True),
+    block_radius_m: float = Query(default=420.0, ge=100.0, le=1500.0),
+    limit: int = Query(default=5, ge=1, le=10),
+) -> dict[str, Any]:
+    reports = reports_store.list_reports(
+        include_samples=include_samples,
+        include_resolved=False,
+        limit=300,
+    )
+    return recommend_shelters(
+        lat=lat,
+        lon=lon,
+        ward=ward,
+        scenario=scenario,
+        reports=reports,
+        include_samples=include_samples,
+        avoid_unverified=avoid_unverified,
+        block_radius_m=block_radius_m,
+        limit=limit,
         store=store if store.loaded else None,
     )
 

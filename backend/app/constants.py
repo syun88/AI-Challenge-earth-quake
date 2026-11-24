@@ -159,12 +159,21 @@ DATA_SOURCES = [
     },
     {
         "id": "gsi",
-        "name": "国土地理院 地理院タイル（淡色地図）",
+        "name": "国土地理院 地理院タイル（淡色地図・指定緊急避難場所）",
         "provider": "国土地理院（GSI）",
         "reference_year": "最新",
         "license": "国土地理院コンテンツ利用規約（出典明記）",
         "url": "https://maps.gsi.go.jp/development/ichiran.html",
-        "notes": "背景地図タイルとして使用しています。",
+        "notes": "背景地図タイルおよび京都市の指定緊急避難場所（skhb01〜07）データを使用しています。",
+    },
+    {
+        "id": "kyoto_hazard",
+        "name": "京都市防災ポータルサイト 地震ハザードマップ",
+        "provider": "京都市（行財政局防災危機管理室）",
+        "reference_year": "令和8年（2026年）公開版",
+        "license": "京都市防災ポータルサイト公式リンク参照",
+        "url": "https://www.bousai.city.kyoto.lg.jp/0000000196.html",
+        "notes": "各行政区の地震ハザードマップ（PDF）および京都市Web版ハザードマップへの公式案内として参照しています。",
     },
 ]
 
@@ -194,3 +203,58 @@ OFFICIAL_RETROFIT_PROGRAMS = [
         "url": "https://www.city.kyoto.lg.jp/tokei/soshiki/9-2-4-0-0.html",
     },
 ]
+
+KYOTO_HAZARD_MAP_PORTAL = {
+    "earthquake_page_url": "https://www.bousai.city.kyoto.lg.jp/0000000196.html",
+    "web_hazard_map_url": "https://www.bousaimap.city.kyoto.lg.jp/Top",
+    "portal_home_url": "https://www.bousai.city.kyoto.lg.jp/",
+}
+
+KYOTO_WARD_HAZARD_MAPS: dict[str, dict[str, str]] = {
+    "北区": {
+        "map_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/01EA_kita_map_jishin_260210_web.pdf",
+        "info_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/01EB_kita_joho_jishin_260616_web.pdf",
+    },
+    "上京区": {
+        "map_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/02EA_kamigyo_map_jishin_260210_web.pdf",
+        "info_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/02EB_kamigyo_joho_jishin_260616_web.pdf",
+    },
+    "左京区": {
+        "map_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/03EA_sakyou_map_jishin_260210_web.pdf",
+        "info_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/03EB_sakyo_joho_jishin_260616_web.pdf",
+    },
+    "中京区": {
+        "map_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/04EA_nakagyo_map_jishin_260210_web.pdf",
+        "info_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/04EB_nakagyo_joho_jishin_260616_web.pdf",
+    },
+    "東山区": {
+        "map_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/05EA_higashi_map_jishin_260210_web.pdf",
+        "info_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/05EB_higashiyama_joho_jishin_260616_web.pdf",
+    },
+    "山科区": {
+        "map_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/06EA_yamashina_map_jishin_260210_web.pdf",
+        "info_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/06EB_yamashina_joho_jishin_260616_web.pdf",
+    },
+    "下京区": {
+        "map_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/07EA_shimogyo_map_jishin_260210_web.pdf",
+        "info_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/07EB_shimogyo_joho_jishin_260616_web.pdf",
+    },
+    "南区": {
+        "map_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/08EA_minami_map_jishin_260210_web.pdf",
+        "info_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/08EB_minami_joho_jishin_260616_web.pdf",
+    },
+    "右京区": {
+        "map_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/09_1EA_ukyo_map_jishin_260210_web.pdf",
+        "info_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/09_1EB_ukyo_joho_jishin_260616_web.pdf",
+        "keihoku_map_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/09_2EA_keihoku_map_jishin_260210_web.pdf",
+        "keihoku_info_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/09_2EB_keihoku_joho_jishin_260616_web.pdf",
+    },
+    "西京区": {
+        "map_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/10EA_nishikyou_map_jishin_260210_web.pdf",
+        "info_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/10EB_nishikyo_joho_jishin_260616_web.pdf",
+    },
+    "伏見区": {
+        "map_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/11EA_fushimi_map_jishin_260210_web.pdf",
+        "info_pdf": "https://www.bousai.city.kyoto.lg.jp/cmsfiles/contents/0000000/196/11EB_fushimi_joho_jishin_260616_web.pdf",
+    },
+}
