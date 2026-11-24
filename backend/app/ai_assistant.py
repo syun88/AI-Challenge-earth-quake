@@ -321,6 +321,24 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_r8_seismic_unlisted_priority",
+        "description": "京都市『市有建築物耐震性能リスト（R8_list.pdf・令和8年4月1日時点）』の掲載状況と、この表に載っていない一般・民有・未掲載建物（特に1981年以前旧耐震・建築年不明）を優先的に耐震診断・耐震改修すべき対象・理由・区別の優先件数を取得する。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ward": {
+                    "type": "string",
+                    "description": "対象区名（例: '伏見区'）または 'all'（京都市全域）",
+                },
+                "facility_name": {
+                    "type": "string",
+                    "description": "施設名を指定した場合、R8_list.pdf に掲載されているか照合し、未掲載なら優先耐震確認を提案する（任意）",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -381,6 +399,8 @@ def _summarize_tool_call(name: str, args: dict[str, Any], result: Any) -> str:
     if name == "get_kyoto_disaster_updates_and_history" and isinstance(result, dict):
         c = result.get("counts") or {}
         return f"防災アップデート・地震履歴: 地震{len(result.get('earthquakes', []))}件 / 市更新{len(result.get('municipality_updates', []))}件（全期間: 地震{c.get('total_earthquakes', 0)}・市{c.get('total_municipality_updates', 0)}）"
+    if name == "get_r8_seismic_unlisted_priority" and isinstance(result, dict):
+        return f"R8市有耐震リスト照合（{result.get('ward', '京都市全域')}）: 表掲載 {result.get('r8_listed_count', 0)}棟 / 表未掲載(旧耐震+不明) {result.get('unlisted_priority_buildings', 0):,}棟を優先耐震対象として抽出"
     return f"{name} 実行完了"
 
 
@@ -780,6 +800,38 @@ def _execute_tool(
             "earthquakes": res["earthquakes"][:25],
             "municipality_updates": res["municipality_updates"][:25],
         }
+
+    if name == "get_r8_seismic_unlisted_priority":
+        from app.r8_seismic import r8_seismic_store
+
+        ward = str(args.get("ward") or "all")
+        facility_name = str(args.get("facility_name") or "").strip()
+        r8_summary = r8_seismic_store.get_summary_and_list(ward=ward, limit=15)
+        stats = store.get_stats(ward=ward)
+        unlisted_priority = int(stats.get("pre_1981_count", 0)) + int(stats.get("unknown_year_count", 0))
+        out: dict[str, Any] = {
+            "ward": "京都市全域" if ward == "all" else ward,
+            "r8_pdf_url": r8_summary["pdf_url"],
+            "r8_page_url": r8_summary["page_url"],
+            "r8_listed_count": r8_summary["filtered_count"] if ward != "all" else r8_summary["total_listed"],
+            "r8_grade_counts": r8_summary["grade_counts"],
+            "plateau_total_buildings": stats.get("total_buildings", 0),
+            "unlisted_pre_1981_count": stats.get("pre_1981_count", 0),
+            "unlisted_unknown_year_count": stats.get("unknown_year_count", 0),
+            "unlisted_priority_buildings": unlisted_priority,
+            "unlisted_policy": r8_summary["unlisted_policy"],
+            "recommendation_summary": (
+                f"R8市有耐震リスト掲載は{r8_summary['total_listed']}棟のみであり、"
+                f"それ以外の未掲載建物（特に旧耐震 {stats.get('pre_1981_count', 0):,}棟・建築年不明 {stats.get('unknown_year_count', 0):,}棟）を"
+                "優先的に耐震診断・耐震改修するよう強く示唆します。"
+            ),
+        }
+        if facility_name:
+            out["facility_lookup"] = r8_seismic_store.match_facility_name(
+                facility_name,
+                ward=None if ward == "all" else ward,
+            )
+        return out
 
     return {"error": f"Unknown tool: {name}"}
 

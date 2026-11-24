@@ -30,6 +30,7 @@ from app.constants import (
 from app.data_store import QuakeLensDataStore
 from app.disaster_updates import updates_store
 from app.export_utils import generate_disaster_csv, generate_disaster_xlsx
+from app.r8_seismic import r8_seismic_store
 from app.reports_store import DamageReportStore
 from app.route_sim import (
     _evaluate_network,
@@ -70,6 +71,7 @@ async def lifespan(_: FastAPI):
     reports_store.ensure_initialized()
     shelter_store.ensure_loaded()
     updates_store.ensure_loaded()
+    r8_seismic_store.ensure_loaded()
     if store.buildings_path.exists() and store.meshes_path.exists():
         store.load()
     yield
@@ -969,6 +971,17 @@ def get_disaster_updates(
 async def refresh_disaster_updates() -> dict[str, Any]:
     """Live-fetch updates from Yahoo Kyoto Earthquake list (?e=511), JMA JSON, and Kyoto City Bousai Portal."""
     return await updates_store.refresh_live(persist=True)
+
+
+@app.get("/api/r8-seismic")
+def get_r8_seismic_list(
+    ward: str = Query(default="all"),
+    grade: str = Query(default="all"),
+    q: str = Query(default=""),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, Any]:
+    """Return Kyoto City R8 Municipal Building Seismic List (R8_list.pdf) and guidance for unlisted buildings."""
+    return r8_seismic_store.get_summary_and_list(ward=ward, grade=grade, q=q, limit=limit)
 
 
 class ChatRequest(BaseModel):

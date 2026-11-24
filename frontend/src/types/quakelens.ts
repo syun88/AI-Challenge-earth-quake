@@ -181,6 +181,7 @@ export interface BuildingDetail {
   centroid_lat: number;
   hazard_disclaimer: string;
   official_programs: OfficialProgram[];
+  r8_seismic_assessment?: R8BuildingAssessment;
 }
 
 export interface MeshDetail {
@@ -210,6 +211,8 @@ export interface MeshDetail {
   centroid_lon: number;
   centroid_lat: number;
   official_programs: OfficialProgram[];
+  r8_unlisted_priority_count?: number;
+  r8_ward_listed_count?: number;
 }
 
 export interface EarthquakeEvent {
@@ -647,6 +650,7 @@ export interface OfficialShelter {
   disaster_labels: string[];
   is_wide_area: boolean;
   hazard?: ShelterHazardContext | null;
+  r8_seismic?: R8FacilityMatch;
 }
 
 export interface OfficialSheltersListResponse {
@@ -763,4 +767,55 @@ export interface DisasterUpdatesResponse {
   years_available: number[];
   earthquakes: KyotoEarthquakeArchiveItem[];
   municipality_updates: MunicipalityUpdateItem[];
+}
+
+export interface R8SeismicRecord {
+  id: string;
+  page: number;
+  role_marks: number;
+  name: string;
+  ward: string;
+  structure: string;
+  storeys: number | null;
+  area_m2: number | null;
+  era: string;
+  year_built: number | null;
+  seismic_grade: "新耐震" | "Ⅲ" | "Ⅱ" | "Ⅰ" | "未診断";
+  needs_retrofit: boolean;
+}
+
+export interface R8BuildingAssessment {
+  listed_in_r8: boolean;
+  status_label: string;
+  priority_tier: "critical" | "high" | "standard" | "listed_needs_work" | "listed_ok";
+  priority_badge: string;
+  recommendation: string;
+  r8_pdf_url: string;
+  r8_page_url: string;
+  matched_r8_candidates: R8SeismicRecord[];
+}
+
+export interface R8FacilityMatch {
+  listed_in_r8: boolean;
+  matched_entries: R8SeismicRecord[];
+  seismic_grade: string | null;
+  priority_note: string;
+}
+
+export interface R8SeismicListResponse {
+  source: string;
+  pdf_url: string;
+  page_url: string;
+  as_of: string;
+  total_listed: number;
+  filtered_count: number;
+  grade_counts: Record<string, number>;
+  by_ward: Array<{
+    ward: string;
+    total: number;
+    safe: number;
+    needs_retrofit: number;
+  }>;
+  records: R8SeismicRecord[];
+  unlisted_policy: string;
 }

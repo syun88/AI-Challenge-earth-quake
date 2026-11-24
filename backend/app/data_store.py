@@ -13,6 +13,7 @@ import geopandas as gpd
 import pandas as pd
 
 from app.mvt import encode_buildings_mvt
+from app.r8_seismic import r8_seismic_store
 
 from app.constants import (
     AGE_CATEGORY_LABELS,
@@ -500,6 +501,7 @@ class QuakeLensDataStore:
             "centroid_lat": round(float(centroid.y), 6),
             "hazard_disclaimer": "※J-SHISハザード値は250mメッシュにおける今後30年間に一定の揺れに見舞われる確率であり、この建物個別の倒壊確率や耐震性能を示すものではありません。",
             "official_programs": OFFICIAL_RETROFIT_PROGRAMS,
+            "r8_seismic_assessment": r8_seismic_store.assess_building(row.to_dict()),
         }
 
     def get_mesh_detail(self, meshcode: str) -> dict[str, Any] | None:
@@ -535,4 +537,6 @@ class QuakeLensDataStore:
             "centroid_lon": float(r["centroid_lon"]),
             "centroid_lat": float(r["centroid_lat"]),
             "official_programs": OFFICIAL_RETROFIT_PROGRAMS,
+            "r8_unlisted_priority_count": int(r["pre_1981_count"]) + int(r["unknown_year_count"]),
+            "r8_ward_listed_count": r8_seismic_store.get_summary_and_list(ward=r["ward_name"], limit=1)["filtered_count"],
         }

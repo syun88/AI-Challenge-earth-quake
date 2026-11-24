@@ -20,6 +20,7 @@ import {
   NetworkStatusResponse,
   OfficialSheltersListResponse,
   PriorityArea,
+  R8SeismicListResponse,
   ReportCategory,
   ReportSeverity,
   RoadSelectionResult,
@@ -695,4 +696,19 @@ export function refreshDisasterUpdates() {
   return fetchJson<DisasterUpdatesResponse>("/api/updates/disaster/refresh", {
     method: "POST",
   });
+}
+
+export function getR8SeismicList(params?: {
+  ward?: string;
+  grade?: string;
+  q?: string;
+  limit?: number;
+}) {
+  const sp = new URLSearchParams();
+  if (params?.ward && params.ward !== "all") sp.set("ward", params.ward);
+  if (params?.grade && params.grade !== "all") sp.set("grade", params.grade);
+  if (params?.q) sp.set("q", params.q);
+  if (params?.limit != null) sp.set("limit", String(params.limit));
+  const qs = sp.toString();
+  return fetchJson<R8SeismicListResponse>(`/api/r8-seismic${qs ? `?${qs}` : ""}`);
 }

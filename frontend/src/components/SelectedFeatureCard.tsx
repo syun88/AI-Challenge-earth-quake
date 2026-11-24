@@ -396,6 +396,18 @@ export function SelectedFeatureCard({
                     : "—"}
                 </div>
               )}
+              {selectedOfficialShelter.r8_seismic && (
+                <div
+                  data-testid="shelter-r8-status"
+                  className={`mt-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] leading-snug ${
+                    selectedOfficialShelter.r8_seismic.listed_in_r8
+                      ? "border-emerald-500/40 bg-emerald-950/35 text-emerald-200"
+                      : "border-amber-500/45 bg-amber-950/35 text-amber-200"
+                  }`}
+                >
+                  {selectedOfficialShelter.r8_seismic.priority_note}
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-1.5">
               <button
@@ -481,6 +493,38 @@ export function SelectedFeatureCard({
               </span>
             </div>
           </div>
+
+          {selectedBuilding.r8_seismic_assessment && (
+            <div
+              data-testid="building-r8-priority-box"
+              className={`space-y-1 rounded-xl border p-2.5 text-[11px] ${
+                selectedBuilding.r8_seismic_assessment.priority_tier === "critical" ||
+                selectedBuilding.r8_seismic_assessment.priority_tier === "listed_needs_work"
+                  ? "border-rose-500/60 bg-rose-950/40 text-rose-100"
+                  : selectedBuilding.r8_seismic_assessment.priority_tier === "high"
+                    ? "border-amber-500/60 bg-amber-950/35 text-amber-100"
+                    : selectedBuilding.r8_seismic_assessment.listed_in_r8
+                      ? "border-emerald-500/50 bg-emerald-950/30 text-emerald-100"
+                      : "border-cyan-500/45 bg-cyan-950/30 text-cyan-100"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-1.5 font-bold">
+                <span>{selectedBuilding.r8_seismic_assessment.priority_badge}</span>
+                <a
+                  href={selectedBuilding.r8_seismic_assessment.r8_pdf_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex shrink-0 items-center gap-0.5 underline opacity-90 hover:opacity-100"
+                >
+                  <span>R8_list.pdf</span>
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+              <p className="text-[10px] leading-relaxed opacity-95">
+                {selectedBuilding.r8_seismic_assessment.recommendation}
+              </p>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-1.5">
             <button
@@ -592,6 +636,14 @@ export function SelectedFeatureCard({
                 </strong>
               </div>
             </div>
+            {selectedMesh.r8_unlisted_priority_count != null && (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-950/25 px-2.5 py-1.5 text-[10px] text-amber-200">
+                R8耐震リスト未掲載の優先耐震候補（1981以前＋不明）:{" "}
+                <strong className="font-mono">
+                  {selectedMesh.r8_unlisted_priority_count.toLocaleString("ja-JP")}棟
+                </strong>
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-1.5">
               <button
                 type="button"

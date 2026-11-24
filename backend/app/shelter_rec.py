@@ -24,6 +24,7 @@ from app.constants import (
     ROUTE_SIMULATION_DISCLAIMER,
     WARD_CENTERS,
 )
+from app.r8_seismic import r8_seismic_store
 from app.route_sim import _ROAD_NET, _dist_km, _evaluate_network, _infer_ward_mesh
 
 SHELTERS_PATH = (
@@ -85,6 +86,7 @@ class OfficialShelterStore:
             item = dict(s)
             if store is not None and getattr(store, "loaded", False):
                 item["hazard"] = _lookup_mesh_hazard(s["lat"], s["lon"], store)
+            item["r8_seismic"] = r8_seismic_store.match_facility_name(s["name"], ward=s["ward"])
             out.append(item)
         return out
 
@@ -331,6 +333,10 @@ def recommend_shelters(
         if not reachable:
             reasons.append("近傍通行止めにより迂回困難")
 
+        r8_match = r8_seismic_store.match_facility_name(s["name"], ward=s["ward"])
+        if r8_match["listed_in_r8"]:
+            reasons.append(f"R8市有耐震リスト掲載（区分: {r8_match['seismic_grade']}）")
+
         composite = eff_dist + penalty
 
         # Construct route simulation compatible object for direct map visualization
@@ -370,6 +376,7 @@ def recommend_shelters(
             composite,
             {
                 **s,
+                "r8_seismic": r8_match,
                 "crow_fly_km": crow_fly_km,
                 "road_distance_km": round(road_dist_km, 2) if road_dist_km is not None else None,
                 "baseline_distance_km": round(base_dist_km, 2) if base_dist_km is not None else None,

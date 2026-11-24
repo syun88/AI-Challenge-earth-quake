@@ -844,3 +844,51 @@ def test_disaster_updates_recent_and_archive(isolated_env, monkeypatch: pytest.M
     )
     assert t_res["period"] == "recent_2y"
     assert len(t_res["earthquakes"]) == 1
+
+
+def test_r8_seismic_list_and_unlisted_priority(isolated_env) -> None:
+    client, s_store, _, _ = isolated_env
+
+    # 1) R8 list endpoint exposes 949 municipal wings + unlisted policy
+    r_list = client.get("/api/r8-seismic")
+    assert r_list.status_code == 200
+    r8_data = r_list.json()
+    assert r8_data["total_listed"] >= 900
+    assert "R8_list.pdf" in r8_data["pdf_url"]
+    assert r8_data["grade_counts"]["新耐震"] > 0
+
+    # Searching a listed municipal building matches, whereas unlisted private building returns 0
+    r_hit = client.get("/api/r8-seismic?q=京都市役所")
+    assert r_hit.status_code == 200
+    assert r_hit.json()["filtered_count"] >= 1
+
+    r_miss = client.get("/api/r8-seismic?q=未掲載民間テスト建物")
+    assert r_miss.status_code == 200
+    assert r_miss.json()["filtered_count"] == 0
+
+    # 2) Pre-1981 high-hazard residential building NOT in R8_list.pdf gets critical retrofit priority
+    r_b1 = client.get("/api/buildings/26100-bldg-1001")
+    assert r_b1.status_code == 200
+    assess1 = r_b1.json()["r8_seismic_assessment"]
+    assert assess1["listed_in_r8"] is False
+    assert assess1["priority_tier"] == "critical"
+    assert "R8_list.pdf" in assess1["r8_pdf_url"]
+    assert "未掲載" in assess1["priority_badge"]
+
+    # Post-2001 residential building NOT in R8_list.pdf still clearly marked unlisted
+    r_b2 = client.get("/api/buildings/26100-bldg-1002")
+    assert r_b2.status_code == 200
+    assess2 = r_b2.json()["r8_seismic_assessment"]
+    assert assess2["listed_in_r8"] is False
+    assert assess2["priority_tier"] == "standard"
+
+    # 3) AI tool reports unlisted priority counts & facility check
+    from app import ai_assistant
+
+    t_r8 = ai_assistant._execute_tool(
+        s_store,
+        "get_r8_seismic_unlisted_priority",
+        {"ward": "伏見区", "facility_name": "未掲載民間住宅"},
+    )
+    assert t_r8["unlisted_pre_1981_count"] >= 1
+    assert t_r8["facility_lookup"]["listed_in_r8"] is False
