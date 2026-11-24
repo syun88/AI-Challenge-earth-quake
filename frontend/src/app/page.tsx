@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { AiAssistantPanel } from "@/components/AiAssistantPanel";
+import { MochimamoLive2D } from "@/components/MochimamoLive2D";
 import { DamageReportPanel } from "@/components/DamageReportPanel";
 import { DisasterBoard } from "@/components/DisasterBoard";
 import { FloatingHeader, WorkspacePanel } from "@/components/FloatingHeader";
@@ -1756,6 +1757,39 @@ export default function HomePage() {
           }}
         />
       )}
+
+      {/* Floating Live2D ChatBot Launcher when AI drawer & bottom-right feature card are closed */}
+      {activePanel !== "ai" &&
+        mapPickMode === "none" &&
+        roadPaintTool === "none" &&
+        !selectedBuilding &&
+        !selectedMesh &&
+        !selectedReport &&
+        !selectedBlockedRoad &&
+        !selectedShelterHub &&
+        !selectedOfficialShelter &&
+        !routeResult && (
+          <button
+            type="button"
+            data-testid="mochimamo-launcher"
+            onClick={() => setActivePanel("ai")}
+            title="もちまも（防災AIチャット）を開く"
+            className="group pointer-events-auto fixed bottom-16 right-3 z-20 hidden flex-col items-center gap-1 rounded-2xl border border-cyan-500/40 bg-slate-900/90 p-2 shadow-2xl backdrop-blur-xl transition hover:border-cyan-400/80 hover:bg-slate-900 sm:flex lg:bottom-4 lg:right-14"
+          >
+            <div className="h-[19vh] min-h-[136px] max-h-[192px] w-[19vh] min-w-[136px] max-w-[192px] overflow-hidden rounded-xl border border-slate-800/80 bg-slate-950/70">
+              <MochimamoLive2D mood="idle" interactive={false} trackPointer className="h-full w-full" />
+            </div>
+            <div className="flex items-center gap-1.5 px-1">
+              <span className="text-[11px] font-extrabold text-white">もちまも</span>
+              <span className="rounded bg-cyan-500/20 px-1 py-0.5 text-[9px] font-semibold text-cyan-200">
+                Live2D
+              </span>
+              <span className="text-[10px] text-slate-300 group-hover:text-cyan-200">
+                防災AIに質問
+              </span>
+            </div>
+          </button>
+        )}
 
       {/* Sources Modal */}
       <SourcesModal open={sourcesOpen} onClose={() => setSourcesOpen(false)} metadata={metadata} />

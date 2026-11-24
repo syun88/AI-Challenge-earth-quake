@@ -22,6 +22,8 @@ import {
 } from "lucide-react";
 import { API_BASE, sendChatMessage, streamChatMessage } from "@/lib/api";
 import { MarkdownLite } from "@/components/MarkdownLite";
+import { MochimamoChatStage } from "@/components/MochimamoChatStage";
+import { MochimamoMood } from "@/components/MochimamoLive2D";
 import {
   AgeCategory,
   AiProtectionStatus,
@@ -68,6 +70,7 @@ interface AiAssistantPanelProps {
 }
 
 const DEMO_PROMPTS = [
+  "中京区の安全な指定緊急避難場所を教えて",
   "伏見区の現在の被害報告と建物リスクをまとめて",
   "道路損壊・通行止めが報告されている地域は？",
   "支援が必要という報告を地域別に整理して",
@@ -81,7 +84,64 @@ function buildWelcomeText(totalBuildings?: number | null): string {
     totalBuildings && totalBuildings > 0
       ? `（${totalBuildings.toLocaleString("ja-JP")}棟）`
       : "";
-  return `**QuakeLens Japan 統合防災AIアシスタント**です。京都市のPLATEAU建物データ${countLabel}・J-SHIS 2024ハザードに加え、**災害用伝言板（安否）**と**被害状況報告**を **Function Calling** で横断分析します。\n\n※ 市民投稿は「未確認情報」、訓練データは「訓練サンプル」として区別して集計し、CSV／Excel出力にも対応します。`;
+  return `**QuakeLens Japan 統合防災AIアシスタント「もちまも」**です。京都市のPLATEAU建物データ${countLabel}・J-SHIS 2024ハザード・**指定緊急避難場所（514件）**に加え、**災害用伝言板（安否）**と**被害状況報告**を **Function Calling** で横断分析します。\n\n※ 市民投稿は「未確認情報」、訓練データは「訓練サンプル」として区別して集計し、CSV／Excel出力にも対応します。`;
+}
+
+function deriveMascotState(params: {
+  sending: boolean;
+  justCompleted: boolean;
+  inputText: string;
+  selectedWard: string;
+  lastAssistant?: ChatTurn;
+}): { mood: MochimamoMood; statusText: string } {
+  const { sending, justCompleted, inputText, selectedWard, lastAssistant } = params;
+  if (sending) {
+    if (lastAssistant?.streaming && lastAssistant.content.trim().length > 0) {
+      return {
+        mood: "speaking",
+        statusText: "実データと根拠を整理してお話ししています…",
+      };
+    }
+    return {
+      mood: "thinking",
+      statusText: lastAssistant?.statusMessage || "京都市の防災データを照会・分析中…",
+    };
+  }
+  if (lastAssistant?.error) {
+    return {
+      mood: "alert",
+      statusText: "通信または設定の確認が必要です。メッセージをご確認ください。",
+    };
+  }
+  if (lastAssistant?.verification?.contains_unverified_reports && messagesHaveResponse(lastAssistant)) {
+    return {
+      mood: "alert",
+      statusText: "未確認の市民報告を含む集計です。参考情報としてご確認ください。",
+    };
+  }
+  if (justCompleted) {
+    return {
+      mood: "happy",
+      statusText: "分析が完了しました！地図ボタンやCSV出力もご活用ください。",
+    };
+  }
+  if (inputText.trim().length > 0) {
+    return {
+      mood: "listening",
+      statusText: "ご質問を聞いています。送信ボタンを押してくださいね！",
+    };
+  }
+  return {
+    mood: "idle",
+    statusText:
+      selectedWard === "all"
+        ? "京都市全域（11区）を見守り中。下の質問チップからすぐ試せます！"
+        : `${selectedWard} を注目中！「現在エリアをAI診断」でもすぐ分析できます。`,
+  };
+}
+
+function messagesHaveResponse(turn?: ChatTurn): boolean {
+  return Boolean(turn && turn.id !== "welcome" && !turn.streaming && turn.content.trim().length > 0);
 }
 
 const INITIAL_MESSAGE: ChatTurn = {
@@ -116,13 +176,37 @@ export function AiAssistantPanel({
   const [tempApiKey, setTempApiKey] = useState("");
   const [accessCode, setAccessCode] = useState("");
   const [showKeyBox, setShowKeyBox] = useState(false);
+  const [showPrompts, setShowPrompts] = useState(false);
   const [expandedTraces, setExpandedTraces] = useState<Record<string, boolean>>({});
+  const [justCompleted, setJustCompleted] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const completedTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    return () => {
+      if (completedTimerRef.current !== null) {
+        window.clearTimeout(completedTimerRef.current);
+      }
+    };
+  }, []);
+
+  const triggerHappyCompletion = useCallback(() => {
+    if (completedTimerRef.current !== null) {
+      window.clearTimeout(completedTimerRef.current);
+    }
+    setJustCompleted(true);
+    completedTimerRef.current = window.setTimeout(() => {
+      setJustCompleted(false);
+      completedTimerRef.current = null;
+    }, 3600);
+  }, []);
+
+  useEffect(() => {
+    if (messages.length > 1 || sending) {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages, sending]);
 
   const handleReset = () => {
@@ -155,6 +239,7 @@ export function AiAssistantPanel({
       };
 
       setMessages((prev) => [...prev, userTurn, assistantPlaceholder]);
+      setJustCompleted(false);
       setSending(true);
 
       const controller = new AbortController();
@@ -289,6 +374,7 @@ export function AiAssistantPanel({
 
         if (receivedSuccessDone) {
           onRefreshHealth?.();
+          triggerHappyCompletion();
         } else if (!receivedTerminal && !controller.signal.aborted) {
           throw new Error("ストリーミング応答が完了前に終了しました");
         }
@@ -355,6 +441,7 @@ export function AiAssistantPanel({
                 setInteractionId(res.interaction_id);
               }
               onRefreshHealth?.();
+              triggerHappyCompletion();
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
@@ -420,6 +507,7 @@ export function AiAssistantPanel({
       tempApiKey,
       accessCode,
       onRefreshHealth,
+      triggerHappyCompletion,
     ]
   );
 
@@ -460,30 +548,54 @@ export function AiAssistantPanel({
   const accessCodeRequired = Boolean(aiProtection?.access_code_required) && !hasOwnKey;
   const maxMessageChars = aiProtection?.max_message_chars ?? 1200;
 
+  let lastAssistant: ChatTurn | undefined;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant") {
+      lastAssistant = messages[i];
+      break;
+    }
+  }
+  const mascotState = deriveMascotState({
+    sending,
+    justCompleted,
+    inputText: input,
+    selectedWard,
+    lastAssistant,
+  });
+  const speechPulseKey = lastAssistant?.streaming ? lastAssistant.content.length : 0;
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col p-3">
+      {/* Live2D Mascot Stage synced with ChatBot state */}
+      <MochimamoChatStage
+        mood={mascotState.mood}
+        statusText={mascotState.statusText}
+        speechPulseKey={speechPulseKey}
+        selectedWard={selectedWard}
+      />
+
       {/* Top AI Controls & Context Strip */}
-      <div className="mb-2.5 space-y-2 rounded-xl border border-slate-800 bg-slate-950/80 p-2.5">
-        <div className="flex flex-wrap items-center justify-between gap-1.5">
-          <div className="flex items-center gap-1.5">
+      <div className="mb-2 space-y-1.5 rounded-xl border border-slate-800 bg-slate-950/80 p-2">
+        <div className="flex items-center justify-between gap-1">
+          <div className="flex min-w-0 items-center gap-1">
             <select
               value={premiumAllowed ? model : "gemini-3.5-flash-lite"}
               onChange={(e) => setModel(e.target.value as AiModelId)}
               aria-label="Geminiモデル選択"
-              className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] font-medium text-emerald-300 focus:border-emerald-500 focus:outline-none"
+              className="max-w-[144px] truncate rounded-md border border-slate-700 bg-slate-900 px-1.5 py-1 text-[10px] font-medium text-emerald-300 focus:border-emerald-500 focus:outline-none"
             >
-              <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite（高速・標準）</option>
+              <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</option>
               <option value="gemini-4-hydrogen" disabled={!premiumAllowed}>
-                Gemini 4 Hydrogen{!premiumAllowed ? "（要個人APIキー）" : "（高精度・じっくり）"}
+                Gemini 4 Hydrogen{!premiumAllowed ? "（要キー）" : ""}
               </option>
               <option value="gemini-4-argon" disabled={!premiumAllowed}>
-                Gemini 4 Argon{!premiumAllowed ? "（要個人APIキー）" : "（深層推論）"}
+                Gemini 4 Argon{!premiumAllowed ? "（要キー）" : ""}
               </option>
             </select>
             <button
               type="button"
               onClick={() => setShowKeyBox((v) => !v)}
-              className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium transition ${
+              className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-1.5 py-1 text-[10px] font-medium transition ${
                 !hasAnyKey || (accessCodeRequired && !accessCode.trim())
                   ? "border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
                   : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600"
@@ -491,19 +603,19 @@ export function AiAssistantPanel({
               title="個人APIキー（BYOK）やアクセスコードを設定"
             >
               <KeyRound className="h-3 w-3" />
-              {hasOwnKey ? "個人キー使用中" : accessCodeRequired ? "認証/キー設定" : "APIキー設定"}
+              {hasOwnKey ? "個人キー" : accessCodeRequired ? "認証/キー" : "キー"}
             </button>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             <button
               type="button"
               disabled={sending}
               onClick={handleBriefing}
-              className="inline-flex items-center gap-1 rounded-md bg-emerald-600/90 px-2 py-1 text-[10px] font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-emerald-600/90 px-2 py-1 text-[10px] font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
             >
               <Compass className="h-3 w-3" />
-              現在エリアをAI診断
+              現在エリア診断
             </button>
             <button
               type="button"
@@ -518,7 +630,7 @@ export function AiAssistantPanel({
 
         {/* Active Map Context & API Protection Pills */}
         <div className="flex flex-wrap items-center gap-1 text-[10px] text-slate-400">
-          <span>参照コンテキスト:</span>
+          <span>参照:</span>
           <span className="rounded bg-slate-800 px-1.5 py-0.5 text-sky-300">
             {selectedWard === "all" ? "京都市全域" : selectedWard}
           </span>
@@ -587,23 +699,8 @@ export function AiAssistantPanel({
         )}
       </div>
 
-      {/* Suggested question chips */}
-      <div className="mb-2.5 flex flex-wrap gap-1">
-        {DEMO_PROMPTS.map((p) => (
-          <button
-            key={p}
-            type="button"
-            disabled={sending}
-            onClick={() => handleSend(p)}
-            className="rounded-full border border-slate-700/80 bg-slate-950/80 px-2.5 py-1 text-left text-[10px] text-slate-300 transition hover:border-emerald-500/50 hover:text-emerald-200 disabled:opacity-50"
-          >
-            {p}
-          </button>
-        ))}
-      </div>
-
       {/* Chat stream */}
-      <div className="flex-1 space-y-3 overflow-y-auto pr-1">
+      <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto pr-1">
         {messages.map((m) => {
           const traceOpen = Boolean(expandedTraces[m.id]);
           return (
@@ -828,6 +925,41 @@ export function AiAssistantPanel({
             </div>
           );
         })}
+
+        {/* Suggested starter prompts shown inside scroll stream when idle or toggled */}
+        {(messages.length === 1 || showPrompts) && (
+          <div className="rounded-xl border border-slate-800/80 bg-slate-950/60 p-2.5">
+            <div className="mb-1.5 flex items-center justify-between text-[10px] font-semibold text-slate-400">
+              <span>質問例（クリックで送信）</span>
+              {messages.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setShowPrompts(false)}
+                  className="text-slate-400 hover:text-slate-200"
+                >
+                  閉じる
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {DEMO_PROMPTS.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  disabled={sending}
+                  onClick={() => {
+                    setShowPrompts(false);
+                    void handleSend(p);
+                  }}
+                  className="rounded-full border border-slate-700/80 bg-slate-900/90 px-2.5 py-1 text-left text-[10px] text-slate-200 transition hover:border-cyan-500/60 hover:bg-cyan-500/10 hover:text-cyan-100 disabled:opacity-50"
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div ref={chatEndRef} />
       </div>
 
@@ -837,21 +969,35 @@ export function AiAssistantPanel({
           e.preventDefault();
           handleSend();
         }}
-        className="mt-2.5 flex gap-2 border-t border-slate-800 pt-2.5"
+        className="mt-2 flex gap-1.5 border-t border-slate-800 pt-2"
       >
+        {messages.length > 1 && (
+          <button
+            type="button"
+            onClick={() => setShowPrompts((v) => !v)}
+            title="質問例を表示"
+            className={`shrink-0 rounded-lg border px-2 py-2 text-[10px] font-medium transition ${
+              showPrompts
+                ? "border-cyan-500/50 bg-cyan-500/15 text-cyan-200"
+                : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600 hover:text-white"
+            }`}
+          >
+            質問例
+          </button>
+        )}
         <input
           type="text"
           value={input}
           maxLength={maxMessageChars}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={`京都市の建物・ハザードについて質問（最大${maxMessageChars}文字）...`}
-          className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+          placeholder="京都市の建物・避難場所・災害状況を質問..."
+          className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
         />
         {sending ? (
           <button
             type="button"
             onClick={() => abortRef.current?.abort()}
-            className="inline-flex items-center justify-center rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-rose-500"
+            className="inline-flex shrink-0 items-center justify-center rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-rose-500"
             title="生成を停止"
           >
             <Square className="h-3.5 w-3.5" />
@@ -860,16 +1006,18 @@ export function AiAssistantPanel({
           <button
             type="submit"
             disabled={!input.trim()}
-            className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-40"
+            className="inline-flex shrink-0 items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-40"
           >
             <Send className="h-3.5 w-3.5" />
           </button>
         )}
       </form>
 
-      <div className="mt-1.5 flex items-center gap-1 text-[10px] text-slate-500">
-        <Sparkles className="h-3 w-3 text-emerald-500" />
-        <span>AIの回答はPLATEAU・J-SHIS実測値に基づき生成されます（倒壊予測ではありません）</span>
+      <div className="mt-1 flex items-center gap-1 text-[10px] text-slate-500">
+        <Sparkles className="h-3 w-3 shrink-0 text-emerald-500" />
+        <span className="truncate">
+          PLATEAU・J-SHIS・国土地理院データに基づき回答（倒壊予測ではありません）
+        </span>
       </div>
     </div>
   );

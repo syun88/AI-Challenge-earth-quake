@@ -1,0 +1,194 @@
+{
+  "canvasWidth": 1024,
+  "canvasHeight": 1024,
+  "parts": {
+    "lanternPropeller": {
+      "file": "/mascot/mochimamo/lantern_propeller.png",
+      "x": 743.5,
+      "y": 206.5,
+      "width": 188,
+      "height": 46,
+      "anchorX": 92.5,
+      "anchorY": 15.5
+    },
+    "lanternBody": {
+      "file": "/mascot/mochimamo/lantern_body.png",
+      "x": 773.5,
+      "y": 236.0,
+      "width": 134,
+      "height": 176,
+      "anchorX": 62.5,
+      "anchorY": 94.0
+    },
+    "visorPlate": {
+      "file": "/mascot/mochimamo/visor_plate.png",
+      "x": 317.5,
+      "y": 246.0,
+      "width": 396,
+      "height": 279,
+      "anchorX": 193.5,
+      "anchorY": 141.5
+    },
+    "eyeL": {
+      "file": "/mascot/mochimamo/eyeL.png",
+      "x": 400.0,
+      "y": 340.0,
+      "width": 82,
+      "height": 82,
+      "anchorX": 41.5,
+      "anchorY": 43.5
+    },
+    "eyeR": {
+      "file": "/mascot/mochimamo/eyeR.png",
+      "x": 557.5,
+      "y": 340.0,
+      "width": 78,
+      "height": 82,
+      "anchorX": 39.0,
+      "anchorY": 42.5
+    },
+    "mouth": {
+      "file": "/mascot/mochimamo/mouth.png",
+      "x": 485.0,
+      "y": 395.0,
+      "width": 72,
+      "height": 45,
+      "anchorX": 36.0,
+      "anchorY": 22.0
+    },
+    "blushL": {
+      "file": "/mascot/mochimamo/blushL.png",
+      "x": 370.0,
+      "y": 407.5,
+      "width": 78,
+      "height": 55,
+      "anchorX": 38.0,
+      "anchorY": 27.5
+    },
+    "blushR": {
+      "file": "/mascot/mochimamo/blushR.png",
+      "x": 592.5,
+      "y": 407.5,
+      "width": 75,
+      "height": 55,
+      "anchorX": 36.5,
+      "anchorY": 26.0
+    },
+    "mizuhikiBow": {
+      "file": "/mascot/mochimamo/mizuhiki_bow.png",
+      "x": 293.5,
+      "y": 492.5,
+      "width": 430,
+      "height": 126,
+      "anchorX": 219.0,
+      "anchorY": 62.5
+    },
+    "headHood": {
+      "file": "/mascot/mochimamo/head_hood.png",
+      "x": 262.5,
+      "y": 195.0,
+      "width": 482,
+      "height": 348,
+      "anchorX": 241.5,
+      "anchorY": 215.0
+    },
+    "armLeft": {
+      "file": "/mascot/mochimamo/arm_left.png",
+      "x": 700.5,
+      "y": 473.5,
+      "width": 132,
+      "height": 127,
+      "anchorX": 27.5,
+      "anchorY": 79.5
+    },
+    "armRight": {
+      "file": "/mascot/mochimamo/arm_right.png",
+      "x": 295.0,
+      "y": 569.0,
+      "width": 150,
+      "height": 114,
+      "anchorX": 22.5,
+      "anchorY": 38.5
+    },
+    "holoMap": {
+      "file": "/mascot/mochimamo/holo_map.png",
+      "x": 614.5,
+      "y": 606.0,
+      "width": 298,
+      "height": 150,
+      "anchorX": 150.5,
+      "anchorY": 76.5
+    },
+    "footL": {
+      "file": "/mascot/mochimamo/footL.png",
+      "x": 340.0,
+      "y": 790.0,
+      "width": 105,
+      "height": 66,
+      "anchorX": 55.0,
+      "anchorY": 12.5
+    },
+    "footR": {
+      "file": "/mascot/mochimamo/footR.png",
+      "x": 565.0,
+      "y": 790.0,
+      "width": 108,
+      "height": 66,
+      "anchorX": 49.0,
+      "anchorY": 12.5
+    },
+    "torso": {
+      "file": "/mascot/mochimamo/torso.png",
+      "x": 254.5,
+      "y": 499.5,
+      "width": 498,
+      "height": 322,
+      "anchorX": 249.5,
+      "anchorY": 170.5
+    }
+  },
+  "landmarks": {
+    "bodyCenter": {
+      "x": 504.0,
+      "y": 650.0
+    },
+    "headCenter": {
+      "x": 504.0,
+      "y": 395.0
+    },
+    "visorCenter": {
+      "x": 511.0,
+      "y": 388.0
+    },
+    "visorClip": {
+      "x": 343.0,
+      "y": 272.0,
+      "w": 336.0,
+      "h": 233.0,
+      "rx": 122.0
+    },
+    "thrusters": [
+      {
+        "x": 408.0,
+        "y": 788.0,
+        "rx": 19.0,
+        "ry": 11.0,
+        "rot": 0.35
+      },
+      {
+        "x": 507.0,
+        "y": 811.0,
+        "rx": 14.0,
+        "ry": 13.0,
+        "rot": 0.0
+      },
+      {
+        "x": 603.0,
+        "y": 786.0,
+        "rx": 19.0,
+        "ry": 11.0,
+        "rot": -0.35
+      }
+    ]
+  }
+}
