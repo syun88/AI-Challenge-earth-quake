@@ -2,6 +2,7 @@ export type AgeCategory = "pre_1981" | "1982_2000" | "post_2001" | "unknown";
 export type HazardTier = "very_high" | "elevated" | "moderate" | "low" | "unknown";
 export type UsageGroup = "all" | "residential" | "non_residential";
 export type MeshOverlayMode = "hazard" | "arv" | "pre1981";
+export type Map3DMode = "auto" | "3d" | "2d";
 
 export interface DataSourceInfo {
   id: string;
@@ -846,4 +847,82 @@ export interface R8UnlistedLocateResponse {
   priority_message: string;
   r8_pdf_url: string;
   r8_page_url: string;
+}
+
+export type LocationSearchKind =
+  | "address"
+  | "landmark"
+  | "shelter"
+  | "street"
+  | "station"
+  | "ward"
+  | "building"
+  | "mesh"
+  | "coordinates";
+
+export interface NearestShelterBrief {
+  id: string;
+  name: string;
+  ward: string;
+  address: string;
+  is_wide_area: boolean;
+  distance_m: number;
+  lat: number;
+  lon: number;
+}
+
+export interface LocationKyotoContext {
+  in_kyoto_coverage: boolean;
+  ward_name: string | null;
+  meshcode: string | null;
+  hazard_tier: HazardTier | null;
+  hazard_label: string | null;
+  t30_i55_ps: number | null;
+  arv: number | null;
+  jname: string | null;
+  total_buildings: number | null;
+  pre_1981_count: number | null;
+  pre_1981_share_known: number | null;
+  nearest_shelter: NearestShelterBrief | null;
+}
+
+export interface LocationSearchResult {
+  id: string;
+  title: string;
+  subtitle: string;
+  address: string;
+  kind: LocationSearchKind;
+  kind_label: string;
+  source: string;
+  source_label: string;
+  lat: number;
+  lon: number;
+  zoom: number;
+  bbox?: [number, number, number, number] | null;
+  ward_name?: string | null;
+  meshcode?: string | null;
+  building_id?: string | null;
+  shelter_id?: string | null;
+  is_wide_area?: boolean;
+  disaster_labels?: string[];
+  street_segments?: [number, number][][] | null;
+  kyoto_context?: LocationKyotoContext | null;
+}
+
+export interface LocationSearchResponse {
+  query: string;
+  count: number;
+  results: LocationSearchResult[];
+  notice?: string | null;
+}
+
+export interface ReverseGeocodeResponse {
+  lat: number;
+  lon: number;
+  address: string;
+  ward_name?: string | null;
+  town_name?: string | null;
+  nearest_road?: string | null;
+  source: string;
+  kyoto_context?: LocationKyotoContext | null;
 }

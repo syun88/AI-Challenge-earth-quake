@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Ban,
@@ -17,6 +17,7 @@ import { DamageReportPanel } from "@/components/DamageReportPanel";
 import { DisasterBoard } from "@/components/DisasterBoard";
 import DisasterUpdatesPanel from "@/components/DisasterUpdatesPanel";
 import { FloatingHeader, WorkspacePanel } from "@/components/FloatingHeader";
+import { LocationSearchBar } from "@/components/LocationSearchBar";
 import { MapDisplayPopover } from "@/components/MapDisplayPopover";
 import { NavigationPanel } from "@/components/NavigationPanel";
 import {
@@ -53,6 +54,7 @@ import {
   refreshDisasterUpdates,
   resolveRoadCorridor,
   resolveRoadStroke,
+  reverseGeocode,
   simulateNavigation,
   simulateRoute,
   snapRoadInfo,
@@ -70,6 +72,8 @@ import {
   EarthquakeEvent,
   HazardTier,
   KyotoEarthquakeArchiveItem,
+  LocationSearchResult,
+  Map3DMode,
   MapAction,
   MeshDetail,
   MeshOverlayMode,
@@ -80,6 +84,7 @@ import {
   PriorityArea,
   R8LocateResponse,
   R8UnlistedLocateResponse,
+  ReverseGeocodeResponse,
   RoadPaintTool,
   RouteSimulationResponse,
   ShelterHub,
@@ -136,7 +141,8 @@ export default function HomePage() {
   const [showReports, setShowReports] = useState(true);
   const [showSafetyLayer, setShowSafetyLayer] = useState(true);
   const [showEarthquakes, setShowEarthquakes] = useState(false);
-  const [is3D, setIs3D] = useState(false);
+  const [map3DMode, setMap3DMode] = useState<Map3DMode>("auto");
+  const [isPitch3D, setIsPitch3D] = useState(false);
 
   const [officialShelters, setOfficialShelters] = useState<OfficialShelter[]>([]);
   const [selectedOfficialShelter, setSelectedOfficialShelter] = useState<OfficialShelter | null>(null);
@@ -169,6 +175,10 @@ export default function HomePage() {
   const [selectedShelterHub, setSelectedShelterHub] = useState<ShelterHub | null>(null);
   const [selectedR8Facility, setSelectedR8Facility] = useState<R8LocateResponse | null>(null);
   const [selectedR8Unlisted, setSelectedR8Unlisted] = useState<R8UnlistedLocateResponse | null>(null);
+  const [searchPin, setSearchPin] = useState<LocationSearchResult | null>(null);
+  const [searchCandidates, setSearchCandidates] = useState<LocationSearchResult[]>([]);
+  const [reverseAddress, setReverseAddress] = useState<ReverseGeocodeResponse | null>(null);
+  const reverseReqSeqRef = useRef(0);
 
   const [mapPickMode, setMapPickMode] = useState<MapPickMode>("none");
   const [pickedReportTarget, setPickedReportTarget] = useState<PickedMapTarget | null>(null);
@@ -189,6 +199,7 @@ export default function HomePage() {
     lon: number;
     lat: number;
     zoom: number;
+    bbox?: [number, number, number, number] | null;
     ts: number;
   } | null>(null);
   const [queuedAiPrompt, setQueuedAiPrompt] = useState<{ text: string; ts: number } | null>(null);
@@ -343,6 +354,7 @@ export default function HomePage() {
     setSelectedOfficialShelter(null);
     setSelectedR8Facility(null);
     setSelectedR8Unlisted(null);
+    setReverseAddress(null);
   }, []);
 
   const handleSelectR8Record = useCallback(
@@ -647,9 +659,23 @@ export default function HomePage() {
     setUsageGroup("all");
     setSelectedMeshcode(null);
     setRouteResult(null);
+    setSearchPin(null);
+    setSearchCandidates([]);
     clearSelections();
     setFlyToTarget({ ...WARD_CENTERS.all, ts: Date.now() });
   }, [clearSelections]);
+
+  const loadReverseAddress = useCallback(async (lat: number, lon: number) => {
+    const seq = ++reverseReqSeqRef.current;
+    try {
+      const rev = await reverseGeocode(lat, lon);
+      if (seq === reverseReqSeqRef.current) {
+        setReverseAddress(rev);
+      }
+    } catch {
+      // ignore transient geocoder error
+    }
+  }, []);
 
   const handleSelectBuilding = useCallback(
     async (buildingId: string) => {
@@ -657,11 +683,12 @@ export default function HomePage() {
       try {
         const detail = await getBuildingDetail(buildingId);
         setSelectedBuilding(detail);
+        void loadReverseAddress(detail.centroid_lat, detail.centroid_lon);
       } catch {
         // ignore
       }
     },
-    [clearSelections]
+    [clearSelections, loadReverseAddress]
   );
 
   const handleSelectMesh = useCallback(
@@ -671,11 +698,166 @@ export default function HomePage() {
       try {
         const detail = await getMeshDetail(meshcode);
         setSelectedMesh(detail);
+        void loadReverseAddress(detail.centroid_lat, detail.centroid_lon);
       } catch {
         // ignore
       }
     },
-    [clearSelections]
+    [clearSelections, loadReverseAddress]
+  );
+
+  const handleSelectSearchResult = useCallback(
+    async (item: LocationSearchResult, allCandidates?: LocationSearchResult[]) => {
+      clearSelections();
+      setDisplayOpen(false);
+      setSearchPin(item);
+      if (allCandidates) {
+        setSearchCandidates(allCandidates);
+      }
+
+      if (item.kind === "shelter") {
+        setShowOfficialShelters(true);
+      } else if (item.kind === "building" && item.building_id) {
+        setShowBuildings(true);
+        try {
+          const detail = await getBuildingDetail(item.building_id);
+          setSelectedBuilding(detail);
+          void loadReverseAddress(detail.centroid_lat, detail.centroid_lon);
+        } catch {
+          // ignore
+        }
+      } else if (item.kind === "mesh" && item.meshcode) {
+        setSelectedMeshcode(item.meshcode);
+        setShowHazardMesh(true);
+        try {
+          const detail = await getMeshDetail(item.meshcode);
+          setSelectedMesh(detail);
+          void loadReverseAddress(detail.centroid_lat, detail.centroid_lon);
+        } catch {
+          // ignore
+        }
+      }
+
+      setFlyToTarget({
+        lon: item.lon,
+        lat: item.lat,
+        zoom: item.zoom || 16.0,
+        bbox: item.bbox ?? null,
+        ts: Date.now(),
+      });
+    },
+    [clearSelections, loadReverseAddress]
+  );
+
+  const handleFocusSearchPin = useCallback(
+    (item: LocationSearchResult) => {
+      clearSelections();
+      setSearchPin(item);
+      setFlyToTarget({
+        lon: item.lon,
+        lat: item.lat,
+        zoom: Math.max(currentMapZoom, item.zoom || 15.8),
+        bbox: item.bbox ?? null,
+        ts: Date.now(),
+      });
+    },
+    [clearSelections, currentMapZoom]
+  );
+
+  const handleClearSearch = useCallback(() => {
+    setSearchPin(null);
+    setSearchCandidates([]);
+  }, []);
+
+  const handleZoomToSearchPlace = useCallback((place: LocationSearchResult) => {
+    setShowBuildings(true);
+    setFlyToTarget({
+      lon: place.lon,
+      lat: place.lat,
+      zoom: 17.2,
+      bbox: null,
+      ts: Date.now(),
+    });
+  }, []);
+
+  const handleReportFromSearchPlace = useCallback((place: LocationSearchResult) => {
+    setPickedReportTarget({
+      lat: place.lat,
+      lon: place.lon,
+      wardName: place.ward_name || place.kyoto_context?.ward_name || null,
+      meshcode: place.meshcode || place.kyoto_context?.meshcode || null,
+      buildingId: place.building_id ?? null,
+      roadName: place.address || place.title,
+    });
+    setReportCreateTrigger((n) => n + 1);
+    setShowReports(true);
+    setActivePanel("report");
+    setDisplayOpen(false);
+  }, []);
+
+  const handleNavigateFromSearchPlace = useCallback(
+    async (place: LocationSearchResult, mode: "evacuate" | "rescue") => {
+      const navParams: Parameters<typeof simulateNavigation>[0] =
+        mode === "evacuate"
+          ? {
+              mode: "evacuate",
+              startLat: place.lat,
+              startLon: place.lon,
+              includeSamples,
+              avoidUnverified: true,
+            }
+          : {
+              mode: "rescue",
+              targetLat: place.lat,
+              targetLon: place.lon,
+              includeSamples,
+              avoidUnverified: true,
+            };
+      if (mode === "evacuate") {
+        setPickedEvacuateCoords({ lat: place.lat, lon: place.lon, label: place.title });
+      } else {
+        setPickedRescueCoords({ lat: place.lat, lon: place.lon, label: place.title });
+      }
+      try {
+        const res = await simulateNavigation(navParams);
+        setLastNavParams(navParams);
+        setRouteResult(res);
+        setShowRoadClosures(true);
+        setShowShelterHubs(true);
+        setActivePanel("nav");
+      } catch {
+        setActivePanel("nav");
+      }
+    },
+    [includeSamples]
+  );
+
+  const handleRouteToSearchedShelter = useCallback(
+    async (shelterId: string) => {
+      const match = officialShelters.find((s) => s.id === shelterId);
+      if (match) {
+        await handleRouteToOfficialShelter(match);
+      }
+    },
+    [officialShelters, handleRouteToOfficialShelter]
+  );
+
+  const handleSelectNearbyShelterById = useCallback(
+    (shelterId: string) => {
+      const match = officialShelters.find((s) => s.id === shelterId);
+      if (!match) return;
+      clearSelections();
+      setShowOfficialShelters(true);
+      setSelectedOfficialShelter(match);
+      setFlyToTarget({
+        lon: match.lon,
+        lat: match.lat,
+        zoom: 16.2,
+        bbox: null,
+        ts: Date.now(),
+      });
+    },
+    [officialShelters, clearSelections]
   );
 
   const handleSelectReportFromMap = useCallback(
@@ -1385,10 +1567,15 @@ export default function HomePage() {
         recommendedShelters={
           activePanel === "shelter" ? shelterRecommendation?.recommendations ?? [] : []
         }
-        is3D={is3D}
-        selectedBuildingId={selectedBuilding?.building_id ?? null}
+        map3DMode={map3DMode}
+        onChangeMap3DMode={setMap3DMode}
+        onPitch3DChange={setIsPitch3D}
+        selectedBuildingId={selectedBuilding?.building_id ?? searchPin?.building_id ?? null}
         selectedMeshcode={selectedMeshcode}
         flyToTarget={flyToTarget}
+        searchPin={searchPin}
+        searchCandidates={searchCandidates}
+        onSelectSearchPin={handleFocusSearchPin}
         mapPickMode={mapPickMode}
         pickedCoords={
           selectedR8Facility
@@ -1436,6 +1623,16 @@ export default function HomePage() {
         geminiConfigured={geminiConfigured}
       />
 
+      {/* Google-Maps-Style Address & Place Search Bar */}
+      <LocationSearchBar
+        activeSearchPlace={searchPin}
+        candidateCount={searchCandidates.length}
+        drawerOpen={activePanel !== "none"}
+        hidden={roadPaintTool !== "none" || mapPickMode !== "none"}
+        onSelectResult={(item, all) => void handleSelectSearchResult(item, all)}
+        onClearSearch={handleClearSearch}
+      />
+
       {/* API Connection Error Banner (floating under top header) */}
       {apiError && (
         <div
@@ -1460,8 +1657,8 @@ export default function HomePage() {
         onClose={() => setDisplayOpen(false)}
         visualPreset={visualPreset}
         onChangeVisualPreset={setVisualPreset}
-        is3D={is3D}
-        onChangeIs3D={setIs3D}
+        map3DMode={map3DMode}
+        onChangeMap3DMode={setMap3DMode}
         showBuildings={showBuildings}
         onToggleBuildings={() => setShowBuildings((v) => !v)}
         showHazardMesh={showHazardMesh}
@@ -1680,7 +1877,7 @@ export default function HomePage() {
                 ageCategories={ageCategories}
                 hazardTiers={hazardTiers}
                 usageGroup={usageGroup}
-                is3D={is3D}
+                is3D={map3DMode === "3d" || isPitch3D}
                 selectedBuilding={selectedBuilding}
                 selectedMesh={selectedMesh}
                 queuedPrompt={queuedAiPrompt}
@@ -1817,7 +2014,7 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Selected Building / Report / Blocked Road / Shelter Hub / Active Route HUD */}
+      {/* Selected Building / Report / Blocked Road / Shelter Hub / Search Place / Active Route HUD */}
       <SelectedFeatureCard
         selectedBuilding={selectedBuilding}
         selectedMesh={selectedMesh}
@@ -1827,8 +2024,11 @@ export default function HomePage() {
         selectedOfficialShelter={selectedOfficialShelter}
         selectedR8Facility={selectedR8Facility}
         selectedR8Unlisted={selectedR8Unlisted}
+        selectedSearchPlace={searchPin}
+        selectedReverseAddress={reverseAddress}
         routeResult={routeResult}
         onClearSelection={clearSelections}
+        onClearSearchPlace={handleClearSearch}
         onClearRoute={() => setRouteResult(null)}
         onReportBuilding={handleReportBuilding}
         onDispatchToBuilding={(b) => void handleDispatchRescueToBuilding(b)}
@@ -1843,6 +2043,13 @@ export default function HomePage() {
         }}
         onRouteToOfficialShelter={(s) => void handleRouteToOfficialShelter(s)}
         onRecommendFromTarget={handleRecommendFromTarget}
+        onZoomToSearchPlace={handleZoomToSearchPlace}
+        onReportFromSearchPlace={handleReportFromSearchPlace}
+        onNavigateFromSearchPlace={(place, mode) =>
+          void handleNavigateFromSearchPlace(place, mode)
+        }
+        onRouteToSearchedShelter={(sid) => void handleRouteToSearchedShelter(sid)}
+        onSelectNearbyShelterById={handleSelectNearbyShelterById}
         onStartPickRoadBlock={() => {
           clearSelections();
           setShowRoadClosures(true);
@@ -1918,6 +2125,7 @@ export default function HomePage() {
         !selectedBlockedRoad &&
         !selectedShelterHub &&
         !selectedOfficialShelter &&
+        !searchPin &&
         !routeResult && (
           <button
             type="button"

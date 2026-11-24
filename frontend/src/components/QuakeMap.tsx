@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import * as maplibregl from "maplibre-gl";
-import { Loader2, MapPin, X } from "lucide-react";
+import { Box, Loader2, MapPin, X } from "lucide-react";
 import {
   AGE_COLORS,
   HAZARD_COLORS,
@@ -16,6 +16,8 @@ import {
   DamageReport,
   EarthquakeEvent,
   HazardTier,
+  LocationSearchResult,
+  Map3DMode,
   MeshOverlayMode,
   NetworkEdgeFeature,
   NetworkStatusResponse,
@@ -102,10 +104,21 @@ interface QuakeMapProps {
   showOfficialShelters: boolean;
   officialShelters: OfficialShelter[];
   recommendedShelters: ShelterRecommendationItem[];
-  is3D: boolean;
+  map3DMode: Map3DMode;
+  onChangeMap3DMode?: (mode: Map3DMode) => void;
+  onPitch3DChange?: (active: boolean) => void;
   selectedBuildingId: string | null;
   selectedMeshcode: string | null;
-  flyToTarget: { lon: number; lat: number; zoom: number; ts: number } | null;
+  flyToTarget: {
+    lon: number;
+    lat: number;
+    zoom: number;
+    bbox?: [number, number, number, number] | null;
+    ts: number;
+  } | null;
+  searchPin?: LocationSearchResult | null;
+  searchCandidates?: LocationSearchResult[];
+  onSelectSearchPin?: (item: LocationSearchResult) => void;
   mapPickMode: MapPickMode;
   pickedCoords: { lat: number; lon: number } | null;
   previewRoadSegments?: [number, number][][] | null;
@@ -135,6 +148,19 @@ interface QuakeMapProps {
 
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
+const AUTO_3D_START_ZOOM = 14.2;
+const AUTO_3D_FULL_ZOOM = 16.4;
+const AUTO_3D_MAX_PITCH = 52;
+const PITCH_3D_THRESHOLD = 3.5;
+
+function computeAutoPitch(zoom: number): number {
+  if (zoom <= AUTO_3D_START_ZOOM) return 0;
+  if (zoom >= AUTO_3D_FULL_ZOOM) return AUTO_3D_MAX_PITCH;
+  const t = (zoom - AUTO_3D_START_ZOOM) / (AUTO_3D_FULL_ZOOM - AUTO_3D_START_ZOOM);
+  const smooth = t * t * (3 - 2 * t);
+  return Number((smooth * AUTO_3D_MAX_PITCH).toFixed(2));
+}
+
 export function QuakeMap({
   meshesGeoJson,
   earthquakes,
@@ -158,10 +184,15 @@ export function QuakeMap({
   showOfficialShelters,
   officialShelters,
   recommendedShelters,
-  is3D,
+  map3DMode,
+  onChangeMap3DMode,
+  onPitch3DChange,
   selectedBuildingId,
   selectedMeshcode,
   flyToTarget,
+  searchPin = null,
+  searchCandidates = [],
+  onSelectSearchPin,
   mapPickMode,
   pickedCoords,
   previewRoadSegments,
@@ -193,7 +224,27 @@ export function QuakeMap({
   const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(12.6);
+  const [pitch, setPitch] = useState(0);
   const [hoverInfo, setHoverInfo] = useState<string | null>(null);
+
+  const map3DModeRef = useRef<Map3DMode>(map3DMode);
+  const prevMap3DModeRef = useRef<Map3DMode>(map3DMode);
+  const lastZoomRef = useRef(12.6);
+  const manualFlatAtHighZoomRef = useRef(false);
+  const applyingAutoPitchRef = useRef(false);
+  const flyToActiveRef = useRef(false);
+  const autoEaseActiveRef = useRef(false);
+  const lastNotified3DRef = useRef<boolean | null>(null);
+  const middleDragRef = useRef<{
+    x: number;
+    y: number;
+    pitch: number;
+    bearing: number;
+  } | null>(null);
+
+  useEffect(() => {
+    map3DModeRef.current = map3DMode;
+  }, [map3DMode]);
 
   const damagedBuildingIds = useMemo(() => {
     const ids: string[] = [];
@@ -240,6 +291,8 @@ export function QuakeMap({
     onSelectShelterHub,
     onSelectOfficialShelter,
     onSelectSafetyWard,
+    onSelectSearchPin,
+    onPitch3DChange,
     onZoomChange,
   });
   useEffect(() => {
@@ -254,6 +307,8 @@ export function QuakeMap({
       onSelectShelterHub,
       onSelectOfficialShelter,
       onSelectSafetyWard,
+      onSelectSearchPin,
+      onPitch3DChange,
       onZoomChange,
     };
   }, [
@@ -267,6 +322,8 @@ export function QuakeMap({
     onSelectShelterHub,
     onSelectOfficialShelter,
     onSelectSafetyWard,
+    onSelectSearchPin,
+    onPitch3DChange,
     onZoomChange,
   ]);
 
@@ -322,8 +379,27 @@ export function QuakeMap({
   const safetyMarkersRef = useRef<maplibregl.Marker[]>([]);
   const recMarkersRef = useRef<maplibregl.Marker[]>([]);
   const routeMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const searchPinMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const searchCandMarkersRef = useRef<maplibregl.Marker[]>([]);
   const pickMarkerRef = useRef<maplibregl.Marker | null>(null);
   const corridorStartMarkerRef = useRef<maplibregl.Marker | null>(null);
+
+  const syncBuilding3DLayers = useCallback((map: maplibregl.Map) => {
+    if (!map.getLayer("buildings-fill") || !map.getLayer("buildings-3d")) return;
+    const pitchNow = map.getPitch();
+    const showB = filtersRef.current.showBuildings;
+    const active3D = showB && (map3DModeRef.current === "3d" || pitchNow >= PITCH_3D_THRESHOLD);
+    const fVis = showB && !active3D ? "visible" : "none";
+    const dVis = active3D ? "visible" : "none";
+    map.setLayoutProperty("buildings-fill", "visibility", fVis);
+    map.setLayoutProperty("buildings-outline", "visibility", fVis);
+    map.setLayoutProperty("buildings-selected", "visibility", fVis);
+    map.setLayoutProperty("buildings-3d", "visibility", dVis);
+    if (lastNotified3DRef.current !== active3D) {
+      lastNotified3DRef.current = active3D;
+      callbacksRef.current.onPitch3DChange?.(active3D);
+    }
+  }, []);
 
   const fetchBuildingsForCurrentView = useCallback(async () => {
     const map = mapRef.current;
@@ -415,6 +491,7 @@ export function QuakeMap({
         zoom: 12.6,
         minZoom: 4.5,
         maxZoom: 19,
+        maxPitch: 65,
       });
     } catch (err) {
       const msg =
@@ -425,7 +502,7 @@ export function QuakeMap({
       return;
     }
 
-    map.addControl(new maplibregl.NavigationControl(), "bottom-right");
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: "metric" }), "bottom-right");
 
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -603,13 +680,30 @@ export function QuakeMap({
             AGE_COLORS.unknown,
           ],
           "fill-extrusion-height": [
-            "coalesce",
-            ["get", "measured_height"],
-            ["*", ["coalesce", ["get", "storeys_above"], 2], 3.2],
-            6.0,
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            13.5,
+            [
+              "*",
+              0.35,
+              [
+                "coalesce",
+                ["get", "measured_height"],
+                ["*", ["coalesce", ["get", "storeys_above"], 2], 3.2],
+                6.0,
+              ],
+            ],
+            14.2,
+            [
+              "coalesce",
+              ["get", "measured_height"],
+              ["*", ["coalesce", ["get", "storeys_above"], 2], 3.2],
+              6.0,
+            ],
           ],
           "fill-extrusion-base": 0,
-          "fill-extrusion-opacity": 0.9,
+          "fill-extrusion-opacity": 0.78,
           "fill-extrusion-vertical-gradient": true,
         },
       });
@@ -875,6 +969,46 @@ export function QuakeMap({
         },
       });
 
+      // Google-Maps-style Searched Street & Point Spotlight Layers
+      map.addSource("search-street", { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: "search-street-glow",
+        type: "line",
+        source: "search-street",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#0284c7",
+          "line-width": 11,
+          "line-opacity": 0.45,
+        },
+      });
+      map.addLayer({
+        id: "search-street-line",
+        type: "line",
+        source: "search-street",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#38bdf8",
+          "line-width": 4.5,
+          "line-opacity": 0.95,
+        },
+      });
+
+      map.addSource("search-halo", { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: "search-halo-circle",
+        type: "circle",
+        source: "search-halo",
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 16, 15, 26, 18, 34],
+          "circle-color": "#ef4444",
+          "circle-opacity": 0.14,
+          "circle-stroke-color": "#ef4444",
+          "circle-stroke-width": 2,
+          "circle-stroke-opacity": 0.78,
+        },
+      });
+
       // Unified Click Handler
       map.on("click", (e) => {
         if (roadPaintToolRef.current === "click" || roadPaintToolRef.current === "corridor") {
@@ -1031,11 +1165,95 @@ export function QuakeMap({
         setHoverInfo(null);
       });
 
-      map.on("zoom", () => {
-        setZoom(map.getZoom());
+      map.on("pitch", (e) => {
+        const currentPitch = map.getPitch();
+        const rounded = Math.round(currentPitch);
+        setPitch((prev) => (prev === rounded ? prev : rounded));
+        syncBuilding3DLayers(map);
+
+        const isAutoEvt = Boolean((e as { fromAuto3D?: boolean }).fromAuto3D);
+        if (!isAutoEvt && !flyToActiveRef.current && !autoEaseActiveRef.current) {
+          if (map.getZoom() > AUTO_3D_START_ZOOM + 0.3 && currentPitch < PITCH_3D_THRESHOLD) {
+            manualFlatAtHighZoomRef.current = true;
+          } else if (currentPitch >= 8) {
+            manualFlatAtHighZoomRef.current = false;
+          }
+        }
       });
 
-      map.on("moveend", () => {
+      map.on("zoom", () => {
+        const z = map.getZoom();
+        const prevZ = lastZoomRef.current;
+        lastZoomRef.current = z;
+        setZoom(z);
+
+        if (z <= AUTO_3D_START_ZOOM) {
+          manualFlatAtHighZoomRef.current = false;
+        }
+
+        const isUserScrollOrPinch =
+          map.scrollZoom.isZooming() || map.touchZoomRotate.isActive();
+        if (
+          map3DModeRef.current === "auto" &&
+          isUserScrollOrPinch &&
+          roadPaintToolRef.current === "none" &&
+          pickModeRef.current === "none" &&
+          !flyToActiveRef.current &&
+          !autoEaseActiveRef.current &&
+          !middleDragRef.current &&
+          !map.dragRotate.isActive() &&
+          !applyingAutoPitchRef.current
+        ) {
+          const targetP = computeAutoPitch(z);
+          const curP = map.getPitch();
+          const shouldRaise =
+            z > prevZ && !manualFlatAtHighZoomRef.current && curP < targetP - 0.15;
+          const shouldLower = z < prevZ && curP > targetP + 0.15;
+          if (shouldRaise || shouldLower) {
+            applyingAutoPitchRef.current = true;
+            try {
+              map.setPitch(targetP, { fromAuto3D: true });
+            } finally {
+              applyingAutoPitchRef.current = false;
+            }
+          }
+        }
+      });
+
+      map.on("zoomend", (e) => {
+        const isAutoEvt = Boolean((e as { fromAuto3D?: boolean }).fromAuto3D);
+        if (
+          map3DModeRef.current === "auto" &&
+          !isAutoEvt &&
+          !map.scrollZoom.isZooming() &&
+          !map.touchZoomRotate.isActive() &&
+          !flyToActiveRef.current &&
+          !autoEaseActiveRef.current &&
+          roadPaintToolRef.current === "none" &&
+          pickModeRef.current === "none" &&
+          !middleDragRef.current &&
+          !map.dragRotate.isActive()
+        ) {
+          const z = map.getZoom();
+          const targetP = computeAutoPitch(z);
+          const curP = map.getPitch();
+          if (!manualFlatAtHighZoomRef.current && targetP > curP + 2) {
+            autoEaseActiveRef.current = true;
+            map.easeTo({ pitch: targetP, duration: 380 }, { fromAuto3D: true });
+          } else if (z <= AUTO_3D_START_ZOOM + 0.1 && curP > 3) {
+            autoEaseActiveRef.current = true;
+            map.easeTo({ pitch: 0, duration: 380 }, { fromAuto3D: true });
+          }
+        }
+      });
+
+      map.on("moveend", (e) => {
+        if ((e as { fromAuto3D?: boolean }).fromAuto3D) {
+          autoEaseActiveRef.current = false;
+          return;
+        }
+        flyToActiveRef.current = false;
+        autoEaseActiveRef.current = false;
         setZoom(map.getZoom());
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
@@ -1048,11 +1266,46 @@ export function QuakeMap({
 
       map.resize();
       setMapReady(true);
+      syncBuilding3DLayers(map);
       fetchBuildingsForCurrentView();
       if (roadPaintToolRef.current !== "none") {
         fetchInteractiveRoadsForCurrentView();
       }
     };
+
+    // Allow middle-mouse button (scroll-wheel press + drag) for effortless 3D tilt & orbit
+    const canvasEl = map.getCanvas();
+    const handleCanvasMouseDown = (ev: MouseEvent) => {
+      if (ev.button !== 1 || roadPaintToolRef.current === "brush") return;
+      ev.preventDefault();
+      middleDragRef.current = {
+        x: ev.clientX,
+        y: ev.clientY,
+        pitch: map.getPitch(),
+        bearing: map.getBearing(),
+      };
+      canvasEl.style.cursor = "grabbing";
+    };
+    const handleWindowMouseMove = (ev: MouseEvent) => {
+      const drag = middleDragRef.current;
+      if (!drag) return;
+      const dx = ev.clientX - drag.x;
+      const dy = ev.clientY - drag.y;
+      const nextPitch = Math.max(0, Math.min(65, drag.pitch - dy * 0.32));
+      const nextBearing = drag.bearing + dx * 0.35;
+      map.jumpTo({ pitch: nextPitch, bearing: nextBearing });
+    };
+    const handleWindowMouseUp = (ev: MouseEvent) => {
+      if (!middleDragRef.current || ev.button !== 1) return;
+      middleDragRef.current = null;
+      canvasEl.style.cursor =
+        pickModeRef.current !== "none" || roadPaintToolRef.current !== "none"
+          ? "crosshair"
+          : "";
+    };
+    canvasEl.addEventListener("mousedown", handleCanvasMouseDown);
+    window.addEventListener("mousemove", handleWindowMouseMove);
+    window.addEventListener("mouseup", handleWindowMouseUp);
 
     map.on("error", (e) => {
       const msg = e.error?.message;
@@ -1076,13 +1329,16 @@ export function QuakeMap({
 
     mapRef.current = map;
     return () => {
+      canvasEl.removeEventListener("mousedown", handleCanvasMouseDown);
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
       ro.disconnect();
       if (debounceTimer) clearTimeout(debounceTimer);
       setMapReady(false);
       map.remove();
       mapRef.current = null;
     };
-  }, [fetchBuildingsForCurrentView, fetchInteractiveRoadsForCurrentView]);
+  }, [fetchBuildingsForCurrentView, fetchInteractiveRoadsForCurrentView, syncBuilding3DLayers]);
 
   // Update 250m meshes
   useEffect(() => {
@@ -1354,27 +1610,15 @@ export function QuakeMap({
       "fill-opacity",
       visualPreset === "crisis" ? 0.48 : 0.85
     );
+    if (map.getLayer("buildings-3d")) {
+      map.setPaintProperty(
+        "buildings-3d",
+        "fill-extrusion-opacity",
+        visualPreset === "crisis" ? 0.78 : 0.92
+      );
+    }
 
-    map.setLayoutProperty(
-      "buildings-fill",
-      "visibility",
-      showBuildings && !is3D ? "visible" : "none"
-    );
-    map.setLayoutProperty(
-      "buildings-outline",
-      "visibility",
-      showBuildings && !is3D ? "visible" : "none"
-    );
-    map.setLayoutProperty(
-      "buildings-selected",
-      "visibility",
-      showBuildings && !is3D ? "visible" : "none"
-    );
-    map.setLayoutProperty(
-      "buildings-3d",
-      "visibility",
-      showBuildings && is3D ? "visible" : "none"
-    );
+    syncBuilding3DLayers(map);
     map.setLayoutProperty("earthquakes-circle", "visibility", showEarthquakes ? "visible" : "none");
     if (map.getLayer("official-shelters-circle")) {
       const shVis = showOfficialShelters ? "visible" : "none";
@@ -1472,25 +1716,49 @@ export function QuakeMap({
     showEarthquakes,
     showOfficialShelters,
     recommendedShelters.length,
-    is3D,
+    map3DMode,
     meshOverlayMode,
     selectedWard,
     hazardTiers,
     ageCategories,
     usageGroup,
     mapReady,
+    syncBuilding3DLayers,
   ]);
 
-  // 2D / 3D transition
+  // Explicit 2D / 3D / Auto mode transitions (never snaps user's manual mouse tilt unless mode explicitly changes)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
-    map.easeTo({
-      pitch: is3D ? 55 : 0,
-      bearing: is3D ? -20 : 0,
-      duration: 750,
-    });
-  }, [is3D, mapReady]);
+    if (prevMap3DModeRef.current === map3DMode) return;
+    prevMap3DModeRef.current = map3DMode;
+
+    if (map3DMode === "3d") {
+      manualFlatAtHighZoomRef.current = false;
+      map.easeTo(
+        {
+          pitch: Math.max(map.getPitch(), 55),
+          bearing: map.getBearing() === 0 ? -20 : map.getBearing(),
+          duration: 700,
+        },
+        { fromAuto3D: true }
+      );
+    } else if (map3DMode === "2d") {
+      map.easeTo({ pitch: 0, bearing: 0, duration: 700 }, { fromAuto3D: true });
+    } else {
+      manualFlatAtHighZoomRef.current = false;
+      const p = computeAutoPitch(map.getZoom());
+      map.easeTo(
+        {
+          pitch: p,
+          bearing: p < PITCH_3D_THRESHOLD ? 0 : map.getBearing(),
+          duration: 600,
+        },
+        { fromAuto3D: true }
+      );
+    }
+    syncBuilding3DLayers(map);
+  }, [map3DMode, mapReady, syncBuilding3DLayers]);
 
   // Selected + Damaged Building highlight in 3D as well
   useEffect(() => {
@@ -1540,16 +1808,161 @@ export function QuakeMap({
     fetchBuildingsForCurrentView();
   }, [selectedWard, ageCategories, hazardTiers, usageGroup, showBuildings, mapReady, fetchBuildingsForCurrentView]);
 
-  // FlyTo trigger
+  // FlyTo / FitBounds trigger
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady || !flyToTarget) return;
+    flyToActiveRef.current = true;
+    if (flyToTarget.bbox && flyToTarget.bbox.length === 4) {
+      map.fitBounds(
+        [
+          [flyToTarget.bbox[0], flyToTarget.bbox[1]],
+          [flyToTarget.bbox[2], flyToTarget.bbox[3]],
+        ],
+        {
+          padding: {
+            top: 120,
+            bottom: 90,
+            left: typeof window !== "undefined" && window.innerWidth >= 1024 ? 450 : 40,
+            right: 80,
+          },
+          maxZoom: flyToTarget.zoom,
+          pitch: map3DModeRef.current === "3d" ? Math.max(map.getPitch(), 55) : 0,
+          duration: 850,
+        }
+      );
+      return;
+    }
+    let targetPitch = map.getPitch();
+    if (map3DModeRef.current === "2d") {
+      targetPitch = 0;
+    } else if (map3DModeRef.current === "3d") {
+      targetPitch = Math.max(map.getPitch(), 55);
+    } else {
+      manualFlatAtHighZoomRef.current = false;
+      targetPitch = computeAutoPitch(flyToTarget.zoom);
+    }
     map.flyTo({
       center: [flyToTarget.lon, flyToTarget.lat],
       zoom: flyToTarget.zoom,
+      pitch: targetPitch,
       duration: 850,
     });
+    const timer = setTimeout(() => {
+      flyToActiveRef.current = false;
+    }, 950);
+    return () => clearTimeout(timer);
   }, [flyToTarget, mapReady]);
+
+  // Google-Maps-style Searched Pin, Candidate Markers, Street Highlight & Halo
+  useEffect(() => {
+    const map = mapRef.current;
+    searchPinMarkerRef.current?.remove();
+    searchPinMarkerRef.current = null;
+    searchCandMarkersRef.current.forEach((m) => m.remove());
+    searchCandMarkersRef.current = [];
+    if (!map || !mapReady) return;
+
+    const streetSrc = map.getSource("search-street") as maplibregl.GeoJSONSource | undefined;
+    const haloSrc = map.getSource("search-halo") as maplibregl.GeoJSONSource | undefined;
+
+    if (!searchPin) {
+      streetSrc?.setData(EMPTY_FC);
+      haloSrc?.setData(EMPTY_FC);
+      return;
+    }
+
+    if (streetSrc) {
+      if (searchPin.street_segments && searchPin.street_segments.length > 0) {
+        streetSrc.setData({
+          type: "FeatureCollection",
+          features: searchPin.street_segments.map((coords) => ({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: coords },
+            properties: {},
+          })),
+        });
+      } else {
+        streetSrc.setData(EMPTY_FC);
+      }
+    }
+
+    if (haloSrc) {
+      if (searchPin.kind !== "ward") {
+        haloSrc.setData({
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              geometry: { type: "Point", coordinates: [searchPin.lon, searchPin.lat] },
+              properties: {},
+            },
+          ],
+        });
+      } else {
+        haloSrc.setData(EMPTY_FC);
+      }
+    }
+
+    // Secondary candidate pins (when multiple matches exist)
+    if (searchCandidates && searchCandidates.length > 1) {
+      searchCandidates.forEach((cand, idx) => {
+        if (cand.id === searchPin.id) return;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.title = `${cand.title} (${cand.address})`;
+        btn.className =
+          "flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-rose-500/85 text-[10px] font-extrabold text-white shadow-md transition hover:scale-125 hover:bg-rose-500 cursor-pointer";
+        btn.textContent = String(idx + 1);
+        btn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          callbacksRef.current.onSelectSearchPin?.(cand);
+        });
+        const m = new maplibregl.Marker({ element: btn, anchor: "center" })
+          .setLngLat([cand.lon, cand.lat])
+          .addTo(map);
+        searchCandMarkersRef.current.push(m);
+      });
+    }
+
+    // Primary Google-Maps-style red teardrop pin + floating label
+    const wrapper = document.createElement("button");
+    wrapper.type = "button";
+    wrapper.setAttribute("data-testid", "map-search-pin");
+    wrapper.title = `${searchPin.title} (${searchPin.address})`;
+    wrapper.className =
+      "group flex flex-col items-center cursor-pointer focus:outline-none";
+
+    const badge = document.createElement("div");
+    badge.className =
+      "mb-1 max-w-[190px] truncate rounded-full border border-rose-400/80 bg-slate-950/95 px-2.5 py-0.5 text-[11px] font-bold text-white shadow-xl transition group-hover:scale-105";
+    badge.textContent = searchPin.title;
+
+    const svgWrap = document.createElement("div");
+    svgWrap.className = "drop-shadow-[0_4px_10px_rgba(0,0,0,0.65)] transition group-hover:scale-110";
+    svgWrap.innerHTML = `<svg width="32" height="40" viewBox="0 0 32 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M16 1C7.716 1 1 7.716 1 16C1 26.5 16 39 16 39C16 39 31 26.5 31 16C31 7.716 24.284 1 16 1Z" fill="#EF4444" stroke="#FFFFFF" stroke-width="2.2"/>
+      <circle cx="16" cy="15.5" r="5.5" fill="#7F1D1D" stroke="#FFFFFF" stroke-width="1.8"/>
+    </svg>`;
+
+    wrapper.appendChild(badge);
+    wrapper.appendChild(svgWrap);
+    wrapper.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      callbacksRef.current.onSelectSearchPin?.(searchPin);
+    });
+
+    searchPinMarkerRef.current = new maplibregl.Marker({ element: wrapper, anchor: "bottom" })
+      .setLngLat([searchPin.lon, searchPin.lat])
+      .addTo(map);
+
+    return () => {
+      searchPinMarkerRef.current?.remove();
+      searchPinMarkerRef.current = null;
+      searchCandMarkersRef.current.forEach((m) => m.remove());
+      searchCandMarkersRef.current = [];
+    };
+  }, [searchPin, searchCandidates, mapReady]);
 
   // Damage Report Pins
   useEffect(() => {
@@ -2024,6 +2437,38 @@ export function QuakeMap({
         </div>
       )}
 
+      {/* Compact 3D / Auto-3D / 2D Switcher Pill above NavigationControl */}
+      {onChangeMap3DMode && (
+        <button
+          type="button"
+          data-testid="map-3d-toggle-pill"
+          onClick={() => {
+            const next: Map3DMode =
+              map3DMode === "auto" ? "3d" : map3DMode === "3d" ? "2d" : "auto";
+            onChangeMap3DMode(next);
+          }}
+          title="視点モード切替（自動3D: ホイール拡大や右/中ボタンドラッグで自動立体表示 ⇄ 3D固定 ⇄ 2D固定）"
+          aria-label="3D表示モード切替"
+          className={`pointer-events-auto fixed bottom-[204px] right-2.5 z-20 flex flex-col items-center justify-center rounded-xl border px-1.5 py-1.5 text-[10px] font-extrabold shadow-xl backdrop-blur-md transition lg:bottom-[144px] ${
+            map3DMode === "3d" || pitch >= PITCH_3D_THRESHOLD
+              ? "border-sky-400/80 bg-sky-500/25 text-sky-100 hover:bg-sky-500/35"
+              : map3DMode === "auto"
+                ? "border-slate-600/90 bg-slate-900/90 text-slate-200 hover:border-sky-400/70 hover:text-white"
+                : "border-slate-700 bg-slate-950/90 text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Box className="h-3.5 w-3.5" />
+          <span className="mt-0.5 leading-none">
+            {map3DMode === "auto" ? "自動3D" : map3DMode === "3d" ? "3D" : "2D"}
+          </span>
+          {pitch >= PITCH_3D_THRESHOLD && (
+            <span className="mt-0.5 font-mono text-[9px] text-sky-300 leading-none">
+              {pitch}°
+            </span>
+          )}
+        </button>
+      )}
+
       {/* Subtle Hover Tooltip OR Zoom Prompt at bottom (above mobile controls & attribution) */}
       <div className="pointer-events-none absolute bottom-[104px] lg:bottom-4 left-3 right-20 z-10 flex flex-wrap items-center gap-2">
         {hoverInfo && (
@@ -2035,16 +2480,23 @@ export function QuakeMap({
           <button
             type="button"
             onClick={() => {
+              const targetZ = 15.6;
               mapRef.current?.flyTo({
                 center: mapRef.current.getCenter(),
-                zoom: 15.0,
-                duration: 700,
+                zoom: targetZ,
+                pitch:
+                  map3DModeRef.current === "2d"
+                    ? 0
+                    : map3DModeRef.current === "3d"
+                      ? 55
+                      : computeAutoPitch(targetZ),
+                duration: 750,
               });
             }}
             className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-900/90 px-3 py-1.5 text-xs font-semibold text-sky-200 shadow-lg backdrop-blur hover:bg-slate-800"
           >
             <Loader2 className="hidden" />
-            <span>z{zoom.toFixed(1)} • ズームインして建物形状を表示</span>
+            <span>z{zoom.toFixed(1)} • ズームインして建物・3D表示</span>
           </button>
         )}
       </div>

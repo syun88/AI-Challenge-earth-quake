@@ -203,7 +203,7 @@ export function DamageReportPanel({
     (pickedTarget?.wardName || (selectedWard !== "all" ? selectedWard : "伏見区"));
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [locationLabel, setLocationLabel] = useState("");
+  const [locationLabel, setLocationLabel] = useState(pickedTarget?.roadName || "");
   const [reporterAlias, setReporterAlias] = useState("");
   const [passcode, setPasscode] = useState("");
   const [attachBuildingOverride, setAttachBuildingOverride] = useState<boolean | null>(null);

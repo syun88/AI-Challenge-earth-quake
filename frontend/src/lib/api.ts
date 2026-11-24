@@ -15,6 +15,7 @@ import {
   DisasterUpdatesResponse,
   EarthquakeEvent,
   InteractiveRoadsGeoJSON,
+  LocationSearchResponse,
   MeshDetail,
   MetadataResponse,
   NetworkStatusResponse,
@@ -25,6 +26,7 @@ import {
   R8UnlistedLocateResponse,
   ReportCategory,
   ReportSeverity,
+  ReverseGeocodeResponse,
   RoadSelectionResult,
   RouteNode,
   RouteSimulationResponse,
@@ -727,4 +729,28 @@ export function locateR8Unlisted(params: { q: string; ward?: string }) {
   return fetchJson<R8UnlistedLocateResponse>(
     `/api/r8-seismic/locate-unlisted?${sp.toString()}`
   );
+}
+
+export function searchLocations(
+  q: string,
+  limit = 8,
+  signal?: AbortSignal
+) {
+  const sp = new URLSearchParams({
+    q: q.trim(),
+    limit: String(limit),
+  });
+  return fetchJson<LocationSearchResponse>(`/api/geocode/search?${sp.toString()}`, {
+    signal,
+  });
+}
+
+export function reverseGeocode(lat: number, lon: number, signal?: AbortSignal) {
+  const sp = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lon),
+  });
+  return fetchJson<ReverseGeocodeResponse>(`/api/geocode/reverse?${sp.toString()}`, {
+    signal,
+  });
 }

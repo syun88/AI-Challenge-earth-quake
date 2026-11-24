@@ -26,6 +26,7 @@ import { VisualPreset } from "@/components/QuakeMap";
 import {
   AgeCategory,
   HazardTier,
+  Map3DMode,
   MeshOverlayMode,
   UsageGroup,
 } from "@/types/quakelens";
@@ -38,8 +39,8 @@ interface MapDisplayPopoverProps {
   onClose: () => void;
   visualPreset: VisualPreset;
   onChangeVisualPreset: (preset: VisualPreset) => void;
-  is3D: boolean;
-  onChangeIs3D: (next: boolean) => void;
+  map3DMode: Map3DMode;
+  onChangeMap3DMode: (next: Map3DMode) => void;
   showBuildings: boolean;
   onToggleBuildings: () => void;
   showHazardMesh: boolean;
@@ -76,8 +77,8 @@ export function MapDisplayPopover({
   onClose,
   visualPreset,
   onChangeVisualPreset,
-  is3D,
-  onChangeIs3D,
+  map3DMode,
+  onChangeMap3DMode,
   showBuildings,
   onToggleBuildings,
   showHazardMesh,
@@ -173,31 +174,49 @@ export function MapDisplayPopover({
             </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+          <div className="grid grid-cols-3 gap-1.5 pt-0.5">
             <button
               type="button"
-              onClick={() => onChangeIs3D(false)}
-              className={`rounded-lg border py-1.5 text-center font-semibold transition ${
-                !is3D
-                  ? "border-sky-500 bg-sky-500/20 text-sky-200"
-                  : "border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              2D 平面地図
-            </button>
-            <button
-              type="button"
-              onClick={() => onChangeIs3D(true)}
+              data-testid="view-mode-auto-btn"
+              onClick={() => onChangeMap3DMode("auto")}
               className={`inline-flex items-center justify-center gap-1 rounded-lg border py-1.5 font-semibold transition ${
-                is3D
+                map3DMode === "auto"
                   ? "border-sky-500 bg-sky-500/20 text-sky-200"
                   : "border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200"
               }`}
             >
               <Box className="h-3.5 w-3.5" />
-              3D 立体表示
+              自動 3D
+            </button>
+            <button
+              type="button"
+              data-testid="view-mode-2d-btn"
+              onClick={() => onChangeMap3DMode("2d")}
+              className={`rounded-lg border py-1.5 text-center font-semibold transition ${
+                map3DMode === "2d"
+                  ? "border-sky-500 bg-sky-500/20 text-sky-200"
+                  : "border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              2D 平面
+            </button>
+            <button
+              type="button"
+              data-testid="view-mode-3d-btn"
+              onClick={() => onChangeMap3DMode("3d")}
+              className={`inline-flex items-center justify-center gap-1 rounded-lg border py-1.5 font-semibold transition ${
+                map3DMode === "3d"
+                  ? "border-sky-500 bg-sky-500/20 text-sky-200"
+                  : "border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <Box className="h-3.5 w-3.5" />
+              3D 固定
             </button>
           </div>
+          <p className="text-[10px] leading-relaxed text-slate-400">
+            自動3Dではホイール拡大で自然に立体表示へ傾きます。右ドラッグ・Ctrl+ドラッグ・中ボタンドラッグでいつでも角度や向きを調整できます。
+          </p>
         </section>
 
         {/* Disaster & Infrastructure Layers */}

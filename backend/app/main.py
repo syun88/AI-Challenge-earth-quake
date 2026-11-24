@@ -30,6 +30,7 @@ from app.constants import (
 from app.data_store import QuakeLensDataStore
 from app.disaster_updates import updates_store
 from app.export_utils import generate_disaster_csv, generate_disaster_xlsx
+from app.geocoding import reverse_geocode, search_locations
 from app.r8_seismic import r8_seismic_store
 from app.reports_store import DamageReportStore
 from app.route_sim import (
@@ -1007,6 +1008,34 @@ async def locate_r8_record(record_id: str) -> dict[str, Any]:
     if res is None:
         raise HTTPException(status_code=404, detail="指定されたR8リスト建築物が見つかりません。")
     return res
+
+
+@app.get("/api/geocode/search")
+async def geocode_search(
+    q: str = Query(..., min_length=1, max_length=160),
+    limit: int = Query(default=8, ge=1, le=20),
+    use_external: bool = Query(default=True),
+) -> dict[str, Any]:
+    return await search_locations(
+        q=q,
+        limit=limit,
+        store=store if store.loaded else None,
+        use_external=use_external,
+    )
+
+
+@app.get("/api/geocode/reverse")
+async def geocode_reverse(
+    lat: float = Query(..., ge=-90.0, le=90.0),
+    lon: float = Query(..., ge=-180.0, le=180.0),
+    use_external: bool = Query(default=True),
+) -> dict[str, Any]:
+    return await reverse_geocode(
+        lat=lat,
+        lon=lon,
+        store=store if store.loaded else None,
+        use_external=use_external,
+    )
 
 
 class ChatRequest(BaseModel):

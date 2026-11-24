@@ -1,30 +1,36 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import {
   AlertTriangle,
   Ambulance,
   Ban,
   Building2,
+  Check,
   Compass,
+  Copy,
   ExternalLink,
+  MapPin,
   MessageSquareHeart,
   PlusCircle,
   ShieldCheck,
   Sparkles,
   Tent,
   X,
+  ZoomIn,
 } from "lucide-react";
 import { AGE_COLORS, REPORT_CATEGORY_META, REPORT_SEVERITY_META } from "@/lib/colors";
 import { VerificationBadge } from "@/components/DamageReportPanel";
 import {
   BuildingDetail,
   DamageReport,
+  LocationSearchResult,
   MeshDetail,
   NetworkEdgeFeature,
   OfficialShelter,
   R8LocateResponse,
   R8UnlistedLocateResponse,
+  ReverseGeocodeResponse,
   RouteSimulationResponse,
   ShelterHub,
 } from "@/types/quakelens";
@@ -38,8 +44,11 @@ interface SelectedFeatureCardProps {
   selectedOfficialShelter: OfficialShelter | null;
   selectedR8Facility?: R8LocateResponse | null;
   selectedR8Unlisted?: R8UnlistedLocateResponse | null;
+  selectedSearchPlace?: LocationSearchResult | null;
+  selectedReverseAddress?: ReverseGeocodeResponse | null;
   routeResult: RouteSimulationResponse | null;
   onClearSelection: () => void;
+  onClearSearchPlace?: () => void;
   onClearRoute: () => void;
   onReportBuilding: (building: BuildingDetail) => void;
   onDispatchToBuilding: (building: BuildingDetail) => void;
@@ -47,6 +56,11 @@ interface SelectedFeatureCardProps {
   onEvacuateToHub: (hub: ShelterHub) => void;
   onRouteToOfficialShelter: (shelter: OfficialShelter) => void;
   onRecommendFromTarget: (target: { lat: number; lon: number; label: string }) => void;
+  onZoomToSearchPlace?: (place: LocationSearchResult) => void;
+  onReportFromSearchPlace?: (place: LocationSearchResult) => void;
+  onNavigateFromSearchPlace?: (place: LocationSearchResult, mode: "evacuate" | "rescue") => void;
+  onRouteToSearchedShelter?: (shelterId: string) => void;
+  onSelectNearbyShelterById?: (shelterId: string) => void;
   onStartPickRoadBlock: () => void;
   onResolveBlockedRoad: (reportId: string) => void;
   onOpenNavPanel: () => void;
@@ -64,8 +78,11 @@ export function SelectedFeatureCard({
   selectedOfficialShelter,
   selectedR8Facility = null,
   selectedR8Unlisted = null,
+  selectedSearchPlace = null,
+  selectedReverseAddress = null,
   routeResult,
   onClearSelection,
+  onClearSearchPlace,
   onClearRoute,
   onReportBuilding,
   onDispatchToBuilding,
@@ -73,6 +90,11 @@ export function SelectedFeatureCard({
   onEvacuateToHub,
   onRouteToOfficialShelter,
   onRecommendFromTarget,
+  onZoomToSearchPlace,
+  onReportFromSearchPlace,
+  onNavigateFromSearchPlace,
+  onRouteToSearchedShelter,
+  onSelectNearbyShelterById,
   onStartPickRoadBlock,
   onResolveBlockedRoad,
   onOpenNavPanel,
@@ -80,6 +102,21 @@ export function SelectedFeatureCard({
   onOpenReportForMesh,
   onRequestAiExplain,
 }: SelectedFeatureCardProps) {
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const handleCopy = (key: string, text: string) => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopiedKey(key);
+        setTimeout(() => setCopiedKey((prev) => (prev === key ? null : prev)), 1800);
+      },
+      () => {
+        // ignore clipboard denial
+      }
+    );
+  };
+
   const hasSelection = Boolean(
     selectedBuilding ||
       selectedMesh ||
@@ -88,7 +125,8 @@ export function SelectedFeatureCard({
       selectedShelterHub ||
       selectedOfficialShelter ||
       selectedR8Facility ||
-      selectedR8Unlisted
+      selectedR8Unlisted ||
+      selectedSearchPlace
   );
 
   if (!hasSelection && !routeResult) return null;
@@ -642,6 +680,17 @@ export function SelectedFeatureCard({
                 {selectedBuilding.year_built ? `${selectedBuilding.year_built}年` : "不明"} ／{" "}
                 {selectedBuilding.structure_label}
               </div>
+              {selectedReverseAddress?.address && (
+                <div className="mt-1 flex items-center gap-1 text-[11px] text-cyan-200">
+                  <MapPin className="h-3 w-3 shrink-0 text-rose-400" />
+                  <span className="truncate">
+                    {selectedReverseAddress.address}
+                    {selectedReverseAddress.nearest_road
+                      ? `（${selectedReverseAddress.nearest_road}付近）`
+                      : "付近"}
+                  </span>
+                </div>
+              )}
             </div>
             <div className="flex shrink-0 items-center gap-1">
               <span
@@ -796,6 +845,12 @@ export function SelectedFeatureCard({
                 <div className="text-[11px] text-slate-400">
                   {selectedMesh.ward_name} ／ {selectedMesh.jname}
                 </div>
+                {selectedReverseAddress?.address && (
+                  <div className="mt-1 flex items-center gap-1 text-[11px] text-cyan-200">
+                    <MapPin className="h-3 w-3 shrink-0 text-rose-400" />
+                    <span className="truncate">{selectedReverseAddress.address}付近</span>
+                  </div>
+                )}
               </div>
               <button
                 type="button"
@@ -873,6 +928,268 @@ export function SelectedFeatureCard({
               <ShieldCheck className="h-3.5 w-3.5" />
               この地域の推奨避難場所Top5を検索
             </button>
+          </div>
+        )}
+
+      {!selectedReport &&
+        !selectedBlockedRoad &&
+        !selectedShelterHub &&
+        !selectedOfficialShelter &&
+        !selectedBuilding &&
+        !selectedMesh &&
+        selectedSearchPlace && (
+          <div
+            data-testid="search-place-card"
+            className="pointer-events-auto rounded-2xl border border-rose-500/55 bg-slate-900/95 p-3.5 text-xs text-slate-100 shadow-2xl backdrop-blur-xl space-y-2.5"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/50 bg-rose-500/15 px-2 py-0.5 font-bold text-rose-200">
+                    <MapPin className="h-3 w-3 text-rose-400" />
+                    {selectedSearchPlace.kind_label}
+                  </span>
+                  <span className="rounded-full border border-slate-700 bg-slate-950/80 px-2 py-0.5 text-slate-300">
+                    {selectedSearchPlace.source_label}
+                  </span>
+                  {selectedSearchPlace.is_wide_area && (
+                    <span className="rounded-full border border-orange-500/60 bg-orange-500/20 px-2 py-0.5 font-bold text-orange-200">
+                      広域避難場所
+                    </span>
+                  )}
+                </div>
+                <h3 className="mt-1.5 text-sm font-bold leading-snug text-white">
+                  {selectedSearchPlace.title}
+                </h3>
+                <div className="mt-0.5 text-[11px] leading-relaxed text-slate-300">
+                  {selectedSearchPlace.address}
+                </div>
+                <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-slate-400">
+                  <span>
+                    {selectedSearchPlace.lat.toFixed(5)}, {selectedSearchPlace.lon.toFixed(5)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleCopy(
+                        selectedSearchPlace.id,
+                        `${selectedSearchPlace.address} (${selectedSearchPlace.lat.toFixed(5)}, ${selectedSearchPlace.lon.toFixed(5)})`
+                      )
+                    }
+                    className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-[10px] text-slate-300 hover:border-slate-500 hover:text-white"
+                  >
+                    {copiedKey === selectedSearchPlace.id ? (
+                      <>
+                        <Check className="h-2.5 w-2.5 text-emerald-400" />
+                        コピー済
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-2.5 w-2.5" />
+                        住所コピー
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="close-search-place-card"
+                onClick={onClearSearchPlace || onClearSelection}
+                aria-label="検索結果を閉じる"
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {selectedSearchPlace.disaster_labels &&
+              selectedSearchPlace.disaster_labels.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {selectedSearchPlace.disaster_labels.map((lbl) => (
+                    <span
+                      key={lbl}
+                      className="rounded-md border border-emerald-500/35 bg-emerald-950/50 px-1.5 py-0.5 text-[10px] text-emerald-200"
+                    >
+                      {lbl}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+            {selectedSearchPlace.kyoto_context?.in_kyoto_coverage ? (
+              <div className="space-y-1.5 rounded-xl border border-slate-800 bg-slate-950/75 p-2.5 text-[11px]">
+                <div className="flex items-center justify-between gap-2 text-slate-300">
+                  <span>
+                    <strong className="text-white">
+                      {selectedSearchPlace.kyoto_context.ward_name || "京都市"}
+                    </strong>{" "}
+                    ／ メッシュ{" "}
+                    <span className="font-mono text-sky-300">
+                      {selectedSearchPlace.kyoto_context.meshcode}
+                    </span>
+                  </span>
+                  {selectedSearchPlace.kyoto_context.jname && (
+                    <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300">
+                      {selectedSearchPlace.kyoto_context.jname}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  <div className="rounded-lg border border-slate-800/80 bg-slate-900/70 px-2 py-1">
+                    <span className="text-[10px] text-slate-400">震度6弱+(30年): </span>
+                    <strong className="font-mono text-fuchsia-300">
+                      {selectedSearchPlace.kyoto_context.t30_i55_ps != null
+                        ? `${(selectedSearchPlace.kyoto_context.t30_i55_ps * 100).toFixed(1)}%`
+                        : "不明"}
+                    </strong>
+                  </div>
+                  <div className="rounded-lg border border-slate-800/80 bg-slate-900/70 px-2 py-1">
+                    <span className="text-[10px] text-slate-400">地盤増幅(ARV): </span>
+                    <strong className="font-mono text-teal-300">
+                      {selectedSearchPlace.kyoto_context.arv != null
+                        ? selectedSearchPlace.kyoto_context.arv.toFixed(2)
+                        : "不明"}
+                    </strong>
+                  </div>
+                </div>
+
+                {selectedSearchPlace.kyoto_context.total_buildings != null && (
+                  <div className="text-[10px] text-slate-400">
+                    周辺250mメッシュ建物:{" "}
+                    <strong className="text-slate-200">
+                      {selectedSearchPlace.kyoto_context.total_buildings.toLocaleString("ja-JP")}棟
+                    </strong>
+                    （1981年以前{" "}
+                    <strong className="text-orange-300">
+                      {(selectedSearchPlace.kyoto_context.pre_1981_count ?? 0).toLocaleString("ja-JP")}棟
+                    </strong>
+                    {selectedSearchPlace.kyoto_context.pre_1981_share_known != null &&
+                      ` / 判明分${(selectedSearchPlace.kyoto_context.pre_1981_share_known * 100).toFixed(0)}%`}
+                    ）
+                  </div>
+                )}
+
+                {selectedSearchPlace.kyoto_context.nearest_shelter && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onSelectNearbyShelterById?.(
+                        selectedSearchPlace.kyoto_context!.nearest_shelter!.id
+                      )
+                    }
+                    className="flex w-full items-center justify-between gap-2 rounded-lg border border-teal-500/35 bg-teal-950/35 px-2 py-1 text-left text-[10px] text-teal-200 hover:border-teal-400"
+                  >
+                    <span className="truncate">
+                      最寄り避難場所: {selectedSearchPlace.kyoto_context.nearest_shelter.name}
+                    </span>
+                    <span className="shrink-0 font-mono font-bold text-teal-300">
+                      約{selectedSearchPlace.kyoto_context.nearest_shelter.distance_m}m
+                    </span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-2.5 py-2 text-[10px] text-slate-400">
+                京都市のPLATEAU・J-SHIS対象範囲外のため、建物築年・地震ハザード統計は表示対象外です。
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              {selectedSearchPlace.kind === "shelter" &&
+                selectedSearchPlace.shelter_id &&
+                onRouteToSearchedShelter && (
+                  <button
+                    type="button"
+                    onClick={() => onRouteToSearchedShelter(selectedSearchPlace.shelter_id!)}
+                    className="flex w-full items-center justify-center gap-1 rounded-xl bg-emerald-500 py-2 text-[11px] font-bold text-slate-950 hover:bg-emerald-400"
+                  >
+                    <Compass className="h-3.5 w-3.5" />
+                    この避難場所への避難経路を表示
+                  </button>
+                )}
+
+              {selectedSearchPlace.kyoto_context?.in_kyoto_coverage && (
+                <button
+                  type="button"
+                  data-testid="search-place-recommend-btn"
+                  onClick={() =>
+                    onRecommendFromTarget({
+                      lat: selectedSearchPlace.lat,
+                      lon: selectedSearchPlace.lon,
+                      label: selectedSearchPlace.title,
+                    })
+                  }
+                  className={
+                    selectedSearchPlace.kind === "shelter"
+                      ? "flex w-full items-center justify-center gap-1 rounded-xl border border-emerald-500/45 bg-emerald-500/15 py-1.5 text-[11px] font-bold text-emerald-200 hover:bg-emerald-500/25"
+                      : "flex w-full items-center justify-center gap-1 rounded-xl bg-emerald-500 py-2 text-[11px] font-bold text-slate-950 hover:bg-emerald-400"
+                  }
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  {selectedSearchPlace.kind === "shelter"
+                    ? "この周辺から他の避難場所Top5を検索"
+                    : "この地点から推奨避難場所Top5を検索"}
+                </button>
+              )}
+
+              <div className="grid grid-cols-2 gap-1.5">
+                {selectedSearchPlace.kyoto_context?.in_kyoto_coverage &&
+                  onNavigateFromSearchPlace && (
+                    <button
+                      type="button"
+                      onClick={() => onNavigateFromSearchPlace(selectedSearchPlace, "evacuate")}
+                      className="inline-flex items-center justify-center gap-1 rounded-xl border border-sky-500/50 bg-sky-500/15 py-1.5 text-[11px] font-semibold text-sky-100 hover:bg-sky-500/25"
+                    >
+                      <Compass className="h-3.5 w-3.5" />
+                      避難ルート検索
+                    </button>
+                  )}
+                {onReportFromSearchPlace && (
+                  <button
+                    type="button"
+                    data-testid="search-place-report-btn"
+                    onClick={() => onReportFromSearchPlace(selectedSearchPlace)}
+                    className="inline-flex items-center justify-center gap-1 rounded-xl border border-rose-500/50 bg-rose-500/15 py-1.5 text-[11px] font-semibold text-rose-100 hover:bg-rose-500/25"
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    この場所の被害報告
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5">
+                {onZoomToSearchPlace && (
+                  <button
+                    type="button"
+                    onClick={() => onZoomToSearchPlace(selectedSearchPlace)}
+                    className="inline-flex items-center justify-center gap-1 rounded-xl border border-slate-700 bg-slate-950/80 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-800"
+                  >
+                    <ZoomIn className="h-3.5 w-3.5 text-sky-400" />
+                    周辺建物を拡大
+                  </button>
+                )}
+                {selectedSearchPlace.kyoto_context?.in_kyoto_coverage && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onRequestAiExplain(
+                        `「${selectedSearchPlace.title}」（${selectedSearchPlace.address} / 座標 ${selectedSearchPlace.lat.toFixed(5)}, ${selectedSearchPlace.lon.toFixed(5)}${
+                          selectedSearchPlace.kyoto_context?.meshcode
+                            ? ` / メッシュ ${selectedSearchPlace.kyoto_context.meshcode}`
+                            : ""
+                        }）周辺の地震ハザード・地盤・築年リスクと備えを解説してください。`
+                      )
+                    }
+                    className="inline-flex items-center justify-center gap-1 rounded-xl border border-amber-500/40 bg-amber-500/10 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-500/20"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    AIで分析
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         )}
     </div>
