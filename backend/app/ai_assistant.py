@@ -339,6 +339,28 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "recommend_enterprise_bcp_sites",
+        "description": "企業・法人が京都に重要な施設（サーバールーム、データセンター、金庫、災害時BCP代替拠点、書類・備蓄倉庫など）を新設・移転する際、J-SHIS地震確率・表層地盤(ARV/AVS)・周辺旧耐震密度・京都市『R8_list.pdf（市有建築物耐震性能リスト）』の防災インフラ耐震適合率をもとに、比較的安全な場所と推奨エリアTop6、区別安全ランキングを提示する。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ward": {
+                    "type": "string",
+                    "description": "対象区名（例: '北区', '左京区'）または 'all'（京都市全域から探索）",
+                },
+                "purpose": {
+                    "type": "string",
+                    "description": "用途: 'datacenter_server'（サーバー・金庫・重要設備）, 'bcp_hq'（災害時BCP代替拠点・オフィス）, 'logistics_storage'（重要書類・備蓄倉庫）",
+                },
+                "avoid_mountain": {
+                    "type": "boolean",
+                    "description": "山地・山麓地などの急傾斜エリアを除外して平坦な台地・扇状地を優先するか（既定 true）",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -401,6 +423,12 @@ def _summarize_tool_call(name: str, args: dict[str, Any], result: Any) -> str:
         return f"防災アップデート・地震履歴: 地震{len(result.get('earthquakes', []))}件 / 市更新{len(result.get('municipality_updates', []))}件（全期間: 地震{c.get('total_earthquakes', 0)}・市{c.get('total_municipality_updates', 0)}）"
     if name == "get_r8_seismic_unlisted_priority" and isinstance(result, dict):
         return f"R8市有耐震リスト照合（{result.get('ward', '京都市全域')}）: 表掲載 {result.get('r8_listed_count', 0)}棟 / 表未掲載(旧耐震+不明) {result.get('unlisted_priority_buildings', 0):,}棟を優先耐震対象として抽出"
+    if name == "recommend_enterprise_bcp_sites" and isinstance(result, dict):
+        recs = result.get("recommendations") or []
+        if recs:
+            top = recs[0]
+            return f"企業BCP安全立地診断（{result.get('purpose_label')}）: 1位 {top.get('ward_name')} {top.get('meshcode')}（安全度 {top.get('safety_score')} / ARV {top.get('arv')}）"
+        return "企業BCP安全立地診断: 候補なし"
     return f"{name} 実行完了"
 
 
@@ -513,6 +541,17 @@ def _extract_map_actions(name: str, result: Any) -> list[dict[str, Any]]:
                 "lon": dst.get("lon"),
                 "lat": dst.get("lat"),
                 "zoom": 13.5,
+            })
+    elif name == "recommend_enterprise_bcp_sites":
+        for item in (result.get("recommendations") or [])[:3]:
+            actions.append({
+                "type": "fly_to_mesh",
+                "key": f"bcp_mesh:{item['meshcode']}",
+                "label": f"BCP候補{item['rank']}位: {item['ward_name']} {item['meshcode']} (ARV {item.get('arv')})",
+                "meshcode": item["meshcode"],
+                "lon": item["centroid_lon"],
+                "lat": item["centroid_lat"],
+                "zoom": 15.6,
             })
     return actions
 
@@ -832,6 +871,20 @@ def _execute_tool(
                 ward=None if ward == "all" else ward,
             )
         return out
+
+    if name == "recommend_enterprise_bcp_sites":
+        from app.bcp_site import recommend_safe_enterprise_sites
+
+        ward = str(args.get("ward") or "all")
+        purpose = str(args.get("purpose") or "datacenter_server")
+        avoid_mountain = bool(args.get("avoid_mountain", True))
+        return recommend_safe_enterprise_sites(
+            store,
+            ward=ward,
+            purpose=purpose,
+            avoid_mountain=avoid_mountain,
+            limit=6,
+        )
 
     return {"error": f"Unknown tool: {name}"}
 

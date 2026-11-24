@@ -13,6 +13,7 @@ import {
 import {
   AlertTriangle,
   BarChart3,
+  Building2,
   Download,
   ExternalLink,
   FileSpreadsheet,
@@ -20,11 +21,14 @@ import {
   MapPin,
   MessageSquareHeart,
   Search,
+  Server,
   ShieldAlert,
+  ShieldCheck,
 } from "lucide-react";
 import {
   buildDisasterCsvUrl,
   buildDisasterXlsxUrl,
+  getEnterpriseSafeSites,
   getR8SeismicList,
   locateR8Record,
   locateR8Unlisted,
@@ -37,6 +41,9 @@ import {
 } from "@/lib/colors";
 import {
   AgeCategory,
+  BcpPurpose,
+  BcpSiteCandidate,
+  BcpSiteResponse,
   BoardSummaryResponse,
   DamageReportSummaryResponse,
   HazardTier,
@@ -67,6 +74,10 @@ interface RiskStatsDrawerProps {
   onSelectPriorityArea: (area: PriorityArea) => void;
   onSelectR8Record?: (loc: R8LocateResponse) => void;
   onSelectR8Unlisted?: (loc: R8UnlistedLocateResponse) => void;
+  statsTab?: "risk" | "bcp";
+  onChangeStatsTab?: (tab: "risk" | "bcp") => void;
+  onSelectBcpSite?: (site: BcpSiteCandidate) => void;
+  onSelectWardFilter?: (ward: string) => void;
   onOpenSafety: () => void;
   onOpenReports: () => void;
 }
@@ -88,12 +99,51 @@ export function RiskStatsDrawer({
   onSelectPriorityArea,
   onSelectR8Record,
   onSelectR8Unlisted,
+  statsTab: controlledStatsTab,
+  onChangeStatsTab,
+  onSelectBcpSite,
+  onSelectWardFilter,
   onOpenSafety,
   onOpenReports,
 }: RiskStatsDrawerProps) {
+  const [internalTab, setInternalTab] = useState<"risk" | "bcp">("risk");
+  const activeTab = controlledStatsTab ?? internalTab;
+  const setActiveTab = (next: "risk" | "bcp") => {
+    setInternalTab(next);
+    onChangeStatsTab?.(next);
+  };
+
   const [r8Query, setR8Query] = useState("");
   const [r8Data, setR8Data] = useState<R8SeismicListResponse | null>(null);
   const [r8LocatingId, setR8LocatingId] = useState<string | null>(null);
+
+  const [bcpPurpose, setBcpPurpose] = useState<BcpPurpose>("datacenter_server");
+  const [bcpAvoidMountain, setBcpAvoidMountain] = useState(true);
+  const [bcpData, setBcpData] = useState<BcpSiteResponse | null>(null);
+  const [bcpLoading, setBcpLoading] = useState(false);
+
+  useEffect(() => {
+    if (activeTab !== "bcp") return;
+    let cancelled = false;
+    getEnterpriseSafeSites({
+      ward: selectedWard,
+      purpose: bcpPurpose,
+      avoidMountain: bcpAvoidMountain,
+      limit: 6,
+    })
+      .then((res) => {
+        if (!cancelled) {
+          setBcpData(res);
+          setBcpLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setBcpLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, selectedWard, bcpPurpose, bcpAvoidMountain]);
 
   useEffect(() => {
     let cancelled = false;
@@ -162,6 +212,272 @@ export function RiskStatsDrawer({
         </div>
       </div>
 
+      {/* Mode Switcher: Risk+R8 Unlisted vs Enterprise BCP Safe Site Selection */}
+      <div className="grid grid-cols-2 gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1 text-[11px]">
+        <button
+          type="button"
+          data-testid="stats-tab-risk"
+          onClick={() => setActiveTab("risk")}
+          className={`inline-flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
+            activeTab === "risk"
+              ? "bg-slate-800 text-sky-200 shadow"
+              : "text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <BarChart3 className="h-3.5 w-3.5" />
+          <span>建物リスク・R8未掲載</span>
+        </button>
+        <button
+          type="button"
+          data-testid="stats-tab-bcp"
+          onClick={() => {
+            setBcpLoading(true);
+            setActiveTab("bcp");
+          }}
+          className={`inline-flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
+            activeTab === "bcp"
+              ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 shadow"
+              : "text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Server className="h-3.5 w-3.5" />
+          <span>企業BCP安全立地</span>
+        </button>
+      </div>
+
+      {activeTab === "bcp" && (
+        <div className="space-y-3" data-testid="enterprise-bcp-panel">
+          <div className="rounded-xl border border-emerald-500/40 bg-emerald-950/25 p-3 text-xs space-y-2">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-1.5 font-bold text-emerald-200">
+                  <Building2 className="h-4 w-4 text-emerald-400" />
+                  <span>企業向け 重要施設・BCP代替拠点 立地診断</span>
+                </div>
+                <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+                  サーバー室・金庫・BCP代替拠点を京都に新設/移転する際、J-SHIS揺れ確率・地盤(ARV/AVS)・周辺旧耐震密度と『R8_list.pdf（市有耐震リスト）』の行政区インフラ耐震率から比較的安全な候補地を抽出します。
+                </p>
+              </div>
+              {bcpData && (
+                <a
+                  href={bcpData.r8_pdf_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/25"
+                >
+                  <span>R8_list.pdf</span>
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+            </div>
+
+            <div className="grid grid-cols-3 gap-1.5 pt-1">
+              {(
+                [
+                  { id: "datacenter_server", label: "サーバー・金庫", sub: "揺れ・地盤最重視" },
+                  { id: "bcp_hq", label: "BCP代替拠点", sub: "公的R8拠点連携" },
+                  { id: "logistics_storage", label: "書類・備蓄倉庫", sub: "周辺延焼回避" },
+                ] as const
+              ).map((p) => {
+                const active = bcpPurpose === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    data-testid={`bcp-purpose-${p.id}`}
+                    onClick={() => {
+                      setBcpLoading(true);
+                      setBcpPurpose(p.id);
+                    }}
+                    className={`rounded-xl border p-2 text-left transition ${
+                      active
+                        ? "border-emerald-400 bg-emerald-500/20 text-white"
+                        : "border-slate-700/80 bg-slate-900/70 text-slate-300 hover:border-slate-500"
+                    }`}
+                  >
+                    <div className="text-[11px] font-bold">{p.label}</div>
+                    <div className="text-[9px] text-slate-400">{p.sub}</div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <label className="flex cursor-pointer items-center gap-2 pt-0.5 text-[11px] text-slate-300">
+              <input
+                type="checkbox"
+                checked={bcpAvoidMountain}
+                onChange={(e) => {
+                  setBcpLoading(true);
+                  setBcpAvoidMountain(e.target.checked);
+                }}
+                className="rounded border-slate-600 bg-slate-950 text-emerald-500 focus:ring-0"
+              />
+              <span>山地・急傾斜を除外し平坦な台地・扇状地を優先（建設向け）</span>
+            </label>
+          </div>
+
+          {bcpLoading && !bcpData && (
+            <div className="flex items-center justify-center gap-2 py-8 text-xs text-slate-400">
+              <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
+              <span>安全な立地候補を解析しています...</span>
+            </div>
+          )}
+
+          {bcpData && (
+            <>
+              {/* Ward Comparative Safety Ranking */}
+              <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 space-y-2">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-bold text-slate-200">
+                    区別の比較安全度 × R8市有防災拠点適合率
+                  </span>
+                  {selectedWard !== "all" && (
+                    <button
+                      type="button"
+                      onClick={() => onSelectWardFilter?.("all")}
+                      className="text-[10px] text-cyan-300 hover:underline"
+                    >
+                      全区比較に戻す
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  {bcpData.ward_ranking.slice(0, 6).map((w, idx) => (
+                    <button
+                      key={w.ward_name}
+                      type="button"
+                      onClick={() => onSelectWardFilter?.(w.ward_name)}
+                      className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-[11px] transition ${
+                        selectedWard === w.ward_name
+                          ? "border-emerald-400 bg-emerald-950/35"
+                          : "border-slate-800/80 bg-slate-900/60 hover:border-slate-600"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[10px] font-bold text-emerald-300">
+                          {idx + 1}.
+                        </span>
+                        <span className="font-bold text-white">{w.ward_name}</span>
+                        <span className="text-[10px] text-slate-400">
+                          R8適合 {(w.r8_safe_rate * 100).toFixed(0)}% ({w.r8_safe_count}/{w.r8_total})
+                        </span>
+                      </div>
+                      <div className="font-mono text-[10px] text-slate-300">
+                        6弱+ {(w.avg_t30_i55_ps * 100).toFixed(1)}% / ARV {w.avg_arv}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Top 6 Safe 250m Mesh Recommendations */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-[11px] text-slate-400">
+                  <span>
+                    推奨安全エリア Top {bcpData.recommendations.length}（クリックで地図へ移動）
+                  </span>
+                  <span>
+                    {selectedWard === "all" ? "京都市全域" : selectedWard}
+                  </span>
+                </div>
+
+                {bcpData.recommendations.map((site) => (
+                  <button
+                    key={site.meshcode}
+                    type="button"
+                    data-testid={`bcp-site-card-${site.rank}`}
+                    onClick={() => onSelectBcpSite?.(site)}
+                    className="w-full space-y-2 rounded-xl border border-slate-700/80 bg-slate-900/75 p-3 text-left transition hover:border-emerald-400/70 hover:bg-slate-900"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-black text-slate-950">
+                            {site.rank}
+                          </span>
+                          <span className="text-xs font-bold text-white">
+                            {site.ward_name} ／ {site.jname}
+                          </span>
+                          <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
+                            {site.meshcode}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div className="font-mono text-xs font-extrabold text-emerald-300">
+                          安全度 {site.safety_score}点
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          {site.hazard_label.split("（")[0]}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-1 text-center font-mono text-[10px]">
+                      <div className="rounded border border-slate-800 bg-slate-950/70 px-1.5 py-1">
+                        <div className="text-[9px] text-slate-400">震度6弱+</div>
+                        <div className="font-bold text-emerald-200">
+                          {(site.t30_i55_ps * 100).toFixed(2)}%
+                        </div>
+                      </div>
+                      <div className="rounded border border-slate-800 bg-slate-950/70 px-1.5 py-1">
+                        <div className="text-[9px] text-slate-400">地盤 ARV</div>
+                        <div className="font-bold text-cyan-200">{site.arv.toFixed(2)}</div>
+                      </div>
+                      <div className="rounded border border-slate-800 bg-slate-950/70 px-1.5 py-1">
+                        <div className="text-[9px] text-slate-400">S波 AVS</div>
+                        <div className="font-bold text-slate-100">
+                          {site.avs != null ? `${site.avs.toFixed(0)}` : "—"}
+                        </div>
+                      </div>
+                      <div className="rounded border border-slate-800 bg-slate-950/70 px-1.5 py-1">
+                        <div className="text-[9px] text-slate-400">周辺旧耐震</div>
+                        <div className="font-bold text-amber-200">
+                          {site.pre_1981_count}/{site.total_buildings}
+                        </div>
+                      </div>
+                    </div>
+
+                    {site.reasons.length > 0 && (
+                      <ul className="space-y-0.5 text-[10px] text-slate-300">
+                        {site.reasons.slice(0, 3).map((r, i) => (
+                          <li key={i} className="flex items-start gap-1">
+                            <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" />
+                            <span>{r}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {site.r8_ward_stats.sample_safe_facilities.length > 0 && (
+                      <div className="rounded-lg border border-slate-800 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-300">
+                        周辺R8適合拠点: {site.r8_ward_stats.sample_safe_facilities.slice(0, 2).join("・")}
+                      </div>
+                    )}
+
+                    {site.cautions.length > 0 && (
+                      <div className="rounded-lg border border-amber-500/35 bg-amber-950/25 px-2 py-1 text-[10px] text-amber-200">
+                        留意点: {site.cautions[0]}
+                      </div>
+                    )}
+
+                    <div className="text-[10px] leading-snug text-cyan-200/90">
+                      {site.bcp_guidance}
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="rounded-lg border border-slate-800 bg-slate-950/70 px-2.5 py-2 text-[10px] leading-relaxed text-slate-400">
+                {bcpData.disclaimer}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {activeTab === "risk" && (
+        <>
       {/* Live Safety + Damage KPI Cards */}
       <div className="grid grid-cols-2 gap-2.5">
         <button
@@ -646,6 +962,8 @@ export function RiskStatsDrawer({
           )}
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

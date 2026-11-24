@@ -1,5 +1,7 @@
 import {
   AiProtectionStatus,
+  BcpPurpose,
+  BcpSiteResponse,
   BoardEntry,
   BoardListResponse,
   BoardStatus,
@@ -753,4 +755,19 @@ export function reverseGeocode(lat: number, lon: number, signal?: AbortSignal) {
   return fetchJson<ReverseGeocodeResponse>(`/api/geocode/reverse?${sp.toString()}`, {
     signal,
   });
+}
+
+export function getEnterpriseSafeSites(params?: {
+  ward?: string;
+  purpose?: BcpPurpose;
+  avoidMountain?: boolean;
+  limit?: number;
+}) {
+  const sp = new URLSearchParams({
+    ward: params?.ward ?? "all",
+    purpose: params?.purpose ?? "datacenter_server",
+    avoid_mountain: params?.avoidMountain === false ? "false" : "true",
+    limit: String(params?.limit ?? 6),
+  });
+  return fetchJson<BcpSiteResponse>(`/api/enterprise/safe-sites?${sp.toString()}`);
 }

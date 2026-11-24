@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Ban,
+  Building2,
   Compass,
   Map as MapIcon,
   MessageSquareHeart,
@@ -63,6 +64,7 @@ import {
 import {
   AgeCategory,
   AiProtectionStatus,
+  BcpSiteCandidate,
   BoardSummaryResponse,
   BuildingDetail,
   DamageReport,
@@ -168,8 +170,10 @@ export default function HomePage() {
   const [updatesRefreshMsg, setUpdatesRefreshMsg] = useState<string | null>(null);
 
   // Active Selections & Map Pickers
+  const [statsTab, setStatsTab] = useState<"risk" | "bcp">("risk");
   const [selectedBuilding, setSelectedBuilding] = useState<BuildingDetail | null>(null);
   const [selectedMesh, setSelectedMesh] = useState<MeshDetail | null>(null);
+  const [selectedBcpSite, setSelectedBcpSite] = useState<BcpSiteCandidate | null>(null);
   const [selectedReport, setSelectedReport] = useState<DamageReport | null>(null);
   const [selectedBlockedRoad, setSelectedBlockedRoad] = useState<NetworkEdgeFeature | null>(null);
   const [selectedShelterHub, setSelectedShelterHub] = useState<ShelterHub | null>(null);
@@ -348,6 +352,7 @@ export default function HomePage() {
   const clearSelections = useCallback(() => {
     setSelectedBuilding(null);
     setSelectedMesh(null);
+    setSelectedBcpSite(null);
     setSelectedReport(null);
     setSelectedBlockedRoad(null);
     setSelectedShelterHub(null);
@@ -701,6 +706,31 @@ export default function HomePage() {
         void loadReverseAddress(detail.centroid_lat, detail.centroid_lon);
       } catch {
         // ignore
+      }
+    },
+    [clearSelections, loadReverseAddress]
+  );
+
+  const handleSelectBcpSite = useCallback(
+    async (site: BcpSiteCandidate) => {
+      clearSelections();
+      setSelectedBcpSite(site);
+      setSelectedMeshcode(site.meshcode);
+      setFlyToTarget({
+        lat: site.centroid_lat,
+        lon: site.centroid_lon,
+        zoom: 15.8,
+        ts: Date.now(),
+      });
+      try {
+        const detail = await getMeshDetail(site.meshcode);
+        setSelectedMesh(detail);
+        void loadReverseAddress(site.centroid_lat, site.centroid_lon);
+      } catch {
+        // ignore mesh detail fallback
+      }
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        setActivePanel("none");
       }
     },
     [clearSelections, loadReverseAddress]
@@ -1607,17 +1637,25 @@ export default function HomePage() {
                     subLabel: "R8表未掲載（優先耐震対象）",
                     tone: "rose",
                   }
-                : selectedOfficialShelter
+                : selectedBcpSite
                   ? {
-                      lat: selectedOfficialShelter.lat,
-                      lon: selectedOfficialShelter.lon,
-                      label: selectedOfficialShelter.name,
-                      subLabel: selectedOfficialShelter.is_wide_area
-                        ? "広域避難場所"
-                        : "指定緊急避難場所",
+                      lat: selectedBcpSite.centroid_lat,
+                      lon: selectedBcpSite.centroid_lon,
+                      label: `BCP推奨${selectedBcpSite.rank}位: ${selectedBcpSite.ward_name} (${selectedBcpSite.jname})`,
+                      subLabel: `安全度 ${selectedBcpSite.safety_score}点 / ARV ${selectedBcpSite.arv.toFixed(2)}`,
                       tone: "emerald",
                     }
-                  : null
+                  : selectedOfficialShelter
+                    ? {
+                        lat: selectedOfficialShelter.lat,
+                        lon: selectedOfficialShelter.lon,
+                        label: selectedOfficialShelter.name,
+                        subLabel: selectedOfficialShelter.is_wide_area
+                          ? "広域避難場所"
+                          : "指定緊急避難場所",
+                        tone: "emerald",
+                      }
+                    : null
         }
         flyToTarget={flyToTarget}
         searchPin={searchPin}
@@ -1754,7 +1792,9 @@ export default function HomePage() {
                         ? "避難・救援ルート案内"
                         : activePanel === "ai"
                           ? "Gemini AI 状況分析"
-                          : "災害統計・建物リスク分析"}
+                          : statsTab === "bcp"
+                            ? "企業BCP・重要施設 安全立地候補"
+                            : "災害統計・建物リスク分析"}
             </span>
             <button
               type="button"
@@ -1945,6 +1985,10 @@ export default function HomePage() {
                 onSelectPriorityArea={handleSelectPriorityArea}
                 onSelectR8Record={handleSelectR8Record}
                 onSelectR8Unlisted={handleSelectR8Unlisted}
+                statsTab={statsTab}
+                onChangeStatsTab={setStatsTab}
+                onSelectBcpSite={(site) => void handleSelectBcpSite(site)}
+                onSelectWardFilter={handleSelectWard}
                 onOpenSafety={() => setActivePanel("safety")}
                 onOpenReports={() => setActivePanel("report")}
               />
@@ -2041,6 +2085,18 @@ export default function HomePage() {
                 className="rounded-lg bg-rose-500 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-rose-400"
               >
                 ＋ 被害を報告
+              </button>
+              <button
+                type="button"
+                data-testid="summary-enterprise-bcp-btn"
+                onClick={() => {
+                  setStatsTab("bcp");
+                  setActivePanel("stats");
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/20 px-2.5 py-1 text-[11px] font-bold text-emerald-100 hover:bg-emerald-500/35"
+              >
+                <Building2 className="h-3 w-3 text-emerald-300" />
+                企業BCP適地
               </button>
               <button
                 type="button"

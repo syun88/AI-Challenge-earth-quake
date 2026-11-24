@@ -908,3 +908,46 @@ def test_r8_seismic_list_and_unlisted_priority(isolated_env) -> None:
     assert u_data["listed_in_r8"] is False
     assert "R8_list.pdf" in u_data["priority_message"]
     assert 34.8 < u_data["lat"] < 35.3
+
+
+def test_enterprise_bcp_safe_sites_and_r8_integration(isolated_env) -> None:
+    """Enterprise BCP safe-site recommendation ranks Kyoto wards and 250m meshes using J-SHIS + R8 list."""
+    client, s_store, _, _ = isolated_env
+    r = client.get("/api/enterprise/safe-sites?purpose=datacenter_server&avoid_mountain=true&limit=5")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["purpose"] == "datacenter_server"
+    assert "R8_list.pdf" in data["r8_pdf_url"]
+    assert data["r8_total_listed"] >= 900
+    assert len(data["ward_ranking"]) >= 2
+    assert data["ward_ranking"][0]["ward_name"] == "中京区"
+    assert len(data["recommendations"]) >= 1
+
+    top_site = data["recommendations"][0]
+    assert top_site["rank"] == 1
+    assert top_site["ward_name"] == "中京区"
+    assert 0 < top_site["safety_score"] <= 100
+    assert top_site["jname"] not in ("山地", "山麓地")
+    assert len(top_site["reasons"]) >= 1
+    assert top_site["r8_ward_stats"]["total"] > 0
+    assert 0.0 < top_site["r8_ward_stats"]["safe_rate"] <= 1.0
+    assert "R8_list.pdf" in top_site["bcp_guidance"]
+
+    # Switch scenario & ward filter
+    r_hq = client.get("/api/enterprise/safe-sites?ward=中京区&purpose=bcp_hq&limit=3")
+    assert r_hq.status_code == 200
+    hq_data = r_hq.json()
+    assert len(hq_data["recommendations"]) >= 1
+    assert all(rec["ward_name"] == "中京区" for rec in hq_data["recommendations"])
+
+    # AI tool + map action extraction works seamlessly
+    from app import ai_assistant
+
+    t_bcp = ai_assistant._execute_tool(
+        s_store,
+        "recommend_enterprise_bcp_sites",
+        {"ward": "all", "purpose": "datacenter_server", "avoid_mountain": True, "limit": 3},
+    )
+    assert len(t_bcp["recommendations"]) >= 1
+    actions = ai_assistant._extract_map_actions("recommend_enterprise_bcp_sites", t_bcp)
+    assert any(act["type"] == "fly_to_mesh" for act in actions)

@@ -926,3 +926,73 @@ export interface ReverseGeocodeResponse {
   source: string;
   kyoto_context?: LocationKyotoContext | null;
 }
+
+export type BcpPurpose = "datacenter_server" | "bcp_hq" | "logistics_storage";
+
+export interface BcpWardRankItem {
+  ward_name: string;
+  safety_score: number;
+  avg_t30_i55_ps: number;
+  avg_arv: number;
+  avg_avs: number;
+  total_buildings: number;
+  pre_1981_count: number;
+  unlisted_priority_count: number;
+  r8_total: number;
+  r8_safe_count: number;
+  r8_needs_retrofit: number;
+  r8_safe_rate: number;
+}
+
+export interface BcpSiteCandidate {
+  rank: number;
+  meshcode: string;
+  ward_name: string;
+  centroid_lat: number;
+  centroid_lon: number;
+  safety_score: number;
+  t30_i55_ps: number;
+  t30_i60_ps: number | null;
+  hazard_tier: HazardTier;
+  hazard_label: string;
+  arv: number;
+  avs: number | null;
+  jname: string;
+  total_buildings: number;
+  pre_1981_count: number;
+  wooden_pre_1981_count: number;
+  unlisted_priority_count: number;
+  pre_1981_share_known: number | null;
+  r8_ward_stats: {
+    total: number;
+    safe: number;
+    needs_retrofit: number;
+    safe_rate: number;
+    sample_safe_facilities: string[];
+  };
+  nearest_official_shelter: {
+    id: string;
+    name: string;
+    ward: string;
+    distance_km: number;
+    is_wide_area: boolean;
+    disaster_labels: string[];
+  } | null;
+  reasons: string[];
+  cautions: string[];
+  bcp_guidance: string;
+}
+
+export interface BcpSiteResponse {
+  purpose: BcpPurpose;
+  purpose_label: string;
+  ward: string;
+  avoid_mountain: boolean;
+  r8_pdf_url: string;
+  r8_page_url: string;
+  r8_total_listed: number;
+  r8_grade_counts: Record<string, number>;
+  ward_ranking: BcpWardRankItem[];
+  recommendations: BcpSiteCandidate[];
+  disclaimer: string;
+}

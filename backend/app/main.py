@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.ai_assistant import ask_quakelens_ai, stream_quakelens_ai
+from app.bcp_site import recommend_safe_enterprise_sites
 from app.board_store import BOARD_STATUS_LABELS, DisasterBoardStore
 from app.constants import (
     OFFICIAL_RETROFIT_PROGRAMS,
@@ -1008,6 +1009,27 @@ async def locate_r8_record(record_id: str) -> dict[str, Any]:
     if res is None:
         raise HTTPException(status_code=404, detail="指定されたR8リスト建築物が見つかりません。")
     return res
+
+
+@app.get("/api/enterprise/safe-sites")
+def get_enterprise_safe_sites(
+    ward: str = Query(default="all"),
+    purpose: str = Query(
+        default="datacenter_server",
+        pattern="^(datacenter_server|bcp_hq|logistics_storage)$",
+    ),
+    avoid_mountain: bool = Query(default=True),
+    limit: int = Query(default=6, ge=1, le=20),
+) -> dict[str, Any]:
+    """Recommend comparatively safer Kyoto locations for corporate critical facilities / BCP sites."""
+    s = _require_store()
+    return recommend_safe_enterprise_sites(
+        s,
+        ward=ward,
+        purpose=purpose,
+        avoid_mountain=avoid_mountain,
+        limit=limit,
+    )
 
 
 @app.get("/api/geocode/search")
