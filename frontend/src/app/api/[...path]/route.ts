@@ -51,6 +51,8 @@ async function forwardProxyRequest(
   if (cacheControl) headers.set("Cache-Control", cacheControl);
   const contentDisposition = upstream.headers.get("content-disposition");
   if (contentDisposition) headers.set("Content-Disposition", contentDisposition);
+  const ttsModelHeader = upstream.headers.get("x-tts-model");
+  if (ttsModelHeader) headers.set("X-TTS-Model", ttsModelHeader);
 
   return new Response(upstream.body, {
     status: upstream.status,

@@ -229,6 +229,10 @@ export interface MochimamoLive2DProps {
   mood?: MochimamoMood;
   /** Incrementing number (e.g. streamed char length) that pulses live lip-sync */
   speechPulseKey?: number;
+  /** Real-time normalized RMS audio amplitude [0..1] for voice-driven lip-sync */
+  audioLevelRef?: React.RefObject<number>;
+  /** True while Gemini TTS audio is actively playing */
+  isAudioPlaying?: boolean;
   /** Incrementing number to trigger a cheerful wave & hop programmatically */
   waveTrigger?: number;
   className?: string;
@@ -323,8 +327,8 @@ function drawTalkingMouth(
   openY: number,
   t: number
 ) {
-  const w = 22 + Math.sin(t * 11.5) * 4.5;
-  const h = 4 + openY * 18;
+  const w = 18 + openY * 8 + Math.sin(t * 13.5) * 3.2;
+  const h = 3.5 + openY * 18.5;
 
   ctx.save();
   ctx.shadowColor = "#38e8ff";
@@ -334,10 +338,10 @@ function drawTalkingMouth(
   ctx.lineWidth = 6.5;
 
   ctx.beginPath();
-  ctx.moveTo(cx - w, cy - h * 0.25);
-  ctx.quadraticCurveTo(cx, cy - h * 0.45, cx + w, cy - h * 0.25);
+  ctx.moveTo(cx - w, cy - h * 0.28);
+  ctx.quadraticCurveTo(cx, cy - h * 0.5, cx + w, cy - h * 0.28);
   ctx.quadraticCurveTo(cx + w * 0.85, cy + h, cx, cy + h);
-  ctx.quadraticCurveTo(cx - w * 0.85, cy + h, cx - w, cy - h * 0.25);
+  ctx.quadraticCurveTo(cx - w * 0.85, cy + h, cx - w, cy - h * 0.28);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
@@ -368,6 +372,8 @@ function drawConcernedMouth(ctx: CanvasRenderingContext2D, cx: number, cy: numbe
 export function MochimamoLive2D({
   mood = "idle",
   speechPulseKey = 0,
+  audioLevelRef,
+  isAudioPlaying = false,
   waveTrigger = 0,
   className = "",
   interactive = true,
@@ -378,9 +384,17 @@ export function MochimamoLive2D({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const imagesRef = useRef<Partial<Record<PartKey, HTMLImageElement>>>({});
   const moodRef = useRef<MochimamoMood>(mood);
+  const externalAudioLevelRef = useRef<React.RefObject<number> | undefined>(audioLevelRef);
+  const isAudioPlayingRef = useRef<boolean>(isAudioPlaying);
   useEffect(() => {
     moodRef.current = mood;
   }, [mood]);
+  useEffect(() => {
+    externalAudioLevelRef.current = audioLevelRef;
+  }, [audioLevelRef]);
+  useEffect(() => {
+    isAudioPlayingRef.current = isAudioPlaying;
+  }, [isAudioPlaying]);
 
   const rigRef = useRef<RigState>({
     t: 0,
@@ -611,18 +625,24 @@ export function MochimamoLive2D({
       }
       s.eyeOpen = lerp(s.eyeOpen, targetEyeOpen * blinkFactor, 1 - Math.exp(-26 * dt));
 
-      // 3. Real-Time Lip-Sync Modulation
-      const speakingActive = curMood === "speaking" || s.speechTimer > 0;
-      const targetMouth = speakingActive
-        ? clamp(
-            0.22 +
-              Math.abs(Math.sin(s.t * 14.2)) * 0.5 +
-              Math.abs(Math.sin(s.t * 23.7 + 0.7)) * 0.32,
-            0.12,
-            1.0
-          )
-        : 0;
-      s.mouthOpenY = lerp(s.mouthOpenY, targetMouth, 1 - Math.exp(-20 * dt));
+      // 3. Real-Time Lip-Sync Modulation (Audio RMS takes priority over text stream fallback)
+      const liveAudioLevel = clamp(externalAudioLevelRef.current?.current ?? 0, 0, 1);
+      const audioActive = isAudioPlayingRef.current || liveAudioLevel > 0.02;
+      const speakingActive = audioActive || curMood === "speaking" || s.speechTimer > 0;
+      const targetMouth = audioActive
+        ? liveAudioLevel > 0.018
+          ? clamp(liveAudioLevel * (0.85 + 0.15 * Math.abs(Math.sin(s.t * 16.0))), 0.08, 1.0)
+          : 0
+        : speakingActive
+          ? clamp(
+              0.22 +
+                Math.abs(Math.sin(s.t * 14.2)) * 0.5 +
+                Math.abs(Math.sin(s.t * 23.7 + 0.7)) * 0.32,
+              0.12,
+              1.0
+            )
+          : 0;
+      s.mouthOpenY = lerp(s.mouthOpenY, targetMouth, 1 - Math.exp((audioActive ? -30 : -20) * dt));
 
       // 4. Breathing & Levitation
       const breath = Math.sin(s.t * 2.15);

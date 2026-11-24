@@ -1,7 +1,17 @@
 "use client";
 
 import React, { useState } from "react";
-import { ChevronDown, ChevronUp, Hand, Maximize2, Minimize2, Sparkles } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Hand,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Sparkles,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { MochimamoLive2D, MochimamoMood } from "@/components/MochimamoLive2D";
 
 export type StageMode = "compact" | "expanded" | "minimized";
@@ -11,6 +21,13 @@ interface MochimamoChatStageProps {
   statusText: string;
   speechPulseKey: number;
   selectedWard: string;
+  muted: boolean;
+  onToggleMute: () => void;
+  audioLoading?: boolean;
+  audioPlaying?: boolean;
+  audioLevelRef?: React.RefObject<number>;
+  audioError?: string | null;
+  onClearAudioError?: () => void;
 }
 
 const MOOD_META: Record<
@@ -73,49 +90,93 @@ export function MochimamoChatStage({
   statusText,
   speechPulseKey,
   selectedWard,
+  muted,
+  onToggleMute,
+  audioLoading = false,
+  audioPlaying = false,
+  audioLevelRef,
+  audioError,
+  onClearAudioError,
 }: MochimamoChatStageProps) {
   const [stageMode, setStageMode] = useState<StageMode>("compact");
   const [manualMood, setManualMood] = useState<MochimamoMood | "auto">("auto");
   const [waveTrigger, setWaveTrigger] = useState(0);
   const [tipIndex, setTipIndex] = useState<number | null>(null);
 
-  const effectiveMood = manualMood === "auto" ? mood : manualMood;
+  const effectiveMood = audioPlaying ? "speaking" : manualMood === "auto" ? mood : manualMood;
   const meta = MOOD_META[effectiveMood];
   const areaLabel = selectedWard === "all" ? "京都市全域" : selectedWard;
 
-  const displayBubble =
-    manualMood !== "auto"
-      ? `表情プレビュー中（${MANUAL_MOODS.find((m) => m.id === manualMood)?.label}）— 「自動」でAI連動に戻ります`
-      : tipIndex !== null && effectiveMood === "idle"
-        ? MOCHIMAMO_TIPS[tipIndex]
-        : statusText;
+  const displayBubble = audioError
+    ? `音声エラー: ${audioError}`
+    : audioLoading
+      ? "音声を生成しています（Gemini TTS）…"
+      : audioPlaying
+        ? "音声でお話ししています…（ミュートでいつでも停止できます）"
+        : manualMood !== "auto"
+          ? `表情プレビュー中（${MANUAL_MOODS.find((m) => m.id === manualMood)?.label}）— 「自動」でAI連動に戻ります`
+          : tipIndex !== null && effectiveMood === "idle"
+            ? MOCHIMAMO_TIPS[tipIndex]
+            : statusText;
 
   const handleTapMascot = () => {
+    onClearAudioError?.();
     setWaveTrigger((n) => n + 1);
     setTipIndex((prev) => (prev === null ? 0 : (prev + 1) % MOCHIMAMO_TIPS.length));
   };
+
+  const muteBtnClass = muted
+    ? "border-slate-700 bg-slate-900/90 text-slate-400 hover:border-slate-500 hover:text-slate-200"
+    : audioPlaying
+      ? "border-emerald-400/70 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30"
+      : "border-cyan-500/45 bg-cyan-500/15 text-cyan-200 hover:bg-cyan-500/25";
 
   if (stageMode === "minimized") {
     return (
       <div
         data-testid="mochimamo-chat-stage"
-        className="mb-2 flex items-center justify-between rounded-xl border border-cyan-500/30 bg-slate-950/90 px-2.5 py-1.5"
+        className="mb-2 flex items-center justify-between gap-1.5 rounded-xl border border-cyan-500/30 bg-slate-950/90 px-2.5 py-1.5"
       >
-        <div className="flex items-center gap-2">
-          <span className="inline-flex h-2 w-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)]" />
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className={`inline-flex h-2 w-2 shrink-0 rounded-full ${
+              audioPlaying
+                ? "animate-pulse bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]"
+                : "bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)]"
+            }`}
+          />
           <span className="text-[11px] font-bold text-slate-100">もちまも</span>
-          <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${meta.badgeClass}`}>
+          <span className={`truncate rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${meta.badgeClass}`}>
             {meta.label}
           </span>
         </div>
-        <button
-          type="button"
-          onClick={() => setStageMode("compact")}
-          className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] text-cyan-200 hover:border-cyan-500/50 hover:text-white"
-        >
-          <ChevronDown className="h-3 w-3" />
-          表示
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            data-testid="mochimamo-mute-btn"
+            onClick={onToggleMute}
+            aria-pressed={muted}
+            title={muted ? "音声をオンにする" : "音声をミュートする"}
+            className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium transition ${muteBtnClass}`}
+          >
+            {audioLoading ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : muted ? (
+              <VolumeX className="h-3 w-3" />
+            ) : (
+              <Volume2 className="h-3 w-3" />
+            )}
+            <span>{muted ? "ミュート" : audioPlaying ? "発話中" : "音声ON"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setStageMode("compact")}
+            className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] text-cyan-200 hover:border-cyan-500/50 hover:text-white"
+          >
+            <ChevronDown className="h-3 w-3" />
+            表示
+          </button>
+        </div>
       </div>
     );
   }
@@ -137,7 +198,9 @@ export function MochimamoChatStage({
           <div className="relative h-[152px] w-[148px] shrink-0 overflow-hidden rounded-lg border border-slate-800/80 bg-slate-950/65 sm:h-[168px] sm:w-[162px]">
             <MochimamoLive2D
               mood={effectiveMood}
-              speechPulseKey={speechPulseKey}
+              speechPulseKey={muted ? 0 : speechPulseKey}
+              audioLevelRef={audioLevelRef}
+              isAudioPlaying={audioPlaying}
               waveTrigger={waveTrigger}
               onTap={handleTapMascot}
               className="h-full w-full"
@@ -183,15 +246,35 @@ export function MochimamoChatStage({
               </div>
             </div>
 
-            <div className="rounded-lg border border-slate-800/90 bg-slate-950/75 px-2.5 py-1.5 text-[11px] leading-snug text-slate-200">
+            <div
+              className={`rounded-lg border px-2.5 py-1.5 text-[11px] leading-snug ${
+                audioError
+                  ? "border-amber-500/40 bg-amber-950/40 text-amber-200"
+                  : "border-slate-800/90 bg-slate-950/75 text-slate-200"
+              }`}
+            >
               {displayBubble}
             </div>
 
-            {/* Quick Live2D Mood Controls */}
+            {/* Quick Voice Mute + Live2D Mood Controls */}
             <div className="flex items-center justify-between gap-1">
-              <span className="truncate text-[9px] text-slate-400">
-                担当: <span className="text-sky-300">{areaLabel}</span>
-              </span>
+              <button
+                type="button"
+                data-testid="mochimamo-mute-btn"
+                onClick={onToggleMute}
+                aria-pressed={muted}
+                title={muted ? "もちまもの音声をオンにする" : "もちまもの音声をミュートする"}
+                className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-1.5 py-0.5 text-[9px] font-semibold transition ${muteBtnClass}`}
+              >
+                {audioLoading ? (
+                  <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                ) : muted ? (
+                  <VolumeX className="h-2.5 w-2.5" />
+                ) : (
+                  <Volume2 className="h-2.5 w-2.5" />
+                )}
+                <span>{muted ? "ミュート" : audioPlaying ? "喋り中" : "音声ON"}</span>
+              </button>
               <div className="flex items-center gap-0.5">
                 {MANUAL_MOODS.map((opt) => (
                   <button
@@ -209,6 +292,9 @@ export function MochimamoChatStage({
                 ))}
               </div>
             </div>
+            <div className="truncate text-[9px] text-slate-400">
+              担当エリア: <span className="text-sky-300">{areaLabel}</span>
+            </div>
           </div>
         </div>
       ) : (
@@ -225,6 +311,23 @@ export function MochimamoChatStage({
               </span>
             </div>
             <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                data-testid="mochimamo-mute-btn"
+                onClick={onToggleMute}
+                aria-pressed={muted}
+                title={muted ? "もちまもの音声をオンにする" : "もちまもの音声をミュートする"}
+                className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium transition ${muteBtnClass}`}
+              >
+                {audioLoading ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : muted ? (
+                  <VolumeX className="h-3 w-3" />
+                ) : (
+                  <Volume2 className="h-3 w-3" />
+                )}
+                <span>{muted ? "ミュート" : "音声ON"}</span>
+              </button>
               <button
                 type="button"
                 onClick={handleTapMascot}
@@ -248,7 +351,9 @@ export function MochimamoChatStage({
           <div className="relative h-[236px] w-full overflow-hidden rounded-lg border border-slate-800/80 bg-slate-950/70">
             <MochimamoLive2D
               mood={effectiveMood}
-              speechPulseKey={speechPulseKey}
+              speechPulseKey={muted ? 0 : speechPulseKey}
+              audioLevelRef={audioLevelRef}
+              isAudioPlaying={audioPlaying}
               waveTrigger={waveTrigger}
               onTap={handleTapMascot}
               className="h-full w-full"

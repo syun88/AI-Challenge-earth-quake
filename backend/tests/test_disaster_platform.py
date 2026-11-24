@@ -951,3 +951,136 @@ def test_enterprise_bcp_safe_sites_and_r8_integration(isolated_env) -> None:
     assert len(t_bcp["recommendations"]) >= 1
     actions = ai_assistant._extract_map_actions("recommend_enterprise_bcp_sites", t_bcp)
     assert any(act["type"] == "fly_to_mesh" for act in actions)
+
+
+def test_chat_tts_sanitizer_and_endpoint(isolated_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import tts as tts_mod
+
+    client, _, _, _ = isolated_env
+
+    # 1) Spoken text sanitizer strips markdown tables, URLs, and formats cleanly
+    raw = (
+        "### 伏見区の分析結果\n"
+        "- **1981年以前**: `1,234棟`\n"
+        "| 項目 | 数値 |\n| --- | --- |\n| 棟数 | 1234 |\n"
+        "詳細: [京都市公式サイト](https://www.city.kyoto.lg.jp/example)\n"
+        "⚠️ 未確認の市民報告を含みます。"
+    )
+    spoken = tts_mod.prepare_spoken_text(raw)
+    assert "https://" not in spoken
+    assert "|" not in spoken
+    assert "**" not in spoken
+    assert "京都市公式サイト" in spoken
+    assert "ご注意です" in spoken
+
+    # 2) Unconfigured Gemini key returns 503 cleanly
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    r_no_key = client.post("/api/chat/tts", json={"text": "こんにちは"})
+    assert r_no_key.status_code == 503
+
+    # 3) Configured Gemini key calls google-genai with response_modalities=["AUDIO"] & returns WAV
+    captured: dict[str, object] = {}
+
+    class DummyModels:
+        def generate_content(self, *, model, contents, config):
+            captured["model"] = model
+            captured["contents"] = contents
+            captured["modalities"] = list(config.response_modalities)
+            captured["voice"] = config.speech_config.voice_config.prebuilt_voice_config.voice_name
+            part = SimpleNamespace(inline_data=SimpleNamespace(data=b"\x01\x00\x02\x00", mime_type="audio/L16;codec=pcm;rate=24000"))
+            return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[part]))])
+
+    class DummyClient:
+        def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
+            self.models = DummyModels()
+
+    monkeypatch.setattr(tts_mod.genai, "Client", DummyClient)
+    r_ok = client.post(
+        "/api/chat/tts",
+        json={"text": "**こんにちは！** もちまもです。", "voice": "Leda"},
+        headers={"X-Gemini-Api-Key": "AIza-test-byok-key-123456"},
+    )
+    assert r_ok.status_code == 200
+    assert r_ok.headers["content-type"].startswith("audio/wav")
+    assert r_ok.headers["x-tts-model"] == tts_mod.DEFAULT_TTS_MODEL
+    assert r_ok.content.startswith(b"RIFF")
+    assert captured["modalities"] == ["AUDIO"]
+    assert captured["voice"] == "Leda"
+    assert captured["model"] == tts_mod.DEFAULT_TTS_MODEL == "gemini-3.8-flash-tts"
+    assert "**" not in str(captured["contents"])
+
+    # 4) Fallback to gemini-3.8-flash-lite-tts when primary hits 429 RESOURCE_EXHAUSTED
+    attempts: list[str] = []
+
+    class FallbackModels:
+        def generate_content(self, *, model, contents, config):
+            attempts.append(model)
+            if model == "gemini-3.8-flash-tts":
+                raise RuntimeError("429 RESOURCE_EXHAUSTED: FreeTier limit: 10")
+            part = SimpleNamespace(inline_data=SimpleNamespace(data=b"\x01\x00\x02\x00", mime_type="audio/wav"))
+            return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[part]))])
+
+    class FallbackClient:
+        def __init__(self, **kwargs):
+            self.models = FallbackModels()
+
+    monkeypatch.setattr(tts_mod.genai, "Client", FallbackClient)
+    r_fb = client.post(
+        "/api/chat/tts",
+        json={"text": "フォールバック確認です。"},
+        headers={"X-Gemini-Api-Key": "AIza-test-byok-key-123456"},
+    )
+    assert r_fb.status_code == 200
+    assert attempts == ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"]
+    assert r_fb.headers["x-tts-model"] == "gemini-3.8-flash-lite-tts"
+
+    # 5) All models 429 -> clean HTTP 429 with Japanese guidance instead of raw JSON 500
+    class AllExhaustedModels:
+        def generate_content(self, *, model, contents, config):
+            raise RuntimeError(
+                "429 RESOURCE_EXHAUSTED. QuotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier, "
+                "retryDelay': '3665s'"
+            )
+
+    class AllExhaustedClient:
+        def __init__(self, **kwargs):
+            self.models = AllExhaustedModels()
+
+    monkeypatch.setattr(tts_mod.genai, "Client", AllExhaustedClient)
+    r_429 = client.post(
+        "/api/chat/tts",
+        json={"text": "上限テスト"},
+        headers={"X-Gemini-Api-Key": "AIza-test-byok-key-123456"},
+    )
+    assert r_429.status_code == 429
+    detail_429 = r_429.json()["detail"]
+    assert "無料枠上限" in detail_429
+    assert "約1時間1分後" in detail_429
+    assert "RESOURCE_EXHAUSTED" not in detail_429
+
+
+def test_ai_tools_definitions_validate_for_interactions() -> None:
+    from pydantic import TypeAdapter
+    from google.genai._gaos.types.interactions import CreateModelInteraction
+
+    from app import ai_assistant
+
+    assert len(ai_assistant.TOOLS) >= 14
+    for tool in ai_assistant.TOOLS:
+        assert tool.get("type") == "function", f"Missing type='function' on tool: {tool.get('name')}"
+        assert isinstance(tool.get("name"), str) and tool["name"]
+        assert isinstance(tool.get("description"), str) and tool["description"]
+        assert isinstance(tool.get("parameters"), dict)
+
+    validated = TypeAdapter(CreateModelInteraction).validate_python(
+        {
+            "model": ai_assistant.DEFAULT_MODEL,
+            "input": "テスト",
+            "system_instruction": ai_assistant.SYSTEM_INSTRUCTION,
+            "tools": ai_assistant.TOOLS,
+            "generation_config": {"max_output_tokens": 1536},
+            "stream": True,
+        }
+    )
+    assert len(validated.tools or []) == len(ai_assistant.TOOLS)

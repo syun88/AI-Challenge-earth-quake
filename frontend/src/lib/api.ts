@@ -313,6 +313,34 @@ export async function streamChatMessage(
   }
 }
 
+export async function synthesizeChatSpeech(
+  body: { text: string; voice?: string },
+  apiKeyOverride?: string,
+  signal?: AbortSignal,
+  accessCode?: string
+): Promise<ArrayBuffer> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (apiKeyOverride?.trim()) {
+    headers["X-Gemini-Api-Key"] = apiKeyOverride.trim();
+  }
+  if (accessCode?.trim()) {
+    headers["X-Ai-Access-Code"] = accessCode.trim();
+  }
+  const res = await fetch(`${API_BASE}/api/chat/tts`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(formatApiError(res.status, text, res.statusText));
+  }
+  return res.arrayBuffer();
+}
+
 export function getBoardEntries(params?: {
   phone?: string;
   q?: string;

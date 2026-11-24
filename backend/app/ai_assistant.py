@@ -308,6 +308,7 @@ TOOLS = [
         },
     },
     {
+        "type": "function",
         "name": "get_kyoto_disaster_updates_and_history",
         "description": "気象庁・Yahoo!天気災害の京都府南部地震履歴（2025年・2026年および2024年以前の過去履歴）と、京都市防災ポータルの自治体防災アップデート（避難場所指定変更・ハザードマップ更新・協定等）を取得する。",
         "parameters": {
@@ -322,6 +323,7 @@ TOOLS = [
         },
     },
     {
+        "type": "function",
         "name": "get_r8_seismic_unlisted_priority",
         "description": "京都市『市有建築物耐震性能リスト（R8_list.pdf・令和8年4月1日時点）』の掲載状況と、この表に載っていない一般・民有・未掲載建物（特に1981年以前旧耐震・建築年不明）を優先的に耐震診断・耐震改修すべき対象・理由・区別の優先件数を取得する。",
         "parameters": {
@@ -340,6 +342,7 @@ TOOLS = [
         },
     },
     {
+        "type": "function",
         "name": "recommend_enterprise_bcp_sites",
         "description": "企業・法人が京都に重要な施設（サーバールーム、データセンター、金庫、災害時BCP代替拠点、書類・備蓄倉庫など）を新設・移転する際、J-SHIS地震確率・表層地盤(ARV/AVS)・周辺旧耐震密度・京都市『R8_list.pdf（市有建築物耐震性能リスト）』の防災インフラ耐震適合率をもとに、比較的安全な場所と推奨エリアTop6、区別安全ランキングを提示する。",
         "parameters": {

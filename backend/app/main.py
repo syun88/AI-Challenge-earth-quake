@@ -19,8 +19,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
-from app.ai_assistant import ask_quakelens_ai, stream_quakelens_ai
+from app.ai_assistant import _resolve_api_key, ask_quakelens_ai, stream_quakelens_ai
 from app.bcp_site import recommend_safe_enterprise_sites
+from app.tts import (
+    ALLOWED_TTS_MODELS,
+    ALLOWED_TTS_VOICES,
+    DEFAULT_TTS_MODEL,
+    DEFAULT_TTS_VOICE,
+    TtsQuotaExhaustedError,
+    synthesize_speech,
+)
 from app.board_store import BOARD_STATUS_LABELS, DisasterBoardStore
 from app.constants import (
     OFFICIAL_RETROFIT_PROGRAMS,
@@ -1067,6 +1075,70 @@ class ChatRequest(BaseModel):
     model: str | None = None
 
 
+class ChatTtsRequest(BaseModel):
+    text: str
+    voice: str | None = None
+    model: str | None = None
+
+
+@app.post("/api/chat/tts")
+def chat_tts(
+    req: ChatTtsRequest,
+    request: Request,
+    x_gemini_api_key: str | None = Header(default=None),
+    x_ai_access_code: str | None = Header(default=None),
+) -> Response:
+    cleaned_text = req.text.strip()
+    if not cleaned_text:
+        raise HTTPException(status_code=400, detail="読み上げテキストを入力してください。")
+    if len(cleaned_text) > 6000:
+        raise HTTPException(status_code=413, detail="読み上げテキストが長すぎます（上限 6000 文字）。")
+
+    api_key = _resolve_api_key(x_gemini_api_key)
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="音声生成には Gemini API キー（GEMINI_API_KEY または APIキー設定）が必要です。",
+        )
+
+    voice = req.voice if req.voice in ALLOWED_TTS_VOICES else DEFAULT_TTS_VOICE
+    tts_model = req.model if req.model in ALLOWED_TTS_MODELS else DEFAULT_TTS_MODEL
+    ticket = ai_guard.authorize_and_acquire(
+        client_ip=extract_client_ip(request),
+        requested_model=tts_model,
+        api_key_override=x_gemini_api_key,
+        access_code=x_ai_access_code,
+    )
+    try:
+        audio_bytes, mime_type, used_model = synthesize_speech(
+            text=cleaned_text,
+            api_key=api_key,
+            voice=voice,
+            model=tts_model,
+        )
+        return Response(
+            content=audio_bytes,
+            media_type=mime_type,
+            headers={
+                "Cache-Control": "no-store",
+                "X-TTS-Model": used_model,
+            },
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except TtsQuotaExhaustedError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"音声合成中にエラーが発生しました: {redact_secrets(str(exc))}",
+        ) from exc
+    finally:
+        ai_guard.release_slot(ticket)
+
+
 @app.post("/api/chat")
 def chat(
     req: ChatRequest,
@@ -1098,6 +1170,8 @@ def chat(
         )
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=500,

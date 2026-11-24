@@ -19,8 +19,10 @@ import {
   Shield,
   Download,
   FileSpreadsheet,
+  Volume2,
 } from "lucide-react";
 import { API_BASE, sendChatMessage, streamChatMessage } from "@/lib/api";
+import { useMochimamoVoice } from "@/lib/useMochimamoVoice";
 import { MarkdownLite } from "@/components/MarkdownLite";
 import { MochimamoChatStage } from "@/components/MochimamoChatStage";
 import { MochimamoMood } from "@/components/MochimamoLive2D";
@@ -89,17 +91,24 @@ function buildWelcomeText(totalBuildings?: number | null): string {
 
 function deriveMascotState(params: {
   sending: boolean;
+  audioPlaying: boolean;
   justCompleted: boolean;
   inputText: string;
   selectedWard: string;
   lastAssistant?: ChatTurn;
 }): { mood: MochimamoMood; statusText: string } {
-  const { sending, justCompleted, inputText, selectedWard, lastAssistant } = params;
+  const { sending, audioPlaying, justCompleted, inputText, selectedWard, lastAssistant } = params;
+  if (audioPlaying) {
+    return {
+      mood: "speaking",
+      statusText: "音声でご案内しています…",
+    };
+  }
   if (sending) {
     if (lastAssistant?.streaming && lastAssistant.content.trim().length > 0) {
       return {
-        mood: "speaking",
-        statusText: "実データと根拠を整理してお話ししています…",
+        mood: "thinking",
+        statusText: "回答をまとめています…",
       };
     }
     return {
@@ -184,6 +193,20 @@ export function AiAssistantPanel({
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const completedTimerRef = useRef<number | null>(null);
 
+  const {
+    muted,
+    audioLoading,
+    audioPlaying,
+    playingMessageId,
+    audioError,
+    audioLevelRef,
+    unlockAudio,
+    toggleMute,
+    stopAudio,
+    speakText,
+    clearAudioError,
+  } = useMochimamoVoice();
+
   useEffect(() => {
     return () => {
       if (completedTimerRef.current !== null) {
@@ -211,6 +234,7 @@ export function AiAssistantPanel({
 
   const handleReset = () => {
     abortRef.current?.abort();
+    stopAudio();
     setSending(false);
     setInteractionId(null);
     setMessages([INITIAL_MESSAGE]);
@@ -221,6 +245,8 @@ export function AiAssistantPanel({
       const q = (promptText ?? input).trim();
       if (!q || sending) return;
       if (!promptText) setInput("");
+      unlockAudio();
+      stopAudio();
 
       const userTurn: ChatTurn = {
         id: `u-${Date.now()}`,
@@ -255,6 +281,8 @@ export function AiAssistantPanel({
       };
       let receivedTerminal = false;
       let receivedSuccessDone = false;
+      let completedAnswer = "";
+      let completedConfigured = false;
 
       try {
         await streamChatMessage(
@@ -329,6 +357,8 @@ export function AiAssistantPanel({
             } else if (ev.type === "done") {
               receivedTerminal = true;
               receivedSuccessDone = true;
+              completedAnswer = ev.answer || "";
+              completedConfigured = ev.configured !== false;
               if (!ev.incomplete && ev.interaction_id) {
                 setInteractionId(ev.interaction_id);
               }
@@ -375,6 +405,12 @@ export function AiAssistantPanel({
         if (receivedSuccessDone) {
           onRefreshHealth?.();
           triggerHappyCompletion();
+          if (completedConfigured && completedAnswer.trim()) {
+            void speakText(assistantId, completedAnswer, {
+              apiKey: tempApiKey,
+              accessCode,
+            });
+          }
         } else if (!receivedTerminal && !controller.signal.aborted) {
           throw new Error("ストリーミング応答が完了前に終了しました");
         }
@@ -442,6 +478,12 @@ export function AiAssistantPanel({
               }
               onRefreshHealth?.();
               triggerHappyCompletion();
+              if (res.configured !== false && res.answer.trim()) {
+                void speakText(assistantId, res.answer, {
+                  apiKey: tempApiKey,
+                  accessCode,
+                });
+              }
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
@@ -508,6 +550,9 @@ export function AiAssistantPanel({
       accessCode,
       onRefreshHealth,
       triggerHappyCompletion,
+      unlockAudio,
+      stopAudio,
+      speakText,
     ]
   );
 
@@ -557,21 +602,28 @@ export function AiAssistantPanel({
   }
   const mascotState = deriveMascotState({
     sending,
+    audioPlaying,
     justCompleted,
     inputText: input,
     selectedWard,
     lastAssistant,
   });
-  const speechPulseKey = lastAssistant?.streaming ? lastAssistant.content.length : 0;
 
   return (
     <div className="flex h-full flex-col p-3">
-      {/* Live2D Mascot Stage synced with ChatBot state */}
+      {/* Live2D Mascot Stage synced with ChatBot state & Gemini TTS */}
       <MochimamoChatStage
         mood={mascotState.mood}
         statusText={mascotState.statusText}
-        speechPulseKey={speechPulseKey}
+        speechPulseKey={0}
         selectedWard={selectedWard}
+        muted={muted}
+        onToggleMute={toggleMute}
+        audioLoading={audioLoading}
+        audioPlaying={audioPlaying}
+        audioLevelRef={audioLevelRef}
+        audioError={audioError}
+        onClearAudioError={clearAudioError}
       />
 
       {/* Top AI Controls & Context Strip */}
@@ -733,8 +785,66 @@ export function AiAssistantPanel({
                   {(() => {
                     const displayText =
                       m.id === "welcome" ? buildWelcomeText(totalBuildings) : m.content;
+                    const isThisPlaying = playingMessageId === m.id && (audioLoading || audioPlaying);
                     if (displayText) {
-                      return <MarkdownLite text={displayText} />;
+                      return (
+                        <>
+                          <MarkdownLite text={displayText} />
+                          {!m.streaming && (
+                            <div className="mt-2 flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                data-testid={`speak-msg-${m.id}`}
+                                onClick={() => {
+                                  if (isThisPlaying) {
+                                    stopAudio();
+                                    return;
+                                  }
+                                  void (async () => {
+                                    const ok = await speakText(m.id, displayText, {
+                                      apiKey: tempApiKey,
+                                      accessCode,
+                                      force: true,
+                                    });
+                                    if (!ok && !hasAnyKey) {
+                                      setShowKeyBox(true);
+                                    }
+                                  })();
+                                }}
+                                title={
+                                  !hasAnyKey
+                                    ? "音声読み上げにはAPIキー設定が必要です"
+                                    : isThisPlaying
+                                      ? "読み上げを停止"
+                                      : "もちまもに読み上げてもらう"
+                                }
+                                className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium transition ${
+                                  isThisPlaying
+                                    ? "border-rose-500/50 bg-rose-500/15 text-rose-200 hover:bg-rose-500/25"
+                                    : "border-cyan-500/35 bg-cyan-500/10 text-cyan-200 hover:border-cyan-400/60 hover:bg-cyan-500/20"
+                                }`}
+                              >
+                                {playingMessageId === m.id && audioLoading ? (
+                                  <>
+                                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                                    <span>音声準備中</span>
+                                  </>
+                                ) : isThisPlaying ? (
+                                  <>
+                                    <Square className="h-2.5 w-2.5" />
+                                    <span>停止</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Volume2 className="h-2.5 w-2.5" />
+                                    <span>読み上げ</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      );
                     }
                     if (m.streaming) {
                       return (
