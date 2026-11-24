@@ -109,6 +109,13 @@ interface QuakeMapProps {
   onPitch3DChange?: (active: boolean) => void;
   selectedBuildingId: string | null;
   selectedMeshcode: string | null;
+  highlightedTarget?: {
+    lat: number;
+    lon: number;
+    label: string;
+    subLabel?: string;
+    tone?: "cyan" | "amber" | "rose" | "emerald";
+  } | null;
   flyToTarget: {
     lon: number;
     lat: number;
@@ -189,6 +196,7 @@ export function QuakeMap({
   onPitch3DChange,
   selectedBuildingId,
   selectedMeshcode,
+  highlightedTarget = null,
   flyToTarget,
   searchPin = null,
   searchCandidates = [],
@@ -382,6 +390,7 @@ export function QuakeMap({
   const searchPinMarkerRef = useRef<maplibregl.Marker | null>(null);
   const searchCandMarkersRef = useRef<maplibregl.Marker[]>([]);
   const pickMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const highlightMarkerRef = useRef<maplibregl.Marker | null>(null);
   const corridorStartMarkerRef = useRef<maplibregl.Marker | null>(null);
 
   const syncBuilding3DLayers = useCallback((map: maplibregl.Map) => {
@@ -394,6 +403,12 @@ export function QuakeMap({
     map.setLayoutProperty("buildings-fill", "visibility", fVis);
     map.setLayoutProperty("buildings-outline", "visibility", fVis);
     map.setLayoutProperty("buildings-selected", "visibility", fVis);
+    if (map.getLayer("buildings-selected-fill")) {
+      map.setLayoutProperty("buildings-selected-fill", "visibility", fVis);
+    }
+    if (map.getLayer("buildings-selected-halo")) {
+      map.setLayoutProperty("buildings-selected-halo", "visibility", fVis);
+    }
     map.setLayoutProperty("buildings-3d", "visibility", dVis);
     if (lastNotified3DRef.current !== active3D) {
       lastNotified3DRef.current = active3D;
@@ -646,15 +661,42 @@ export function QuakeMap({
       });
 
       map.addLayer({
+        id: "buildings-selected-fill",
+        type: "fill",
+        source: "buildings",
+        "source-layer": "buildings",
+        minzoom: 12.0,
+        filter: ["==", ["get", "building_id"], ""],
+        paint: {
+          "fill-color": "#facc15",
+          "fill-opacity": 0.65,
+        },
+      });
+
+      map.addLayer({
+        id: "buildings-selected-halo",
+        type: "line",
+        source: "buildings",
+        "source-layer": "buildings",
+        minzoom: 12.0,
+        filter: ["==", ["get", "building_id"], ""],
+        paint: {
+          "line-color": "#fef08a",
+          "line-width": 10,
+          "line-opacity": 0.72,
+        },
+      });
+
+      map.addLayer({
         id: "buildings-selected",
         type: "line",
         source: "buildings",
         "source-layer": "buildings",
-        minzoom: 13.5,
+        minzoom: 12.0,
         filter: ["==", ["get", "building_id"], ""],
         paint: {
-          "line-color": "#22d3ee",
-          "line-width": 3.2,
+          "line-color": "#06b6d4",
+          "line-width": 4.0,
         },
       });
 
@@ -1760,20 +1802,27 @@ export function QuakeMap({
     syncBuilding3DLayers(map);
   }, [map3DMode, mapReady, syncBuilding3DLayers]);
 
-  // Selected + Damaged Building highlight in 3D as well
+  // Selected + Damaged Building highlight in 2D & 3D as well
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady || !map.getLayer("buildings-selected")) return;
-    map.setFilter("buildings-selected", [
+    const selFilter: maplibregl.FilterSpecification = [
       "==",
       ["get", "building_id"],
       selectedBuildingId || "",
-    ]);
+    ];
+    map.setFilter("buildings-selected", selFilter);
+    if (map.getLayer("buildings-selected-fill")) {
+      map.setFilter("buildings-selected-fill", selFilter);
+    }
+    if (map.getLayer("buildings-selected-halo")) {
+      map.setFilter("buildings-selected-halo", selFilter);
+    }
     if (map.getLayer("buildings-3d")) {
       map.setPaintProperty("buildings-3d", "fill-extrusion-color", [
         "case",
         ["==", ["get", "building_id"], selectedBuildingId || ""],
-        "#22d3ee",
+        "#facc15",
         ["in", ["get", "building_id"], ["literal", damagedBuildingIds]],
         "#ef4444",
         [
@@ -2066,6 +2115,94 @@ export function QuakeMap({
       safetyMarkersRef.current = [];
     };
   }, [boardSummary, showSafetyLayer, selectedWard, mapReady]);
+
+  // Highlighted Selected Building / Facility Beacon (pulsing radar ring + floating callout)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (highlightMarkerRef.current) {
+      highlightMarkerRef.current.remove();
+      highlightMarkerRef.current = null;
+    }
+    if (!map || !mapReady || !highlightedTarget) return;
+
+    const tonePalette = {
+      amber: {
+        ring: "bg-amber-400/50",
+        pinBg: "bg-amber-400 text-slate-950 border-white",
+        card: "border-amber-400 bg-slate-950/95 text-amber-100",
+        sub: "text-amber-300",
+      },
+      rose: {
+        ring: "bg-rose-500/55",
+        pinBg: "bg-rose-500 text-white border-white",
+        card: "border-rose-400 bg-slate-950/95 text-rose-100",
+        sub: "text-rose-300",
+      },
+      emerald: {
+        ring: "bg-emerald-400/50",
+        pinBg: "bg-emerald-500 text-slate-950 border-white",
+        card: "border-emerald-400 bg-slate-950/95 text-emerald-100",
+        sub: "text-emerald-300",
+      },
+      cyan: {
+        ring: "bg-cyan-400/50",
+        pinBg: "bg-cyan-400 text-slate-950 border-white",
+        card: "border-cyan-400 bg-slate-950/95 text-cyan-100",
+        sub: "text-cyan-300",
+      },
+    }[highlightedTarget.tone ?? "amber"];
+
+    const root = document.createElement("div");
+    root.className = "pointer-events-none flex flex-col items-center";
+    root.setAttribute("data-testid", "selected-building-beacon");
+
+    const callout = document.createElement("div");
+    callout.className = `mb-2 max-w-[240px] rounded-xl border-2 px-2.5 py-1.5 text-center shadow-2xl backdrop-blur-md ${tonePalette.card}`;
+
+    const titleEl = document.createElement("div");
+    titleEl.className = "truncate text-[11px] font-extrabold leading-tight";
+    titleEl.textContent = highlightedTarget.label;
+    callout.appendChild(titleEl);
+
+    if (highlightedTarget.subLabel) {
+      const subEl = document.createElement("div");
+      subEl.className = `mt-0.5 truncate text-[9px] font-semibold ${tonePalette.sub}`;
+      subEl.textContent = highlightedTarget.subLabel;
+      callout.appendChild(subEl);
+    }
+
+    const beaconWrap = document.createElement("div");
+    beaconWrap.className = "relative flex h-11 w-11 items-center justify-center";
+
+    const ping = document.createElement("span");
+    ping.className = `absolute inset-0 rounded-full animate-ping ${tonePalette.ring}`;
+
+    const outerRing = document.createElement("span");
+    outerRing.className = `relative flex h-6 w-6 items-center justify-center rounded-full border-2 shadow-xl ${tonePalette.pinBg}`;
+
+    const innerDot = document.createElement("span");
+    innerDot.className = "h-2 w-2 rounded-full bg-current";
+    outerRing.appendChild(innerDot);
+
+    beaconWrap.appendChild(ping);
+    beaconWrap.appendChild(outerRing);
+
+    root.appendChild(callout);
+    root.appendChild(beaconWrap);
+
+    highlightMarkerRef.current = new maplibregl.Marker({
+      element: root,
+      anchor: "bottom",
+      offset: [0, 22],
+    })
+      .setLngLat([highlightedTarget.lon, highlightedTarget.lat])
+      .addTo(map);
+
+    return () => {
+      highlightMarkerRef.current?.remove();
+      highlightMarkerRef.current = null;
+    };
+  }, [highlightedTarget, mapReady]);
 
   // Picked Pin Marker
   useEffect(() => {

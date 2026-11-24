@@ -1570,20 +1570,61 @@ export default function HomePage() {
         map3DMode={map3DMode}
         onChangeMap3DMode={setMap3DMode}
         onPitch3DChange={setIsPitch3D}
-        selectedBuildingId={selectedBuilding?.building_id ?? searchPin?.building_id ?? null}
+        selectedBuildingId={
+          selectedBuilding?.building_id ??
+          selectedR8Facility?.matched_building_id ??
+          searchPin?.building_id ??
+          null
+        }
         selectedMeshcode={selectedMeshcode}
+        highlightedTarget={
+          selectedBuilding
+            ? {
+                lat: selectedBuilding.centroid_lat,
+                lon: selectedBuilding.centroid_lon,
+                label: `${selectedBuilding.ward_name}（${selectedBuilding.usage_label}）`,
+                subLabel:
+                  selectedBuilding.r8_seismic_assessment?.priority_badge ||
+                  `${selectedBuilding.age_label}・${selectedBuilding.structure_label}`,
+                tone:
+                  selectedBuilding.r8_seismic_assessment?.priority_tier === "critical"
+                    ? "rose"
+                    : "amber",
+              }
+            : selectedR8Facility
+              ? {
+                  lat: selectedR8Facility.lat,
+                  lon: selectedR8Facility.lon,
+                  label: selectedR8Facility.record.name,
+                  subLabel: `耐震性能: ${selectedR8Facility.record.seismic_grade}（${selectedR8Facility.record.ward}）`,
+                  tone: selectedR8Facility.record.needs_retrofit ? "rose" : "amber",
+                }
+              : selectedR8Unlisted
+                ? {
+                    lat: selectedR8Unlisted.lat,
+                    lon: selectedR8Unlisted.lon,
+                    label: selectedR8Unlisted.query,
+                    subLabel: "R8表未掲載（優先耐震対象）",
+                    tone: "rose",
+                  }
+                : selectedOfficialShelter
+                  ? {
+                      lat: selectedOfficialShelter.lat,
+                      lon: selectedOfficialShelter.lon,
+                      label: selectedOfficialShelter.name,
+                      subLabel: selectedOfficialShelter.is_wide_area
+                        ? "広域避難場所"
+                        : "指定緊急避難場所",
+                      tone: "emerald",
+                    }
+                  : null
+        }
         flyToTarget={flyToTarget}
         searchPin={searchPin}
         searchCandidates={searchCandidates}
         onSelectSearchPin={handleFocusSearchPin}
         mapPickMode={mapPickMode}
-        pickedCoords={
-          selectedR8Facility
-            ? { lat: selectedR8Facility.lat, lon: selectedR8Facility.lon }
-            : selectedR8Unlisted
-              ? { lat: selectedR8Unlisted.lat, lon: selectedR8Unlisted.lon }
-              : pickedReportTarget
-        }
+        pickedCoords={pickedReportTarget}
         previewRoadSegments={snappedRoadTarget?.preview_segments ?? null}
         roadPaintTool={roadPaintTool}
         corridorStart={corridorStart}
