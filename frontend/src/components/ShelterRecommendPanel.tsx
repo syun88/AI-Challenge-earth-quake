@@ -148,6 +148,47 @@ export default function ShelterRecommendPanel({
         </div>
       </div>
 
+      {/* Pin Color Classification Legend */}
+      <div
+        className="space-y-1.5 rounded-xl border border-slate-700/80 bg-slate-900/75 p-2.5"
+        data-testid="shelter-pin-legend"
+      >
+        <div className="text-[11px] font-bold text-slate-200">
+          地図ピンの分類理由（色分け凡例）
+        </div>
+        <div className="space-y-1.5 text-[11px] leading-snug text-slate-300">
+          <div className="flex items-start gap-2">
+            <span className="mt-1 inline-block h-3 w-3 shrink-0 rounded-full border border-white bg-[#14b8a6]" />
+            <div>
+              <span className="font-bold text-teal-200">緑ピン：指定緊急避難場所（444件）</span>
+              <span className="block text-[10px] text-slate-400">
+                学校・公民館など、地震や水害の災害種別ごとに指定された一次避難先（大規模火災は対象外）。
+              </span>
+            </div>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="mt-1 inline-block h-3 w-3 shrink-0 rounded-full border border-white bg-[#f97316] ring-2 ring-[#fb923c]/80" />
+            <div>
+              <span className="font-bold text-orange-200">オレンジピン：広域避難場所（70件）</span>
+              <span className="block text-[10px] text-slate-400">
+                公園・河川敷など、地震後の大規模火災（延焼・輻射熱）に対応できる広い避難先。「地震後火災」シナリオで優先推薦されます。
+              </span>
+            </div>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-yellow-200 bg-emerald-600 text-[9px] font-black text-yellow-200">
+              1
+            </span>
+            <div>
+              <span className="font-bold text-emerald-200">番号付き緑バッジ：推奨 Top 5</span>
+              <span className="block text-[10px] text-slate-400">
+                災害適合・実道路の通行止め迂回距離・地盤特性（ARV）から総合評価した上位候補。
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Scenario Selector */}
       <div className="space-y-1.5">
         <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">

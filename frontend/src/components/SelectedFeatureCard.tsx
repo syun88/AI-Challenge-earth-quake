@@ -359,6 +359,23 @@ export function SelectedFeatureCard({
               <div className="mt-0.5 text-[11px] text-slate-400">
                 {selectedOfficialShelter.ward} ／ {selectedOfficialShelter.address}
               </div>
+              <div className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-300">
+                {selectedOfficialShelter.is_wide_area ? (
+                  <>
+                    <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-white bg-[#f97316] ring-1 ring-[#fb923c]" />
+                    <span className="text-orange-200">
+                      分類理由：大規模火災（延焼火災）対応のためオレンジピン表示
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-white bg-[#14b8a6]" />
+                    <span className="text-teal-200">
+                      分類理由：地震・水害等向けの指定緊急避難場所（火災は対象外）のため緑ピン表示
+                    </span>
+                  </>
+                )}
+              </div>
               {selectedOfficialShelter.disaster_labels.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap gap-1">
                   {selectedOfficialShelter.disaster_labels.map((lbl) => (

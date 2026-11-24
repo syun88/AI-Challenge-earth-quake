@@ -260,6 +260,22 @@ export function MapDisplayPopover({
             />
           </div>
 
+          {showOfficialShelters && (
+            <div className="space-y-1 rounded-xl border border-slate-800 bg-slate-950/75 px-2.5 py-2 text-[10px] text-slate-300">
+              <div className="font-semibold text-slate-200">
+                指定緊急避難場所のピン色分け理由
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-white bg-[#14b8a6]" />
+                <span>緑：指定緊急避難場所（地震・水害等／444件）</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-white bg-[#f97316] ring-1 ring-[#fb923c]" />
+                <span>橙：広域避難場所（大規模火災対応／70件）</span>
+              </div>
+            </div>
+          )}
+
           {showHazardMesh && (
             <div className="flex gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1">
               {(

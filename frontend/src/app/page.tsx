@@ -1614,6 +1614,14 @@ export default function HomePage() {
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/80 pt-2 text-[11px] text-slate-400">
             <div className="flex flex-wrap items-center gap-3">
               <span className="flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-full bg-[#14b8a6] ring-1 ring-white/80" />
+                緑: 指定緊急避難場所(444)
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-full bg-[#f97316] ring-2 ring-[#fb923c]/80" />
+                橙: 広域避難場所・大規模火災対応(70)
+              </span>
+              <span className="flex items-center gap-1">
                 <span className="h-2.5 w-2.5 rounded-sm bg-rose-500 ring-1 ring-white/50" />
                 倒壊/被害建物・通行止
               </span>
