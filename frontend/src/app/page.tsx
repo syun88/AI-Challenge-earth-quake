@@ -78,6 +78,8 @@ import {
   NetworkStatusResponse,
   OfficialShelter,
   PriorityArea,
+  R8LocateResponse,
+  R8UnlistedLocateResponse,
   RoadPaintTool,
   RouteSimulationResponse,
   ShelterHub,
@@ -165,6 +167,8 @@ export default function HomePage() {
   const [selectedReport, setSelectedReport] = useState<DamageReport | null>(null);
   const [selectedBlockedRoad, setSelectedBlockedRoad] = useState<NetworkEdgeFeature | null>(null);
   const [selectedShelterHub, setSelectedShelterHub] = useState<ShelterHub | null>(null);
+  const [selectedR8Facility, setSelectedR8Facility] = useState<R8LocateResponse | null>(null);
+  const [selectedR8Unlisted, setSelectedR8Unlisted] = useState<R8UnlistedLocateResponse | null>(null);
 
   const [mapPickMode, setMapPickMode] = useState<MapPickMode>("none");
   const [pickedReportTarget, setPickedReportTarget] = useState<PickedMapTarget | null>(null);
@@ -337,7 +341,45 @@ export default function HomePage() {
     setSelectedBlockedRoad(null);
     setSelectedShelterHub(null);
     setSelectedOfficialShelter(null);
+    setSelectedR8Facility(null);
+    setSelectedR8Unlisted(null);
   }, []);
+
+  const handleSelectR8Record = useCallback(
+    (loc: R8LocateResponse) => {
+      clearSelections();
+      setSelectedR8Facility(loc);
+      if (loc.hazard?.meshcode) setSelectedMeshcode(loc.hazard.meshcode);
+      setFlyToTarget({
+        lat: loc.lat,
+        lon: loc.lon,
+        zoom: 17.0,
+        ts: Date.now(),
+      });
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        setActivePanel("none");
+      }
+    },
+    [clearSelections]
+  );
+
+  const handleSelectR8Unlisted = useCallback(
+    (loc: R8UnlistedLocateResponse) => {
+      clearSelections();
+      setSelectedR8Unlisted(loc);
+      if (loc.hazard?.meshcode) setSelectedMeshcode(loc.hazard.meshcode);
+      setFlyToTarget({
+        lat: loc.lat,
+        lon: loc.lon,
+        zoom: 16.5,
+        ts: Date.now(),
+      });
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        setActivePanel("none");
+      }
+    },
+    [clearSelections]
+  );
 
   const runShelterRecommendation = useCallback(
     async (opts?: {
@@ -1348,7 +1390,13 @@ export default function HomePage() {
         selectedMeshcode={selectedMeshcode}
         flyToTarget={flyToTarget}
         mapPickMode={mapPickMode}
-        pickedCoords={pickedReportTarget}
+        pickedCoords={
+          selectedR8Facility
+            ? { lat: selectedR8Facility.lat, lon: selectedR8Facility.lon }
+            : selectedR8Unlisted
+              ? { lat: selectedR8Unlisted.lat, lon: selectedR8Unlisted.lon }
+              : pickedReportTarget
+        }
         previewRoadSegments={snappedRoadTarget?.preview_segments ?? null}
         roadPaintTool={roadPaintTool}
         corridorStart={corridorStart}
@@ -1657,6 +1705,8 @@ export default function HomePage() {
                 onToggleAgeCategory={handleToggleAgeCategory}
                 onToggleHazardTier={handleToggleHazardTier}
                 onSelectPriorityArea={handleSelectPriorityArea}
+                onSelectR8Record={handleSelectR8Record}
+                onSelectR8Unlisted={handleSelectR8Unlisted}
                 onOpenSafety={() => setActivePanel("safety")}
                 onOpenReports={() => setActivePanel("report")}
               />
@@ -1775,6 +1825,8 @@ export default function HomePage() {
         selectedBlockedRoad={selectedBlockedRoad}
         selectedShelterHub={selectedShelterHub}
         selectedOfficialShelter={selectedOfficialShelter}
+        selectedR8Facility={selectedR8Facility}
+        selectedR8Unlisted={selectedR8Unlisted}
         routeResult={routeResult}
         onClearSelection={clearSelections}
         onClearRoute={() => setRouteResult(null)}

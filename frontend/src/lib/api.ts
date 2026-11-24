@@ -20,7 +20,9 @@ import {
   NetworkStatusResponse,
   OfficialSheltersListResponse,
   PriorityArea,
+  R8LocateResponse,
   R8SeismicListResponse,
+  R8UnlistedLocateResponse,
   ReportCategory,
   ReportSeverity,
   RoadSelectionResult,
@@ -711,4 +713,18 @@ export function getR8SeismicList(params?: {
   if (params?.limit != null) sp.set("limit", String(params.limit));
   const qs = sp.toString();
   return fetchJson<R8SeismicListResponse>(`/api/r8-seismic${qs ? `?${qs}` : ""}`);
+}
+
+export function locateR8Record(recordId: string) {
+  return fetchJson<R8LocateResponse>(
+    `/api/r8-seismic/${encodeURIComponent(recordId)}/locate`
+  );
+}
+
+export function locateR8Unlisted(params: { q: string; ward?: string }) {
+  const sp = new URLSearchParams({ q: params.q });
+  if (params.ward && params.ward !== "all") sp.set("ward", params.ward);
+  return fetchJson<R8UnlistedLocateResponse>(
+    `/api/r8-seismic/locate-unlisted?${sp.toString()}`
+  );
 }

@@ -16,11 +16,19 @@ import {
   Download,
   ExternalLink,
   FileSpreadsheet,
+  Loader2,
+  MapPin,
   MessageSquareHeart,
   Search,
   ShieldAlert,
 } from "lucide-react";
-import { buildDisasterCsvUrl, buildDisasterXlsxUrl, getR8SeismicList } from "@/lib/api";
+import {
+  buildDisasterCsvUrl,
+  buildDisasterXlsxUrl,
+  getR8SeismicList,
+  locateR8Record,
+  locateR8Unlisted,
+} from "@/lib/api";
 import {
   AGE_COLORS,
   AGE_LABELS,
@@ -33,7 +41,9 @@ import {
   DamageReportSummaryResponse,
   HazardTier,
   PriorityArea,
+  R8LocateResponse,
   R8SeismicListResponse,
+  R8UnlistedLocateResponse,
   StatsResponse,
 } from "@/types/quakelens";
 
@@ -55,6 +65,8 @@ interface RiskStatsDrawerProps {
   onToggleAgeCategory: (cat: AgeCategory) => void;
   onToggleHazardTier: (tier: HazardTier) => void;
   onSelectPriorityArea: (area: PriorityArea) => void;
+  onSelectR8Record?: (loc: R8LocateResponse) => void;
+  onSelectR8Unlisted?: (loc: R8UnlistedLocateResponse) => void;
   onOpenSafety: () => void;
   onOpenReports: () => void;
 }
@@ -74,11 +86,14 @@ export function RiskStatsDrawer({
   onToggleAgeCategory,
   onToggleHazardTier,
   onSelectPriorityArea,
+  onSelectR8Record,
+  onSelectR8Unlisted,
   onOpenSafety,
   onOpenReports,
 }: RiskStatsDrawerProps) {
   const [r8Query, setR8Query] = useState("");
   const [r8Data, setR8Data] = useState<R8SeismicListResponse | null>(null);
+  const [r8LocatingId, setR8LocatingId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -299,32 +314,86 @@ export function RiskStatsDrawer({
               r8Data.filtered_count === 0 ? (
                 <div
                   data-testid="r8-search-unlisted-alert"
-                  className="rounded-lg border border-rose-500/60 bg-rose-950/45 px-2.5 py-2 text-[11px] text-rose-100"
+                  className="space-y-2 rounded-lg border border-rose-500/60 bg-rose-950/45 px-2.5 py-2 text-[11px] text-rose-100"
                 >
-                  <strong>「{r8Query.trim()}」は R8_list.pdf に未掲載です。</strong>
-                  公的耐震リスト対象外の建物として、<strong>優先的に耐震診断・耐震改修</strong>を実施することを推奨します。
+                  <div>
+                    <strong>「{r8Query.trim()}」は R8_list.pdf に未掲載です。</strong>
+                    公的耐震リスト対象外の建物として、<strong>優先的に耐震診断・耐震改修</strong>を実施することを推奨します。
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="r8-unlisted-locate-btn"
+                    disabled={r8LocatingId === "__unlisted__"}
+                    onClick={async () => {
+                      setR8LocatingId("__unlisted__");
+                      try {
+                        const loc = await locateR8Unlisted({
+                          q: r8Query.trim(),
+                          ward: selectedWard,
+                        });
+                        onSelectR8Unlisted?.(loc);
+                      } finally {
+                        setR8LocatingId(null);
+                      }
+                    }}
+                    className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-rose-400/60 bg-rose-500/25 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-rose-500/40 disabled:opacity-50"
+                  >
+                    {r8LocatingId === "__unlisted__" ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <MapPin className="h-3.5 w-3.5" />
+                    )}
+                    <span>この場所の地図へ飛んで詳細・ハザードを見る</span>
+                  </button>
                 </div>
               ) : (
-                <div className="max-h-32 space-y-1 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/75 p-2 text-[10px]">
-                  {r8Data.records.map((rec) => (
-                    <div
-                      key={rec.id}
-                      className="flex items-center justify-between gap-2 border-b border-slate-800/70 pb-1 last:border-0 last:pb-0"
-                    >
-                      <span className="truncate text-slate-200">
-                        {rec.name} ({rec.ward})
-                      </span>
-                      <span
-                        className={`shrink-0 rounded px-1.5 py-0.5 font-mono font-bold ${
-                          rec.needs_retrofit
-                            ? "bg-rose-500/25 text-rose-200"
-                            : "bg-emerald-500/20 text-emerald-200"
-                        }`}
+                <div className="max-h-44 space-y-1 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/75 p-1.5 text-[10px]">
+                  {r8Data.records.map((rec) => {
+                    const isBusy = r8LocatingId === rec.id;
+                    return (
+                      <button
+                        key={rec.id}
+                        type="button"
+                        data-testid={`r8-search-item-${rec.id}`}
+                        disabled={Boolean(r8LocatingId)}
+                        onClick={async () => {
+                          setR8LocatingId(rec.id);
+                          try {
+                            const loc = await locateR8Record(rec.id);
+                            onSelectR8Record?.(loc);
+                          } finally {
+                            setR8LocatingId(null);
+                          }
+                        }}
+                        className="flex w-full items-center justify-between gap-2 rounded-md border border-transparent px-2 py-1.5 text-left transition hover:border-amber-400/50 hover:bg-slate-900 disabled:opacity-60"
                       >
-                        {rec.seismic_grade}
-                      </span>
-                    </div>
-                  ))}
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-semibold text-slate-100">
+                            {rec.name}
+                          </div>
+                          <div className="text-[10px] text-slate-400">
+                            {rec.ward} ／ {rec.structure} {rec.storeys ?? "?"}階 ／ {rec.era}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <span
+                            className={`rounded px-1.5 py-0.5 font-mono font-bold ${
+                              rec.needs_retrofit
+                                ? "bg-rose-500/25 text-rose-200"
+                                : "bg-emerald-500/20 text-emerald-200"
+                            }`}
+                          >
+                            {rec.seismic_grade}
+                          </span>
+                          {isBusy ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
+                          ) : (
+                            <MapPin className="h-3.5 w-3.5 text-sky-400" />
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               )
             )}

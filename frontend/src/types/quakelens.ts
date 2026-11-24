@@ -819,3 +819,31 @@ export interface R8SeismicListResponse {
   records: R8SeismicRecord[];
   unlisted_policy: string;
 }
+
+export interface R8LocateResponse {
+  record: R8SeismicRecord;
+  lat: number;
+  lon: number;
+  geocode_source: string;
+  matched_address: string;
+  matched_shelter_id: string | null;
+  matched_building_id: string | null;
+  hazard: ShelterHazardContext | null;
+  r8_pdf_url: string;
+  r8_page_url: string;
+}
+
+export interface R8UnlistedLocateResponse {
+  query: string;
+  ward: string;
+  listed_in_r8: false;
+  lat: number;
+  lon: number;
+  geocode_source: string;
+  matched_address: string;
+  matched_shelter_id: string | null;
+  hazard: ShelterHazardContext | null;
+  priority_message: string;
+  r8_pdf_url: string;
+  r8_page_url: string;
+}

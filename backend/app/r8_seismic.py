@@ -163,6 +163,7 @@ class R8SeismicStore:
         self._loaded = False
         self._records: list[dict[str, Any]] = []
         self._meta: dict[str, Any] = {}
+        self._geocode_cache: dict[str, tuple[float, float, str]] = {}
 
     def ensure_loaded(self) -> None:
         if self._loaded:
@@ -394,6 +395,216 @@ class R8SeismicStore:
             "r8_pdf_url": R8_PDF_URL,
             "r8_page_url": R8_PAGE_URL,
             "matched_r8_candidates": [],
+        }
+
+    async def _nominatim_lookup(self, query: str, ward: str | None = None) -> tuple[float, float, str] | None:
+        cache_key = f"{ward or 'all'}::{query}"
+        if cache_key in self._geocode_cache:
+            return self._geocode_cache[cache_key]
+        search_q = f"京都市{ward} {query}" if ward and ward != "all" else f"京都市 {query}"
+        try:
+            async with httpx.AsyncClient(
+                timeout=6.0,
+                headers={"User-Agent": "QuakeLensJapan/1.0 (Kyoto disaster safety app)"},
+            ) as client:
+                resp = await client.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={
+                        "q": search_q,
+                        "format": "json",
+                        "limit": 3,
+                        "countrycodes": "jp",
+                        "viewbox": "135.55,35.32,135.90,34.87",
+                        "bounded": 1,
+                    },
+                )
+            if resp.status_code != 200:
+                return None
+            rows = resp.json()
+            for item in rows:
+                disp = str(item.get("display_name") or "")
+                if ward and ward != "all" and ward not in disp:
+                    continue
+                lat = float(item["lat"])
+                lon = float(item["lon"])
+                res = (lat, lon, disp)
+                self._geocode_cache[cache_key] = res
+                return res
+        except Exception:
+            return None
+        return None
+
+    async def locate_record(self, record_id: str, store: Any | None = None) -> dict[str, Any] | None:
+        """Resolve real map coordinates, hazard mesh, and nearby PLATEAU building for an R8_list.pdf entry."""
+        self.ensure_loaded()
+        rec = next((r for r in self._records if r.get("id") == record_id), None)
+        if rec is None:
+            return None
+
+        from app.constants import WARD_CENTERS
+        from app.route_sim import SHELTER_RELIEF_HUBS, _dist_km
+        from app.shelter_rec import _lookup_mesh_hazard, shelter_store
+
+        ward = str(rec.get("ward") or "")
+        name = str(rec.get("name") or "")
+        base_name = re.split(r"[\s　]+", name)[0]
+        norm_base = _normalize_name(base_name)
+        norm_full = _normalize_name(name)
+
+        lat: float | None = None
+        lon: float | None = None
+        geocode_source = "ward_center"
+        matched_address: str | None = None
+        matched_shelter_id: str | None = None
+
+        # 1) Match against official 514 Kyoto shelters
+        shelter_store.ensure_loaded()
+        for s in shelter_store.list_shelters(ward=ward or None):
+            s_norm = _normalize_name(s.get("name") or "")
+            if not s_norm:
+                continue
+            if (norm_full and (norm_full in s_norm or s_norm in norm_full)) or (
+                len(norm_base) >= 3 and (norm_base in s_norm or s_norm in norm_base)
+            ):
+                lat, lon = float(s["lat"]), float(s["lon"])
+                geocode_source = "official_shelter"
+                matched_address = s.get("address")
+                matched_shelter_id = s.get("id")
+                break
+
+        # 2) Match against municipal relief hubs
+        if lat is None:
+            for hub in SHELTER_RELIEF_HUBS.values():
+                if ward and hub.get("ward") != ward:
+                    continue
+                h_norm = _normalize_name(hub.get("name") or "")
+                if (norm_base and norm_base in h_norm) or ("区役所" in name and "総合庁舎" in name and hub.get("ward") == ward):
+                    lat, lon = float(hub["lat"]), float(hub["lon"])
+                    geocode_source = "municipal_hub"
+                    matched_address = f"{hub['ward']} {hub['name']}"
+                    break
+
+        # 3) Nominatim Kyoto-bounded geocoding for exact municipal facility location
+        if lat is None:
+            nom = await self._nominatim_lookup(base_name or name, ward=ward)
+            if nom is None and base_name != name:
+                nom = await self._nominatim_lookup(name, ward=ward)
+            if nom is not None:
+                lat, lon, matched_address = nom
+                geocode_source = "osm_nominatim"
+
+        # 4) Fallback to PLATEAU public building geometric match in the same ward
+        matched_building_id: str | None = None
+        if store is not None and getattr(store, "loaded", False) and hasattr(store, "buildings"):
+            df = store.buildings
+            if lat is not None and lon is not None:
+                try:
+                    sub = df.cx[lon - 0.0012 : lon + 0.0012, lat - 0.0012 : lat + 0.0012]
+                    if not sub.empty:
+                        best_d = 999.0
+                        for _, brow in sub.head(30).iterrows():
+                            d = _dist_km(lon, lat, float(brow["centroid_lon"]), float(brow["centroid_lat"]))
+                            if d < best_d:
+                                best_d = d
+                                matched_building_id = str(brow["building_id"])
+                except Exception:
+                    pass
+            else:
+                try:
+                    wdf = df[df["ward_name"] == ward]
+                    pub = wdf[wdf["usage_code"].isin(["421", "422"])]
+                    cand_df = pub if not pub.empty else wdf
+                    if rec.get("storeys") and not cand_df.empty:
+                        s_df = cand_df[cand_df["storeys_above"] == rec["storeys"]]
+                        if not s_df.empty:
+                            cand_df = s_df
+                    if rec.get("year_built") and not cand_df.empty:
+                        y_df = cand_df[cand_df["year_built"].sub(rec["year_built"]).abs() <= 2]
+                        if not y_df.empty:
+                            cand_df = y_df
+                    if not cand_df.empty:
+                        pick = cand_df.iloc[0]
+                        lat = float(pick["centroid_lat"])
+                        lon = float(pick["centroid_lon"])
+                        matched_building_id = str(pick["building_id"])
+                        geocode_source = "plateau_ward_match"
+                except Exception:
+                    pass
+
+        # 5) Final fallback to ward center
+        if lat is None or lon is None:
+            wc = WARD_CENTERS.get(ward) or WARD_CENTERS["all"]
+            lat, lon = float(wc["lat"]), float(wc["lon"])
+            geocode_source = "ward_center"
+
+        hazard = _lookup_mesh_hazard(lat, lon, store)
+        return {
+            "record": rec,
+            "lat": round(lat, 6),
+            "lon": round(lon, 6),
+            "geocode_source": geocode_source,
+            "matched_address": matched_address or f"京都府京都市{ward}",
+            "matched_shelter_id": matched_shelter_id,
+            "matched_building_id": matched_building_id,
+            "hazard": hazard,
+            "r8_pdf_url": R8_PDF_URL,
+            "r8_page_url": R8_PAGE_URL,
+        }
+
+    async def locate_unlisted_query(
+        self, query: str, ward: str | None = None, store: Any | None = None
+    ) -> dict[str, Any]:
+        """Locate an unlisted building/facility query on the map and return priority retrofit guidance."""
+        self.ensure_loaded()
+        from app.constants import WARD_CENTERS
+        from app.shelter_rec import _lookup_mesh_hazard, shelter_store
+
+        q_clean = (query or "").strip()
+        lat: float | None = None
+        lon: float | None = None
+        geocode_source = "ward_center"
+        matched_address: str | None = None
+        matched_shelter_id: str | None = None
+
+        shelter_store.ensure_loaded()
+        q_norm = _normalize_name(q_clean)
+        for s in shelter_store.list_shelters(ward=None if not ward or ward == "all" else ward):
+            s_norm = _normalize_name(s.get("name") or "")
+            if q_norm and s_norm and (q_norm in s_norm or s_norm in q_norm):
+                lat, lon = float(s["lat"]), float(s["lon"])
+                geocode_source = "official_shelter"
+                matched_address = s.get("address")
+                matched_shelter_id = s.get("id")
+                break
+
+        if lat is None and q_clean:
+            nom = await self._nominatim_lookup(q_clean, ward=ward)
+            if nom is not None:
+                lat, lon, matched_address = nom
+                geocode_source = "osm_nominatim"
+
+        if lat is None or lon is None:
+            wc = WARD_CENTERS.get(ward or "all") or WARD_CENTERS["all"]
+            lat, lon = float(wc["lat"]), float(wc["lon"])
+            geocode_source = "ward_center"
+
+        hazard = _lookup_mesh_hazard(lat, lon, store)
+        return {
+            "query": q_clean,
+            "ward": ward if ward and ward != "all" else (hazard or {}).get("ward_name") or "京都市全域",
+            "listed_in_r8": False,
+            "lat": round(lat, 6),
+            "lon": round(lon, 6),
+            "geocode_source": geocode_source,
+            "matched_address": matched_address or q_clean,
+            "matched_shelter_id": matched_shelter_id,
+            "hazard": hazard,
+            "priority_message": (
+                f"「{q_clean}」は京都市『市有建築物耐震性能リスト（R8_list.pdf）』に未掲載のため、"
+                "公的耐震管理の対象外として優先的な耐震診断・耐震改修を推奨します。"
+            ),
+            "r8_pdf_url": R8_PDF_URL,
+            "r8_page_url": R8_PAGE_URL,
         }
 
 

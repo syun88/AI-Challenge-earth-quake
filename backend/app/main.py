@@ -984,6 +984,31 @@ def get_r8_seismic_list(
     return r8_seismic_store.get_summary_and_list(ward=ward, grade=grade, q=q, limit=limit)
 
 
+@app.get("/api/r8-seismic/locate-unlisted")
+async def locate_r8_unlisted(
+    q: str = Query(default=""),
+    ward: str = Query(default="all"),
+) -> dict[str, Any]:
+    """Locate an unlisted building/facility query on the map and return priority guidance."""
+    return await r8_seismic_store.locate_unlisted_query(
+        query=q,
+        ward=ward,
+        store=store if store.loaded else None,
+    )
+
+
+@app.get("/api/r8-seismic/{record_id}/locate")
+async def locate_r8_record(record_id: str) -> dict[str, Any]:
+    """Locate an R8_list.pdf record on the Kyoto map with hazard context."""
+    res = await r8_seismic_store.locate_record(
+        record_id=record_id,
+        store=store if store.loaded else None,
+    )
+    if res is None:
+        raise HTTPException(status_code=404, detail="指定されたR8リスト建築物が見つかりません。")
+    return res
+
+
 class ChatRequest(BaseModel):
     message: str
     context: dict[str, Any] | None = None

@@ -892,3 +892,19 @@ def test_r8_seismic_list_and_unlisted_priority(isolated_env) -> None:
     )
     assert t_r8["unlisted_pre_1981_count"] >= 1
     assert t_r8["facility_lookup"]["listed_in_r8"] is False
+
+    # 4) Locate endpoint resolves coordinates & hazard for searched R8 facilities and unlisted queries
+    first_r8 = r_hit.json()["records"][0]
+    r_loc = client.get(f"/api/r8-seismic/{first_r8['id']}/locate")
+    assert r_loc.status_code == 200
+    loc_data = r_loc.json()
+    assert loc_data["record"]["id"] == first_r8["id"]
+    assert 34.8 < loc_data["lat"] < 35.3
+    assert 135.5 < loc_data["lon"] < 135.9
+
+    r_unlisted_loc = client.get("/api/r8-seismic/locate-unlisted?q=岡崎公園&ward=左京区")
+    assert r_unlisted_loc.status_code == 200
+    u_data = r_unlisted_loc.json()
+    assert u_data["listed_in_r8"] is False
+    assert "R8_list.pdf" in u_data["priority_message"]
+    assert 34.8 < u_data["lat"] < 35.3

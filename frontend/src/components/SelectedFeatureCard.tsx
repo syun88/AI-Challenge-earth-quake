@@ -23,6 +23,8 @@ import {
   MeshDetail,
   NetworkEdgeFeature,
   OfficialShelter,
+  R8LocateResponse,
+  R8UnlistedLocateResponse,
   RouteSimulationResponse,
   ShelterHub,
 } from "@/types/quakelens";
@@ -34,6 +36,8 @@ interface SelectedFeatureCardProps {
   selectedBlockedRoad: NetworkEdgeFeature | null;
   selectedShelterHub: ShelterHub | null;
   selectedOfficialShelter: OfficialShelter | null;
+  selectedR8Facility?: R8LocateResponse | null;
+  selectedR8Unlisted?: R8UnlistedLocateResponse | null;
   routeResult: RouteSimulationResponse | null;
   onClearSelection: () => void;
   onClearRoute: () => void;
@@ -58,6 +62,8 @@ export function SelectedFeatureCard({
   selectedBlockedRoad,
   selectedShelterHub,
   selectedOfficialShelter,
+  selectedR8Facility = null,
+  selectedR8Unlisted = null,
   routeResult,
   onClearSelection,
   onClearRoute,
@@ -80,7 +86,9 @@ export function SelectedFeatureCard({
       selectedReport ||
       selectedBlockedRoad ||
       selectedShelterHub ||
-      selectedOfficialShelter
+      selectedOfficialShelter ||
+      selectedR8Facility ||
+      selectedR8Unlisted
   );
 
   if (!hasSelection && !routeResult) return null;
@@ -327,6 +335,179 @@ export function SelectedFeatureCard({
       {!selectedReport &&
         !selectedBlockedRoad &&
         !selectedShelterHub &&
+        selectedR8Facility && (
+          <div
+            data-testid="selected-feature-card"
+            className="pointer-events-auto rounded-2xl border border-amber-500/60 bg-slate-900/95 p-3.5 text-xs text-slate-100 shadow-2xl backdrop-blur-xl space-y-2.5"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-1.5 font-bold text-amber-300">
+                <Building2 className="h-4 w-4 text-amber-400" />
+                <span>R8市有建築物耐震リスト 検索施設</span>
+              </div>
+              <button
+                type="button"
+                onClick={onClearSelection}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div data-testid="selected-r8-card">
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                <h3 className="text-sm font-bold text-white">
+                  {selectedR8Facility.record.name}
+                </h3>
+                <span
+                  className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-bold ${
+                    selectedR8Facility.record.needs_retrofit
+                      ? "border border-rose-500/60 bg-rose-500/25 text-rose-100"
+                      : "border border-emerald-500/50 bg-emerald-500/20 text-emerald-100"
+                  }`}
+                >
+                  耐震性能: {selectedR8Facility.record.seismic_grade}
+                </span>
+              </div>
+              <div className="mt-0.5 text-[11px] text-slate-400">
+                {selectedR8Facility.record.ward} ／ {selectedR8Facility.matched_address}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+              <div className="rounded-lg border border-slate-800 bg-slate-950/70 px-2.5 py-1.5">
+                <span className="text-slate-400">構造・規模: </span>
+                <strong className="text-slate-100">
+                  {selectedR8Facility.record.structure} {selectedR8Facility.record.storeys ?? "?"}階
+                </strong>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/70 px-2.5 py-1.5">
+                <span className="text-slate-400">建築・面積: </span>
+                <strong className="text-slate-100">
+                  {selectedR8Facility.record.era} /{" "}
+                  {selectedR8Facility.record.area_m2 != null
+                    ? `${selectedR8Facility.record.area_m2.toLocaleString("ja-JP")}㎡`
+                    : "—"}
+                </strong>
+              </div>
+            </div>
+
+            {selectedR8Facility.hazard && (
+              <div className="rounded-lg border border-slate-800 bg-slate-950/70 px-2.5 py-1.5 text-[11px] text-slate-300">
+                J-SHIS地盤 ({selectedR8Facility.hazard.meshcode}):{" "}
+                {selectedR8Facility.hazard.hazard_label} ／ ARV{" "}
+                {selectedR8Facility.hazard.arv != null
+                  ? selectedR8Facility.hazard.arv.toFixed(2)
+                  : "—"}{" "}
+                ／ {selectedR8Facility.hazard.jname}
+              </div>
+            )}
+
+            {selectedR8Facility.record.needs_retrofit && (
+              <div className="rounded-lg border border-rose-500/50 bg-rose-950/40 px-2.5 py-1.5 text-[10px] text-rose-100">
+                耐震区分「{selectedR8Facility.record.seismic_grade}」のため、優先的な耐震改修・診断確認が必要です。
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={() =>
+                  onRecommendFromTarget({
+                    lat: selectedR8Facility.lat,
+                    lon: selectedR8Facility.lon,
+                    label: selectedR8Facility.record.name,
+                  })
+                }
+                className="inline-flex items-center justify-center gap-1 rounded-xl bg-emerald-500 py-2 text-[11px] font-bold text-slate-950 hover:bg-emerald-400"
+              >
+                <ShieldCheck className="h-3.5 w-3.5" />
+                周辺避難場所Top5
+              </button>
+              <a
+                href={selectedR8Facility.r8_pdf_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center justify-center gap-1 rounded-xl border border-slate-700 py-2 text-[11px] font-semibold text-slate-200 hover:bg-slate-800"
+              >
+                <span>R8_list.pdf</span>
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+          </div>
+        )}
+
+      {!selectedReport &&
+        !selectedBlockedRoad &&
+        !selectedShelterHub &&
+        !selectedR8Facility &&
+        selectedR8Unlisted && (
+          <div
+            data-testid="selected-feature-card"
+            className="pointer-events-auto rounded-2xl border border-rose-500/60 bg-slate-900/95 p-3.5 text-xs text-slate-100 shadow-2xl backdrop-blur-xl space-y-2.5"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-1.5 font-bold text-rose-300">
+                <AlertTriangle className="h-4 w-4 text-rose-400" />
+                <span>R8耐震リスト未掲載地点（優先耐震対象）</span>
+              </div>
+              <button
+                type="button"
+                onClick={onClearSelection}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div data-testid="selected-r8-unlisted-card">
+              <h3 className="text-sm font-bold text-white">{selectedR8Unlisted.query}</h3>
+              <div className="mt-0.5 text-[11px] text-slate-400">
+                {selectedR8Unlisted.ward} ／ {selectedR8Unlisted.matched_address}
+              </div>
+              <p className="mt-1.5 rounded-lg border border-rose-500/45 bg-rose-950/35 px-2.5 py-1.5 text-[11px] text-rose-100">
+                {selectedR8Unlisted.priority_message}
+              </p>
+              {selectedR8Unlisted.hazard && (
+                <div className="mt-1.5 rounded-lg border border-slate-800 bg-slate-950/70 px-2.5 py-1.5 text-[11px] text-slate-300">
+                  周辺J-SHIS ({selectedR8Unlisted.hazard.meshcode}):{" "}
+                  {selectedR8Unlisted.hazard.hazard_label} ／ 旧耐震{" "}
+                  {selectedR8Unlisted.hazard.pre_1981_count}棟
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={() =>
+                  onRecommendFromTarget({
+                    lat: selectedR8Unlisted.lat,
+                    lon: selectedR8Unlisted.lon,
+                    label: selectedR8Unlisted.query,
+                  })
+                }
+                className="inline-flex items-center justify-center gap-1 rounded-xl bg-emerald-500 py-2 text-[11px] font-bold text-slate-950 hover:bg-emerald-400"
+              >
+                <ShieldCheck className="h-3.5 w-3.5" />
+                周辺避難場所Top5
+              </button>
+              <a
+                href={selectedR8Unlisted.r8_pdf_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center justify-center gap-1 rounded-xl border border-slate-700 py-2 text-[11px] font-semibold text-slate-200 hover:bg-slate-800"
+              >
+                <span>R8_list.pdf</span>
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+          </div>
+        )}
+
+      {!selectedReport &&
+        !selectedBlockedRoad &&
+        !selectedShelterHub &&
+        !selectedR8Facility &&
+        !selectedR8Unlisted &&
         selectedOfficialShelter && (
           <div
             data-testid="selected-feature-card"
@@ -439,6 +620,8 @@ export function SelectedFeatureCard({
       {!selectedReport &&
         !selectedBlockedRoad &&
         !selectedShelterHub &&
+        !selectedR8Facility &&
+        !selectedR8Unlisted &&
         !selectedOfficialShelter &&
         selectedBuilding && (
         <div
@@ -595,6 +778,8 @@ export function SelectedFeatureCard({
       {!selectedReport &&
         !selectedBlockedRoad &&
         !selectedShelterHub &&
+        !selectedR8Facility &&
+        !selectedR8Unlisted &&
         !selectedOfficialShelter &&
         !selectedBuilding &&
         selectedMesh && (
