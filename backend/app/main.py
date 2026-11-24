@@ -28,6 +28,7 @@ from app.constants import (
     VERIFICATION_STATUS_LABELS,
 )
 from app.data_store import QuakeLensDataStore
+from app.disaster_updates import updates_store
 from app.export_utils import generate_disaster_csv, generate_disaster_xlsx
 from app.reports_store import DamageReportStore
 from app.route_sim import (
@@ -68,6 +69,7 @@ async def lifespan(_: FastAPI):
     board_store.ensure_initialized()
     reports_store.ensure_initialized()
     shelter_store.ensure_loaded()
+    updates_store.ensure_loaded()
     if store.buildings_path.exists() and store.meshes_path.exists():
         store.load()
     yield
@@ -924,6 +926,27 @@ def get_shelter_recommendations(
         limit=limit,
         store=store if store.loaded else None,
     )
+
+
+@app.get("/api/updates/disaster")
+def get_disaster_updates(
+    period: str = Query(
+        default="all",
+        pattern="^(all|recent_2y|2026|2025|archive)$",
+    ),
+    kind: str = Query(
+        default="all",
+        pattern="^(all|earthquakes|municipality)$",
+    ),
+) -> dict[str, Any]:
+    """Return JMA/Yahoo Kyoto earthquake history (2025-2026 + older) and Kyoto City Bousai updates."""
+    return updates_store.query_updates(period=period, kind=kind)
+
+
+@app.post("/api/updates/disaster/refresh")
+async def refresh_disaster_updates() -> dict[str, Any]:
+    """Live-fetch updates from Yahoo Kyoto Earthquake list (?e=511), JMA JSON, and Kyoto City Bousai Portal."""
+    return await updates_store.refresh_live(persist=True)
 
 
 class ChatRequest(BaseModel):

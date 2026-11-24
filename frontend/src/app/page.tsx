@@ -15,6 +15,7 @@ import { AiAssistantPanel } from "@/components/AiAssistantPanel";
 import { MochimamoLive2D } from "@/components/MochimamoLive2D";
 import { DamageReportPanel } from "@/components/DamageReportPanel";
 import { DisasterBoard } from "@/components/DisasterBoard";
+import DisasterUpdatesPanel from "@/components/DisasterUpdatesPanel";
 import { FloatingHeader, WorkspacePanel } from "@/components/FloatingHeader";
 import { MapDisplayPopover } from "@/components/MapDisplayPopover";
 import { NavigationPanel } from "@/components/NavigationPanel";
@@ -38,6 +39,7 @@ import {
   getBuildingDetail,
   getDamageReports,
   getDamageReportsSummary,
+  getDisasterUpdates,
   getEarthquakes,
   getHealth,
   getMeshDetail,
@@ -48,6 +50,7 @@ import {
   getPriorityAreas,
   getStats,
   recommendShelters,
+  refreshDisasterUpdates,
   resolveRoadCorridor,
   resolveRoadStroke,
   simulateNavigation,
@@ -62,8 +65,11 @@ import {
   BuildingDetail,
   DamageReport,
   DamageReportSummaryResponse,
+  DisasterUpdatesPeriod,
+  DisasterUpdatesResponse,
   EarthquakeEvent,
   HazardTier,
+  KyotoEarthquakeArchiveItem,
   MapAction,
   MeshDetail,
   MeshOverlayMode,
@@ -144,6 +150,14 @@ export default function HomePage() {
   const [shelterLoading, setShelterLoading] = useState(false);
   const [shelterError, setShelterError] = useState<string | null>(null);
   const [selectedRecShelterId, setSelectedRecShelterId] = useState<string | null>(null);
+
+  // JMA & Kyoto City Disaster Updates (2025-2026 + Archive)
+  const [updatesPeriod, setUpdatesPeriod] = useState<DisasterUpdatesPeriod>("all");
+  const [updatesData, setUpdatesData] = useState<DisasterUpdatesResponse | null>(null);
+  const [updatesLoading, setUpdatesLoading] = useState(false);
+  const [updatesRefreshing, setUpdatesRefreshing] = useState(false);
+  const [updatesError, setUpdatesError] = useState<string | null>(null);
+  const [updatesRefreshMsg, setUpdatesRefreshMsg] = useState<string | null>(null);
 
   // Active Selections & Map Pickers
   const [selectedBuilding, setSelectedBuilding] = useState<BuildingDetail | null>(null);
@@ -488,6 +502,71 @@ export default function HomePage() {
       { enableHighAccuracy: true, timeout: 8000 }
     );
   }, [runShelterRecommendation]);
+
+  useEffect(() => {
+    if (activePanel !== "updates") return;
+    let cancelled = false;
+    getDisasterUpdates({ period: updatesPeriod, kind: "all" })
+      .then((res) => {
+        if (cancelled) return;
+        setUpdatesData(res);
+        setUpdatesError(null);
+        setUpdatesLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setUpdatesError(
+          err instanceof Error ? err.message : "防災アップデート情報の取得に失敗しました。"
+        );
+        setUpdatesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activePanel, updatesPeriod]);
+
+  const handleRefreshUpdatesLive = useCallback(async () => {
+    setUpdatesRefreshing(true);
+    setUpdatesError(null);
+    setUpdatesRefreshMsg(null);
+    try {
+      await refreshDisasterUpdates();
+      const filtered = await getDisasterUpdates({ period: updatesPeriod, kind: "all" });
+      setUpdatesData(filtered);
+      setUpdatesRefreshMsg(
+        `気象庁・Yahoo!地震履歴・京都市公式ポータルを最新同期しました（地震 ${filtered.counts.total_earthquakes}件 / 市更新 ${filtered.counts.total_municipality_updates}件）`
+      );
+    } catch (err) {
+      setUpdatesError(
+        err instanceof Error ? err.message : "ライブアップデートに失敗しました。"
+      );
+    } finally {
+      setUpdatesRefreshing(false);
+    }
+  }, [updatesPeriod]);
+
+  const handleFocusArchiveEarthquake = useCallback((eq: KyotoEarthquakeArchiveItem) => {
+    if (eq.lat == null || eq.lon == null) return;
+    setShowEarthquakes(true);
+    setEarthquakes((prev) => {
+      if (prev.some((p) => p.eid === eq.id)) return prev;
+      return [
+        {
+          eid: eq.id,
+          at: eq.occurred_at,
+          anm: eq.epicenter,
+          ttl: eq.source,
+          mag: eq.mag,
+          maxi: eq.maxi,
+          lat: eq.lat as number,
+          lon: eq.lon as number,
+          depth_km: eq.depth_km,
+        },
+        ...prev,
+      ];
+    });
+    setFlyToTarget({ lat: eq.lat, lon: eq.lon, zoom: 11.8, ts: Date.now() });
+  }, []);
 
   const handleSelectWard = useCallback((ward: string) => {
     setSelectedWard(ward);
@@ -1383,11 +1462,13 @@ export default function HomePage() {
                   ? "災害用伝言板（安否確認）"
                   : activePanel === "shelter"
                     ? "ハザードマップ連動・避難場所推薦"
-                    : activePanel === "nav"
-                      ? "避難・救援ルート案内"
-                      : activePanel === "ai"
-                        ? "Gemini AI 状況分析"
-                        : "災害統計・建物リスク分析"}
+                    : activePanel === "updates"
+                      ? "気象庁・自治体 防災情報アップデート"
+                      : activePanel === "nav"
+                        ? "避難・救援ルート案内"
+                        : activePanel === "ai"
+                          ? "Gemini AI 状況分析"
+                          : "災害統計・建物リスク分析"}
             </span>
             <button
               type="button"
@@ -1578,6 +1659,23 @@ export default function HomePage() {
                 onSelectPriorityArea={handleSelectPriorityArea}
                 onOpenSafety={() => setActivePanel("safety")}
                 onOpenReports={() => setActivePanel("report")}
+              />
+            )}
+
+            {activePanel === "updates" && (
+              <DisasterUpdatesPanel
+                data={updatesData}
+                loading={updatesLoading}
+                refreshing={updatesRefreshing}
+                error={updatesError}
+                refreshMessage={updatesRefreshMsg}
+                period={updatesPeriod}
+                onChangePeriod={(nextPeriod) => {
+                  setUpdatesLoading(true);
+                  setUpdatesPeriod(nextPeriod);
+                }}
+                onRefreshLive={() => void handleRefreshUpdatesLive()}
+                onFocusEarthquake={handleFocusArchiveEarthquake}
               />
             )}
           </div>

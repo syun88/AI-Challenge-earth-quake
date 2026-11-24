@@ -11,6 +11,8 @@ import {
   DamageReportListResponse,
   DamageReportSummaryResponse,
   DisasterOverviewResponse,
+  DisasterUpdatesPeriod,
+  DisasterUpdatesResponse,
   EarthquakeEvent,
   InteractiveRoadsGeoJSON,
   MeshDetail,
@@ -676,4 +678,21 @@ export function recommendShelters(params: {
     sp.set("ward", params.ward);
   }
   return fetchJson<ShelterRecommendationResponse>(`/api/shelters/recommend?${sp.toString()}`);
+}
+
+export function getDisasterUpdates(params?: {
+  period?: DisasterUpdatesPeriod;
+  kind?: "all" | "earthquakes" | "municipality";
+}) {
+  const sp = new URLSearchParams({
+    period: params?.period ?? "all",
+    kind: params?.kind ?? "all",
+  });
+  return fetchJson<DisasterUpdatesResponse>(`/api/updates/disaster?${sp.toString()}`);
+}
+
+export function refreshDisasterUpdates() {
+  return fetchJson<DisasterUpdatesResponse>("/api/updates/disaster/refresh", {
+    method: "POST",
+  });
 }

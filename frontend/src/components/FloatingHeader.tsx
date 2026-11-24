@@ -3,6 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import {
+  Activity,
   AlertTriangle,
   BarChart3,
   Compass,
@@ -20,6 +21,7 @@ export type WorkspacePanel =
   | "report"
   | "safety"
   | "shelter"
+  | "updates"
   | "nav"
   | "ai"
   | "stats";
@@ -165,6 +167,14 @@ export function FloatingHeader({
             label="統計・リスク"
             activeClass="bg-indigo-500/20 text-indigo-100 border-indigo-400/70"
           />
+          <NavPill
+            testId="nav-tab-updates"
+            active={activePanel === "updates"}
+            onClick={() => toggle("updates")}
+            icon={<Activity className="h-3.5 w-3.5 text-cyan-300" />}
+            label="防災更新・履歴"
+            activeClass="bg-cyan-500/20 text-cyan-100 border-cyan-400/70"
+          />
         </nav>
 
         {/* Right: Display Settings + Standalone Board + Sources */}
@@ -207,7 +217,7 @@ export function FloatingHeader({
       {/* Mobile Bottom Dock (< lg) */}
       <nav
         aria-label="モバイルナビゲーション"
-        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-7 border-t border-slate-800 bg-slate-950/95 px-1 py-1.5 backdrop-blur-xl lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-8 border-t border-slate-800 bg-slate-950/95 px-1 py-1.5 backdrop-blur-xl lg:hidden"
       >
         <MobileDockBtn
           active={activePanel === "none"}
@@ -256,6 +266,13 @@ export function FloatingHeader({
           onClick={() => toggle("stats")}
           icon={<BarChart3 className="h-4 w-4 text-indigo-300" />}
           label="統計"
+        />
+        <MobileDockBtn
+          testId="mobile-tab-updates"
+          active={activePanel === "updates"}
+          onClick={() => toggle("updates")}
+          icon={<Activity className="h-4 w-4 text-cyan-300" />}
+          label="防災更新"
         />
       </nav>
     </>

@@ -729,3 +729,107 @@ def test_official_shelters_and_hazard_map_recommendations(isolated_env) -> None:
     assert tool_out["scenario"] == "earthquake"
     assert len(tool_out["recommendations"]) == 5
     assert "ward_map_pdf" in tool_out["origin"]["hazard_map_links"]
+
+
+def test_disaster_updates_recent_and_archive(isolated_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    client, s_store, _, r_store = isolated_env
+
+    # 1) Default listing includes both 2025-2026 AND older archive (<2025)
+    r_all = client.get("/api/updates/disaster?period=all")
+    assert r_all.status_code == 200
+    all_data = r_all.json()
+    assert all_data["counts"]["recent_2y_earthquakes"] >= 5
+    assert all_data["counts"]["archive_earthquakes"] >= 20
+    assert all_data["counts"]["recent_2y_municipality_updates"] >= 5
+    assert all_data["counts"]["archive_municipality_updates"] >= 10
+    assert "typhoon.yahoo.co.jp/weather/jp/earthquake/list/?e=511" in (
+        all_data["sources"].get("yahoo_kyoto_earthquakes") or ""
+    )
+
+    # 2) Period filtering cleanly separates recent_2y vs archive
+    r_2y = client.get("/api/updates/disaster?period=recent_2y")
+    assert r_2y.status_code == 200
+    d2y = r_2y.json()
+    assert all(q["year"] in (2025, 2026) for q in d2y["earthquakes"])
+    assert all(n["year"] in (2025, 2026) for n in d2y["municipality_updates"])
+
+    r_2025 = client.get("/api/updates/disaster?period=2025")
+    assert r_2025.status_code == 200
+    assert all(q["year"] == 2025 for q in r_2025.json()["earthquakes"])
+    assert len(r_2025.json()["earthquakes"]) >= 1
+
+    r_arch = client.get("/api/updates/disaster?period=archive")
+    assert r_arch.status_code == 200
+    d_arch = r_arch.json()
+    assert all(q["year"] < 2025 for q in d_arch["earthquakes"])
+    assert all(n["year"] < 2025 for n in d_arch["municipality_updates"])
+
+    # 3) Live refresh parses HTML/JSON cleanly into isolated temp store & returns diff
+    from app import disaster_updates as du_mod
+
+    temp_archive = tmp_path / "archive.json"
+    isolated_updates = du_mod.DisasterUpdatesStore(archive_path=temp_archive)
+    monkeypatch.setattr(du_mod, "updates_store", isolated_updates)
+    monkeypatch.setattr(main_mod, "updates_store", isolated_updates)
+
+    async def fake_fetch_live(existing_earthquakes=None):
+        return {
+            "last_updated_at": "2026-11-24T09:00:00+00:00",
+            "sources": {
+                "yahoo_kyoto_earthquakes": du_mod.YAHOO_KYOTO_QUAKE_LIST_URL,
+                "jma_bosai_json": du_mod.JMA_QUAKE_LIST_URL,
+                "kyoto_bousai_portal": "https://www.bousai.city.kyoto.lg.jp/",
+                "kyoto_hazard_map": du_mod.KYOTO_HAZARD_MAP_PAGE_URL,
+            },
+            "earthquakes": [
+                {
+                    "id": "yahoo-20261124000001",
+                    "occurred_at": "2026年11月24日 10時00分ごろ",
+                    "date_iso": "2026-11-24",
+                    "year": 2026,
+                    "is_recent_2y": True,
+                    "epicenter": "京都府南部",
+                    "mag": 3.2,
+                    "maxi": "2",
+                    "depth_km": 10.0,
+                    "lat": 35.0,
+                    "lon": 135.75,
+                    "observed_kyoto": ["震度2: 京都市中京区"],
+                    "source": "気象庁 / Yahoo!天気・災害",
+                    "url": du_mod.YAHOO_KYOTO_QUAKE_LIST_URL,
+                }
+            ],
+            "municipality_updates": [
+                {
+                    "id": "kyoto-news-test-1",
+                    "date_text": "2026-11-20",
+                    "year": 2026,
+                    "is_recent_2y": True,
+                    "category": "ハザードマップ更新",
+                    "title": "テスト防災更新",
+                    "source": "京都市公式",
+                    "url": "https://www.bousai.city.kyoto.lg.jp/0000000196.html",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(du_mod, "fetch_live_archive_payload", fake_fetch_live)
+    r_ref = client.post("/api/updates/disaster/refresh")
+    assert r_ref.status_code == 200
+    ref_data = r_ref.json()
+    assert ref_data["refreshed"] is True
+    assert ref_data["new_earthquakes_count"] == 1
+    assert ref_data["new_municipality_updates_count"] == 1
+    assert temp_archive.exists()
+
+    # 4) AI assistant tool get_kyoto_disaster_updates_and_history works
+    from app import ai_assistant
+
+    t_res = ai_assistant._execute_tool(
+        s_store,
+        "get_kyoto_disaster_updates_and_history",
+        {"period": "recent_2y"},
+        reports_store=r_store,
+    )
+    assert t_res["period"] == "recent_2y"
+    assert len(t_res["earthquakes"]) == 1

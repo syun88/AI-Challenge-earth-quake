@@ -707,3 +707,60 @@ export interface ShelterRecommendationResponse {
   total_candidates: number;
   recommendations: ShelterRecommendationItem[];
 }
+
+export type DisasterUpdatesPeriod = "all" | "recent_2y" | "2026" | "2025" | "archive";
+
+export interface KyotoEarthquakeArchiveItem {
+  id: string;
+  occurred_at: string;
+  date_iso: string;
+  year: number;
+  is_recent_2y: boolean;
+  epicenter: string;
+  mag: number | null;
+  maxi: string;
+  depth_km: number | null;
+  lat: number | null;
+  lon: number | null;
+  observed_kyoto: string[];
+  source: string;
+  url: string;
+  is_kyoto_local?: boolean;
+}
+
+export interface MunicipalityUpdateItem {
+  id: string;
+  date_text: string;
+  year: number;
+  is_recent_2y: boolean;
+  category: string;
+  title: string;
+  source: string;
+  url: string;
+}
+
+export interface DisasterUpdatesResponse {
+  refreshed?: boolean;
+  new_earthquakes_count?: number;
+  new_municipality_updates_count?: number;
+  last_updated_at: string | null;
+  sources: {
+    yahoo_kyoto_earthquakes?: string;
+    jma_bosai_json?: string;
+    kyoto_bousai_portal?: string;
+    kyoto_hazard_map?: string;
+  };
+  period: DisasterUpdatesPeriod;
+  kind: "all" | "earthquakes" | "municipality";
+  counts: {
+    total_earthquakes: number;
+    recent_2y_earthquakes: number;
+    archive_earthquakes: number;
+    total_municipality_updates: number;
+    recent_2y_municipality_updates: number;
+    archive_municipality_updates: number;
+  };
+  years_available: number[];
+  earthquakes: KyotoEarthquakeArchiveItem[];
+  municipality_updates: MunicipalityUpdateItem[];
+}

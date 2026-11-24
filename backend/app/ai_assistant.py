@@ -307,6 +307,20 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_kyoto_disaster_updates_and_history",
+        "description": "気象庁・Yahoo!天気災害の京都府南部地震履歴（2025年・2026年および2024年以前の過去履歴）と、京都市防災ポータルの自治体防災アップデート（避難場所指定変更・ハザードマップ更新・協定等）を取得する。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "period": {
+                    "type": "string",
+                    "description": "期間フィルタ: 'all'（全期間）, 'recent_2y'（2025〜2026年）, '2026', '2025', 'archive'（2024年以前の過去アーカイブ）",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -364,6 +378,9 @@ def _summarize_tool_call(name: str, args: dict[str, Any], result: Any) -> str:
             top = recs[0]
             return f"避難場所推薦（{origin_w}）: 1位 {top.get('name')}（約{top.get('road_distance_km')}km・徒歩{top.get('walk_minutes')}分）"
         return f"避難場所推薦（{origin_w}）: 候補なし"
+    if name == "get_kyoto_disaster_updates_and_history" and isinstance(result, dict):
+        c = result.get("counts") or {}
+        return f"防災アップデート・地震履歴: 地震{len(result.get('earthquakes', []))}件 / 市更新{len(result.get('municipality_updates', []))}件（全期間: 地震{c.get('total_earthquakes', 0)}・市{c.get('total_municipality_updates', 0)}）"
     return f"{name} 実行完了"
 
 
@@ -746,6 +763,22 @@ def _execute_tool(
                 }
                 for item in res["recommendations"]
             ],
+        }
+
+    if name == "get_kyoto_disaster_updates_and_history":
+        from app.disaster_updates import updates_store
+
+        period = str(args.get("period") or "all")
+        if period not in {"all", "recent_2y", "2026", "2025", "archive"}:
+            period = "all"
+        res = updates_store.query_updates(period=period, kind="all")
+        return {
+            "period": res["period"],
+            "last_updated_at": res["last_updated_at"],
+            "counts": res["counts"],
+            "sources": res["sources"],
+            "earthquakes": res["earthquakes"][:25],
+            "municipality_updates": res["municipality_updates"][:25],
         }
 
     return {"error": f"Unknown tool: {name}"}
