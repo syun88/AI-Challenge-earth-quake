@@ -160,6 +160,8 @@ interface QuakeMapProps {
   onZoomChange?: (zoom: number, totalInView: number | null) => void;
   drawerOpen?: boolean;
   summaryPillVisible?: boolean;
+  seismicBeltsGeoJson?: GeoJSON.FeatureCollection | null;
+  activeSeismicBeltId?: string | null;
 }
 
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
@@ -235,6 +237,8 @@ export function QuakeMap({
   onZoomChange,
   drawerOpen = false,
   summaryPillVisible = false,
+  seismicBeltsGeoJson = null,
+  activeSeismicBeltId = null,
 }: QuakeMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -1077,6 +1081,32 @@ export function QuakeMap({
           "circle-stroke-color": "#ef4444",
           "circle-stroke-width": 2,
           "circle-stroke-opacity": 0.78,
+        },
+      });
+
+      // Kyoto Active Fault / Seismic Belt Overlay Layers
+      map.addSource("seismic-belts", { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: "seismic-belts-glow",
+        type: "line",
+        source: "seismic-belts",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": ["coalesce", ["get", "color"], "#f43f5e"],
+          "line-width": ["case", ["==", ["get", "active"], true], 12, 6],
+          "line-opacity": ["case", ["==", ["get", "active"], true], 0.4, 0.18],
+        },
+      });
+      map.addLayer({
+        id: "seismic-belts-line",
+        type: "line",
+        source: "seismic-belts",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": ["coalesce", ["get", "color"], "#f43f5e"],
+          "line-width": ["case", ["==", ["get", "active"], true], 4.5, 2.5],
+          "line-dasharray": [2, 1.5],
+          "line-opacity": ["case", ["==", ["get", "active"], true], 0.98, 0.72],
         },
       });
 
@@ -1931,6 +1961,29 @@ export function QuakeMap({
     }, 950);
     return () => clearTimeout(timer);
   }, [flyToTarget, mapReady]);
+
+  // Sync Kyoto Active Fault / Seismic Belt Overlay
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const src = map.getSource("seismic-belts") as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    if (!seismicBeltsGeoJson) {
+      src.setData(EMPTY_FC);
+      return;
+    }
+    const enriched: GeoJSON.FeatureCollection = {
+      type: "FeatureCollection",
+      features: (seismicBeltsGeoJson.features || []).map((f) => ({
+        ...f,
+        properties: {
+          ...(f.properties || {}),
+          active: Boolean(activeSeismicBeltId && f.properties?.id === activeSeismicBeltId),
+        },
+      })),
+    };
+    src.setData(enriched);
+  }, [seismicBeltsGeoJson, activeSeismicBeltId, mapReady]);
 
   // Google-Maps-style Searched Pin, Candidate Markers, Street Highlight & Halo
   useEffect(() => {

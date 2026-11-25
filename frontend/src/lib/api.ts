@@ -41,6 +41,7 @@ import {
   RoadSelectionResult,
   RouteNode,
   RouteSimulationResponse,
+  SeismicBeltsAnalysisResponse,
   ShelterRecommendationResponse,
   ShelterScenario,
   SnappedRoadInfo,
@@ -1010,5 +1011,20 @@ export function getHistoricResidentialPriorities(params?: {
   });
   return fetchJson<HistoricResidentialResponse>(
     `/api/priority/historic-residential?${sp.toString()}`
+  );
+}
+
+export function getSeismicBeltsAnalysis(params?: {
+  ward?: string;
+  beltId?: string;
+  limit?: number;
+}) {
+  const sp = new URLSearchParams({
+    ward: params?.ward ?? "all",
+    belt_id: params?.beltId ?? "all",
+    limit: String(params?.limit ?? 6),
+  });
+  return fetchJson<SeismicBeltsAnalysisResponse>(
+    `/api/seismic-belts/analysis?${sp.toString()}`
   );
 }

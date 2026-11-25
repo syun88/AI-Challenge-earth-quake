@@ -38,6 +38,7 @@ from app.auth import (
 )
 from app.bcp_site import assess_enterprise_assets, recommend_safe_enterprise_sites
 from app.heritage_residential import analyze_historic_and_residential_priorities
+from app.seismic_belts import analyze_seismic_belts
 from app.tts import (
     ALLOWED_TTS_MODELS,
     ALLOWED_TTS_VOICES,
@@ -1433,6 +1434,23 @@ def get_historic_residential_priorities(
         s,
         ward=ward,
         focus=focus,
+        limit=limit,
+    )
+
+
+@app.get("/api/seismic-belts/analysis")
+def get_seismic_belts_analysis(
+    ward: str = Query(default="all"),
+    belt_id: str = Query(default="all"),
+    limit: int = Query(default=6, ge=1, le=20),
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Analyze the 11 Kyoto earthquake belts (jishin_lisk.html) and their spatial/soil/heritage relationships."""
+    s = _require_store()
+    return analyze_seismic_belts(
+        s,
+        ward=ward,
+        belt_id=belt_id,
         limit=limit,
     )
 

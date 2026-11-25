@@ -109,6 +109,7 @@ import {
   MeshDetail,
   MeshOverlayMode,
   MetadataResponse,
+  MultiBeltHotspot,
   NetworkEdgeFeature,
   NetworkStatusResponse,
   OfficialShelter,
@@ -118,6 +119,7 @@ import {
   ReverseGeocodeResponse,
   RoadPaintTool,
   RouteSimulationResponse,
+  SeismicBeltImpactItem,
   ShelterHub,
   ShelterRecommendationItem,
   ShelterRecommendationResponse,
@@ -217,7 +219,13 @@ export default function HomePage() {
   const [updatesRefreshMsg, setUpdatesRefreshMsg] = useState<string | null>(null);
 
   // Active Selections & Map Pickers
-  const [statsTab, setStatsTab] = useState<"risk" | "bcp" | "shared_assets" | "heritage">("risk");
+  const [statsTab, setStatsTab] = useState<
+    "risk" | "bcp" | "shared_assets" | "heritage" | "seismic_belts"
+  >("risk");
+  const [seismicBeltsGeoJson, setSeismicBeltsGeoJson] =
+    useState<GeoJSON.FeatureCollection | null>(null);
+  const [activeSeismicBeltId, setActiveSeismicBeltId] = useState<string | null>(null);
+  const [selectedBeltHotspot, setSelectedBeltHotspot] = useState<MultiBeltHotspot | null>(null);
   const [enterpriseAssets, setEnterpriseAssets] = useState<EnterpriseAsset[]>([]);
   const [pickedEnterpriseCoords, setPickedEnterpriseCoords] = useState<{
     lat: number;
@@ -527,6 +535,7 @@ export default function HomePage() {
     setSelectedMesh(null);
     setSelectedBcpSite(null);
     setSelectedHeritageMesh(null);
+    setSelectedBeltHotspot(null);
     setSelectedReport(null);
     setSelectedBlockedRoad(null);
     setSelectedShelterHub(null);
@@ -1116,6 +1125,50 @@ export default function HomePage() {
         void loadReverseAddress(detail.centroid_lat, detail.centroid_lon);
       } catch {
         // ignore
+      }
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        setActivePanel("none");
+      }
+    },
+    [clearSelections, loadReverseAddress]
+  );
+
+  const handleSeismicBeltsLoaded = useCallback(
+    (geojson: GeoJSON.FeatureCollection | null, activeBeltId: string | null) => {
+      setSeismicBeltsGeoJson(geojson);
+      setActiveSeismicBeltId(activeBeltId);
+    },
+    []
+  );
+
+  const handleSelectSeismicBelt = useCallback((belt: SeismicBeltImpactItem) => {
+    setShowHazardMesh(true);
+    setFlyToTarget({
+      lat: belt.focus_lat,
+      lon: belt.focus_lon,
+      zoom: belt.id === "nankai_trough" ? 12.2 : 13.4,
+      ts: Date.now(),
+    });
+  }, []);
+
+  const handleSelectMultiBeltHotspot = useCallback(
+    async (hotspot: MultiBeltHotspot) => {
+      clearSelections();
+      setSelectedBeltHotspot(hotspot);
+      setSelectedMeshcode(hotspot.meshcode);
+      setShowHazardMesh(true);
+      setFlyToTarget({
+        lat: hotspot.centroid_lat,
+        lon: hotspot.centroid_lon,
+        zoom: 15.6,
+        ts: Date.now(),
+      });
+      try {
+        const detail = await getMeshDetail(hotspot.meshcode);
+        setSelectedMesh(detail);
+        void loadReverseAddress(hotspot.centroid_lat, hotspot.centroid_lon);
+      } catch {
+        // ignore mesh detail fallback
       }
       if (typeof window !== "undefined" && window.innerWidth < 1024) {
         setActivePanel("none");
@@ -2257,7 +2310,17 @@ export default function HomePage() {
                         subLabel: `〜1950歴史 ${selectedHeritageMesh.historic_pre1950_count}棟 / 旧耐震住宅 ${selectedHeritageMesh.pre_1981_residential_count}棟`,
                         tone: "amber",
                       }
-                    : selectedOfficialShelter
+                    : selectedBeltHotspot
+                      ? {
+                          lat: selectedBeltHotspot.centroid_lat,
+                          lon: selectedBeltHotspot.centroid_lon,
+                          label: `複数断層重複(${selectedBeltHotspot.belt_count}帯): ${selectedBeltHotspot.ward_name}`,
+                          subLabel: selectedBeltHotspot.overlapping_belts
+                            .map((b) => b.short_name)
+                            .join("・"),
+                          tone: "rose",
+                        }
+                      : selectedOfficialShelter
                     ? {
                         lat: selectedOfficialShelter.lat,
                         lon: selectedOfficialShelter.lon,
@@ -2294,6 +2357,10 @@ export default function HomePage() {
         onSelectSafetyWard={handleSelectSafetyWardFromMap}
         drawerOpen={activePanel !== "none"}
         summaryPillVisible={activePanel === "none" && mapPickMode === "none"}
+        seismicBeltsGeoJson={
+          activePanel === "stats" && statsTab === "seismic_belts" ? seismicBeltsGeoJson : null
+        }
+        activeSeismicBeltId={activeSeismicBeltId}
       />
 
       {/* Top Floating Nav & Mobile Bottom Dock */}
@@ -2422,7 +2489,9 @@ export default function HomePage() {
                               ? "企業BCP・重要施設 安全立地候補"
                               : statsTab === "heritage"
                                 ? "歴史的建物 × 住宅系 優先順位と解決策"
-                                : statsTab === "shared_assets" && profile.role === "government"
+                                : statsTab === "seismic_belts"
+                                  ? "京都市11地震帯 影響・関係性分析"
+                                  : statsTab === "shared_assets" && profile.role === "government"
                                   ? "政府連携共有・企業重要拠点"
                                   : "災害統計・建物リスク分析"}
             </span>
@@ -2662,6 +2731,9 @@ export default function HomePage() {
                 onSelectBcpSite={(site) => void handleSelectBcpSite(site)}
                 onSelectHeritageMesh={(m) => void handleSelectHeritageMesh(m)}
                 onSelectHeritageBuilding={(b) => void handleSelectHeritageBuilding(b)}
+                onSeismicBeltsLoaded={handleSeismicBeltsLoaded}
+                onSelectSeismicBelt={handleSelectSeismicBelt}
+                onSelectMultiBeltHotspot={(h) => void handleSelectMultiBeltHotspot(h)}
                 onSelectEnterpriseAsset={(asset) => {
                   setFlyToTarget({
                     lon: asset.lon,

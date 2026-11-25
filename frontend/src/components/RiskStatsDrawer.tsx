@@ -11,6 +11,7 @@ import {
   Cell,
 } from "recharts";
 import {
+  Activity,
   AlertTriangle,
   BarChart3,
   Building2,
@@ -19,6 +20,7 @@ import {
   FileSpreadsheet,
   Home,
   Landmark,
+  Layers,
   Loader2,
   MapPin,
   MessageSquareHeart,
@@ -35,6 +37,7 @@ import {
   getEnterpriseSafeSites,
   getHistoricResidentialPriorities,
   getR8SeismicList,
+  getSeismicBeltsAnalysis,
   locateR8Record,
   locateR8Unlisted,
 } from "@/lib/api";
@@ -58,10 +61,13 @@ import {
   HistoricResidentialMeshCandidate,
   HistoricResidentialResponse,
   HistoricResidentialSampleBuilding,
+  MultiBeltHotspot,
   PriorityArea,
   R8LocateResponse,
   R8SeismicListResponse,
   R8UnlistedLocateResponse,
+  SeismicBeltImpactItem,
+  SeismicBeltsAnalysisResponse,
   StatsResponse,
   UserRole,
 } from "@/types/quakelens";
@@ -89,11 +95,14 @@ interface RiskStatsDrawerProps {
   onSelectPriorityArea: (area: PriorityArea) => void;
   onSelectR8Record?: (loc: R8LocateResponse) => void;
   onSelectR8Unlisted?: (loc: R8UnlistedLocateResponse) => void;
-  statsTab?: "risk" | "bcp" | "shared_assets" | "heritage";
-  onChangeStatsTab?: (tab: "risk" | "bcp" | "shared_assets" | "heritage") => void;
+  statsTab?: "risk" | "bcp" | "shared_assets" | "heritage" | "seismic_belts";
+  onChangeStatsTab?: (tab: "risk" | "bcp" | "shared_assets" | "heritage" | "seismic_belts") => void;
   onSelectBcpSite?: (site: BcpSiteCandidate) => void;
   onSelectHeritageMesh?: (mesh: HistoricResidentialMeshCandidate) => void;
   onSelectHeritageBuilding?: (bldg: HistoricResidentialSampleBuilding) => void;
+  onSeismicBeltsLoaded?: (geojson: GeoJSON.FeatureCollection | null, activeBeltId: string | null) => void;
+  onSelectSeismicBelt?: (belt: SeismicBeltImpactItem) => void;
+  onSelectMultiBeltHotspot?: (hotspot: MultiBeltHotspot) => void;
   onSelectEnterpriseAsset?: (asset: EnterpriseAsset) => void;
   onSelectWardFilter?: (ward: string) => void;
   onOpenSafety: () => void;
@@ -125,20 +134,27 @@ export function RiskStatsDrawer({
   onSelectBcpSite,
   onSelectHeritageMesh,
   onSelectHeritageBuilding,
+  onSeismicBeltsLoaded,
+  onSelectSeismicBelt,
+  onSelectMultiBeltHotspot,
   onSelectEnterpriseAsset,
   onSelectWardFilter,
   onOpenSafety,
   onOpenReports,
 }: RiskStatsDrawerProps) {
-  const [internalTab, setInternalTab] = useState<"risk" | "bcp" | "shared_assets" | "heritage">("risk");
+  const [internalTab, setInternalTab] = useState<
+    "risk" | "bcp" | "shared_assets" | "heritage" | "seismic_belts"
+  >("risk");
   const rawTab = controlledStatsTab ?? internalTab;
-  const activeTab: "risk" | "bcp" | "shared_assets" | "heritage" =
+  const activeTab: "risk" | "bcp" | "shared_assets" | "heritage" | "seismic_belts" =
     rawTab === "bcp" && userRole !== "enterprise"
       ? "risk"
       : rawTab === "shared_assets" && userRole !== "government"
         ? "risk"
         : rawTab;
-  const setActiveTab = (next: "risk" | "bcp" | "shared_assets" | "heritage") => {
+  const setActiveTab = (
+    next: "risk" | "bcp" | "shared_assets" | "heritage" | "seismic_belts"
+  ) => {
     setInternalTab(next);
     onChangeStatsTab?.(next);
   };
@@ -156,6 +172,39 @@ export function RiskStatsDrawer({
   const [heritageFocus, setHeritageFocus] = useState<HistoricResidentialFocus>("all");
   const [heritageData, setHeritageData] = useState<HistoricResidentialResponse | null>(null);
   const [heritageLoading, setHeritageLoading] = useState(false);
+
+  const [selectedBeltId, setSelectedBeltId] = useState<string>("all");
+  const [beltsData, setBeltsData] = useState<SeismicBeltsAnalysisResponse | null>(null);
+  const [beltsLoading, setBeltsLoading] = useState(false);
+
+  useEffect(() => {
+    if (activeTab !== "seismic_belts") {
+      onSeismicBeltsLoaded?.(null, null);
+      return;
+    }
+    let cancelled = false;
+    getSeismicBeltsAnalysis({
+      ward: selectedWard,
+      beltId: selectedBeltId,
+      limit: 6,
+    })
+      .then((res) => {
+        if (!cancelled) {
+          setBeltsData(res);
+          setBeltsLoading(false);
+          onSeismicBeltsLoaded?.(
+            res.belts_geojson,
+            selectedBeltId === "all" ? null : selectedBeltId
+          );
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setBeltsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, selectedWard, selectedBeltId, onSeismicBeltsLoaded]);
 
   useEffect(() => {
     if (activeTab !== "heritage") return;
@@ -316,10 +365,10 @@ export function RiskStatsDrawer({
         </div>
       )}
 
-      {/* Role-scoped Sub-Tab Switcher (all roles include Historic & Residential Priorities) */}
+      {/* Role-scoped Sub-Tab Switcher (all roles include Historic & Residential + Seismic Belts) */}
       <div
         className={`grid gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1 text-[11px] ${
-          userRole === "enterprise" || userRole === "government" ? "grid-cols-3" : "grid-cols-2"
+          userRole === "enterprise" || userRole === "government" ? "grid-cols-2" : "grid-cols-3"
         }`}
       >
         <button
@@ -350,6 +399,22 @@ export function RiskStatsDrawer({
         >
           <Landmark className="h-3.5 w-3.5 shrink-0" />
           <span className="truncate">歴史・住宅対策</span>
+        </button>
+        <button
+          type="button"
+          data-testid="stats-tab-seismic-belts"
+          onClick={() => {
+            setBeltsLoading(true);
+            setActiveTab("seismic_belts");
+          }}
+          className={`inline-flex items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 font-semibold transition ${
+            activeTab === "seismic_belts"
+              ? "border border-rose-500/45 bg-rose-500/20 text-rose-100 shadow"
+              : "text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Activity className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">地震帯・関係性</span>
         </button>
         {userRole === "enterprise" && (
           <button
@@ -385,6 +450,277 @@ export function RiskStatsDrawer({
           </button>
         )}
       </div>
+
+      {activeTab === "seismic_belts" && (
+        <div className="space-y-3" data-testid="seismic-belts-panel">
+          <div className="space-y-2 rounded-xl border border-rose-500/40 bg-rose-950/20 p-3 text-xs">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-1.5 font-bold text-rose-200">
+                  <Activity className="h-4 w-4 text-rose-400" />
+                  <span>京都市11地震帯 影響・関係性分析</span>
+                </div>
+                <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+                  京都市防災マップ（jishin_lisk.html）の活断層10帯＋南海トラフ地震について、地図上に断層線を表示しつつ、
+                  <strong>震度被害・液状化地盤・歴史的建築/旧耐震との関係性</strong>を分析します。
+                </p>
+              </div>
+              {beltsData && (
+                <a
+                  href={beltsData.source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-rose-400/40 bg-rose-500/15 px-2 py-1 text-[10px] font-semibold text-rose-100 hover:bg-rose-500/25"
+                >
+                  <span>解説公式</span>
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+            </div>
+          </div>
+
+          {beltsLoading && !beltsData && (
+            <div className="flex items-center justify-center gap-2 py-8 text-xs text-slate-400">
+              <Loader2 className="h-4 w-4 animate-spin text-rose-400" />
+              <span>断層帯と地盤・建物の関係性を解析しています...</span>
+            </div>
+          )}
+
+          {beltsData && (
+            <>
+              {/* Historical Kyoto Case from jishin_lisk.html */}
+              <div className="space-y-1 rounded-xl border border-amber-500/40 bg-amber-950/20 p-3 text-xs">
+                <div className="flex items-center justify-between gap-2 font-bold text-amber-200">
+                  <span>{beltsData.historical_case.title}</span>
+                  <span className="rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[10px]">
+                    {beltsData.historical_case.estimated_magnitude}
+                  </span>
+                </div>
+                <p className="text-[10px] leading-relaxed text-slate-300">
+                  {beltsData.historical_case.summary}
+                </p>
+                <div className="text-[10px] font-semibold text-amber-100">
+                  教訓: {beltsData.historical_case.modern_lesson}
+                </div>
+              </div>
+
+              {/* 3 Relationship Insights */}
+              <div className="space-y-1.5 rounded-xl border border-slate-800 bg-slate-950/75 p-3">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-cyan-200">
+                  <Layers className="h-3.5 w-3.5 text-cyan-400" />
+                  <span>地震帯 × 地盤（液状化）× 建物構造の関係性</span>
+                </div>
+                <div className="space-y-1.5">
+                  {beltsData.relationship_insights.map((ins, i) => (
+                    <div
+                      key={i}
+                      className="rounded-lg border border-slate-800 bg-slate-900/75 px-2.5 py-2"
+                    >
+                      <div className="text-[11px] font-bold text-white">{ins.title}</div>
+                      <div className="mt-0.5 text-[10px] leading-relaxed text-slate-300">
+                        {ins.summary}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 11 Seismic Belts Impact Cards */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-bold text-slate-200">
+                    想定地震一覧（クリックで断層強調＆地図移動）
+                  </span>
+                  {selectedBeltId !== "all" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBeltsLoading(true);
+                        setSelectedBeltId("all");
+                      }}
+                      className="text-[10px] text-cyan-300 hover:underline"
+                    >
+                      すべて選択解除
+                    </button>
+                  )}
+                </div>
+
+                {beltsData.belts.map((belt) => {
+                  const isActive = selectedBeltId === belt.id;
+                  return (
+                    <button
+                      key={belt.id}
+                      type="button"
+                      data-testid={`seismic-belt-card-${belt.id}`}
+                      onClick={() => {
+                        setSelectedBeltId(isActive ? "all" : belt.id);
+                        onSelectSeismicBelt?.(belt);
+                      }}
+                      className={`w-full space-y-2 rounded-xl border p-3 text-left text-xs transition ${
+                        isActive
+                          ? "border-rose-400 bg-rose-950/35 ring-1 ring-rose-400/40"
+                          : "border-slate-700/80 bg-slate-900/75 hover:border-slate-500"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span
+                              className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/70"
+                              style={{ backgroundColor: belt.color }}
+                            />
+                            <span className="font-bold text-white">{belt.name}</span>
+                            <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-slate-300">
+                              {belt.type}
+                            </span>
+                          </div>
+                          <div className="mt-0.5 text-[10px] text-slate-400">
+                            {belt.source_study} ／ {belt.magnitude_note}
+                          </div>
+                        </div>
+                        <MapPin className="h-4 w-4 shrink-0 text-rose-300" />
+                      </div>
+
+                      <div className="grid grid-cols-4 gap-1 text-center font-mono text-[10px]">
+                        <div className="rounded border border-slate-800 bg-slate-950/70 px-1 py-1">
+                          <div className="text-[9px] text-slate-400">旧耐震</div>
+                          <div className="font-bold text-orange-300">
+                            {belt.impact.pre_1981_count.toLocaleString("ja-JP")}
+                          </div>
+                        </div>
+                        <div className="rounded border border-slate-800 bg-slate-950/70 px-1 py-1">
+                          <div className="text-[9px] text-slate-400">〜1950</div>
+                          <div className="font-bold text-amber-300">
+                            {belt.impact.historic_pre1950_count.toLocaleString("ja-JP")}
+                          </div>
+                        </div>
+                        <div className="rounded border border-slate-800 bg-slate-950/70 px-1 py-1">
+                          <div className="text-[9px] text-slate-400">軟弱メッシュ</div>
+                          <div className="font-bold text-fuchsia-300">
+                            {belt.impact.soft_soil_meshes}
+                          </div>
+                        </div>
+                        <div className="rounded border border-slate-800 bg-slate-950/70 px-1 py-1">
+                          <div className="text-[9px] text-slate-400">ARV平均</div>
+                          <div className="font-bold text-cyan-200">
+                            {belt.impact.avg_arv != null ? belt.impact.avg_arv.toFixed(2) : "—"}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-[10px] leading-snug text-slate-200">
+                        {belt.relationship_summary}
+                      </div>
+                      <div className="text-[10px] text-cyan-200/85">
+                        液状化・地盤関係: {belt.liquefaction_note}
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {belt.impact.impacted_wards.map((w) => (
+                          <span
+                            key={w}
+                            className="rounded border border-slate-700 bg-slate-950/80 px-1.5 py-0.5 text-[9px] text-slate-300"
+                          >
+                            {w}
+                          </span>
+                        ))}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Multi-Belt Overlap Hotspots */}
+              {beltsData.multi_belt_hotspots.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[11px] font-bold text-slate-300">
+                    複数断層 重複危険エリア Top {beltsData.multi_belt_hotspots.length}（クリックで地図へ移動）
+                  </div>
+                  {beltsData.multi_belt_hotspots.map((h) => (
+                    <button
+                      key={h.meshcode}
+                      type="button"
+                      data-testid={`belt-hotspot-card-${h.rank}`}
+                      onClick={() => onSelectMultiBeltHotspot?.(h)}
+                      className="w-full space-y-1.5 rounded-xl border border-slate-700/80 bg-slate-900/75 p-2.5 text-left text-xs transition hover:border-rose-400/70"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 font-bold text-white">
+                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[10px] font-black text-white">
+                            {h.rank}
+                          </span>
+                          <span>
+                            {h.ward_name} ／ {h.jname}
+                          </span>
+                          <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
+                            {h.meshcode}
+                          </span>
+                        </div>
+                        <span className="rounded bg-rose-500/20 px-1.5 py-0.5 font-mono text-[10px] font-bold text-rose-200">
+                          {h.belt_count}帯重複
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {h.overlapping_belts.map((ob) => (
+                          <span
+                            key={ob.id}
+                            className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-[9px] text-slate-200"
+                          >
+                            <span
+                              className="h-1.5 w-1.5 rounded-full"
+                              style={{ backgroundColor: ob.color }}
+                            />
+                            {ob.short_name} ({ob.dist_km}km)
+                          </span>
+                        ))}
+                      </div>
+                      <div className="text-[10px] text-slate-300">{h.note}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Ward-Belt Matrix */}
+              <div className="space-y-1.5 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-bold text-slate-200">行政区別 主な関係断層帯（上位）</span>
+                  {selectedWard !== "all" && (
+                    <button
+                      type="button"
+                      onClick={() => onSelectWardFilter?.("all")}
+                      className="text-[10px] text-cyan-300 hover:underline"
+                    >
+                      全区表示に戻す
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  {beltsData.ward_belt_matrix.slice(0, 6).map((wb) => (
+                    <button
+                      key={wb.ward_name}
+                      type="button"
+                      onClick={() => onSelectWardFilter?.(wb.ward_name)}
+                      className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-[10px] transition ${
+                        selectedWard === wb.ward_name
+                          ? "border-rose-400 bg-rose-950/30"
+                          : "border-slate-800 bg-slate-900/60 hover:border-slate-600"
+                      }`}
+                    >
+                      <span className="font-bold text-white">{wb.ward_name}</span>
+                      <span className="truncate text-slate-300">
+                        {wb.dominant_belts.map((d) => `${d.short_name}(${d.min_dist_km}km)`).join(" ・ ")}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-800 bg-slate-950/70 px-2.5 py-2 text-[10px] leading-relaxed text-slate-400">
+                {beltsData.disclaimer}
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {activeTab === "heritage" && (
         <div className="space-y-3" data-testid="heritage-residential-panel">

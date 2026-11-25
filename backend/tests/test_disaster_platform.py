@@ -1251,3 +1251,36 @@ def test_auto_select_optimal_shelter_on_occurrence(isolated_env) -> None:
     assert t_auto["selected_shelter"] is not None
     acts = ai_assistant._extract_map_actions("auto_select_optimal_shelter", t_auto)
     assert any(a["type"] == "fly_to_mesh" for a in acts)
+
+
+def test_seismic_belts_analysis_and_ai_tool(isolated_env) -> None:
+    """Seismic belts analysis covers all 11 Kyoto jishin_lisk.html scenarios, impacts, relationships, and AI tool."""
+    client, s_store, _, _ = isolated_env
+    r = client.get("/api/seismic-belts/analysis?ward=all&limit=5")
+    assert r.status_code == 200
+    data = r.json()
+    assert "jishin_lisk.html" in data["source_url"]
+    assert len(data["belts"]) == 11
+    assert len(data["belts_geojson"]["features"]) == 10
+    assert "文政" in data["historical_case"]["title"]
+    assert len(data["relationship_insights"]) == 3
+    assert len(data["ward_belt_matrix"]) >= 2
+
+    # Belt focus keeps selected belt first
+    r_hana = client.get("/api/seismic-belts/analysis?belt_id=hanaore&limit=3")
+    assert r_hana.status_code == 200
+    hana_data = r_hana.json()
+    assert hana_data["belts"][0]["id"] == "hanaore"
+    assert hana_data["belts"][0]["impact"]["pre_1981_count"] >= 0
+
+    # AI tool analyze_kyoto_seismic_belts executes cleanly for citizen role
+    from app import ai_assistant
+
+    assert "analyze_kyoto_seismic_belts" in ai_assistant.get_allowed_tool_names("citizen")
+    t_belts = ai_assistant._execute_tool(
+        s_store,
+        "analyze_kyoto_seismic_belts",
+        {"ward": "all", "belt_id": "all"},
+    )
+    assert len(t_belts["belts"]) == 11
+    assert "belts_geojson" not in t_belts

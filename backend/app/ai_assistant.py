@@ -47,6 +47,7 @@ COMMON_TOOL_NAMES: frozenset[str] = frozenset({
     "plan_evacuation_route",
     "operate_map_interface",
     "get_historic_and_residential_priorities",
+    "analyze_kyoto_seismic_belts",
 })
 
 ROLE_ALLOWED_TOOLS: dict[str, frozenset[str]] = {
@@ -837,6 +838,25 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "type": "function",
+        "name": "analyze_kyoto_seismic_belts",
+        "description": "京都市防災情報マップ（jishin_lisk.html）に掲載されている11の想定地震（花折断層帯、桃山～鹿ケ谷断層、樫原～水尾断層、宇治川断層、光明寺～金ヶ原断層、有馬・高槻断層系、黄檗断層、琵琶湖西岸断層、殿田・神吉・越畑断層、亀岡断層、南海トラフ巨大地震）について、影響範囲の旧耐震・歴史的建物数、液状化地盤（後背湿地等）との関係性、複数断層重複ホットスポット、文政京都地震（1830年）の教訓を分析する。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ward": {
+                    "type": "string",
+                    "description": "対象行政区名（例: '左京区', '伏見区', '西京区'）または 'all'",
+                },
+                "belt_id": {
+                    "type": "string",
+                    "description": "特定の地震帯ID（例: 'hanaore', 'momoyama_shishigatani', 'katagihara_mio', 'ujigawa', 'nankai_trough'）または 'all'",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -934,6 +954,15 @@ def _summarize_tool_call(name: str, args: dict[str, Any], result: Any) -> str:
     if name == "get_historic_and_residential_priorities" and isinstance(result, dict):
         c = result.get("counts") or {}
         return f"歴史・住宅優先対策（{result.get('ward', 'all')}）: P1最優先 {c.get('p1', 0):,}棟 / P2 {c.get('p2', 0):,}棟 / P3 {c.get('p3', 0):,}棟 / 歴史的建築(〜1950) {c.get('historic_pre1950', 0):,}棟"
+    if name == "analyze_kyoto_seismic_belts" and isinstance(result, dict):
+        belts = result.get("belts") or []
+        top_b = belts[0] if belts else None
+        if top_b:
+            return (
+                f"地震帯・影響関係性分析（{result.get('ward', 'all')}）: "
+                f"{len(belts)}想定 / 影響最大={top_b['name']}（旧耐震 {top_b['impact']['pre_1981_count']:,}棟・重複地点 {len(result.get('multi_belt_hotspots') or [])}件）"
+            )
+        return "地震帯・影響関係性分析完了"
     return f"{name} 実行完了"
 
 
@@ -1280,6 +1309,17 @@ def _extract_map_actions(name: str, result: Any) -> list[dict[str, Any]]:
                 "lon": sel["lon"],
                 "lat": sel["lat"],
                 "zoom": 15.8,
+            })
+    elif name == "analyze_kyoto_seismic_belts":
+        for h in (result.get("multi_belt_hotspots") or [])[:2]:
+            actions.append({
+                "type": "fly_to_mesh",
+                "key": f"belt_hotspot:{h['meshcode']}",
+                "label": f"複数断層重複({h['belt_count']}帯): {h['ward_name']} {h['meshcode']}",
+                "meshcode": h["meshcode"],
+                "lon": h["centroid_lon"],
+                "lat": h["centroid_lat"],
+                "zoom": 15.5,
             })
     return actions
 
@@ -2117,6 +2157,14 @@ def _execute_tool(
             focus=focus,
             limit=6,
         )
+
+    if name == "analyze_kyoto_seismic_belts":
+        from app.seismic_belts import analyze_seismic_belts
+
+        ward = str(args.get("ward") or "all")
+        belt_id = str(args.get("belt_id") or "all")
+        res = analyze_seismic_belts(store, ward=ward, belt_id=belt_id, limit=6)
+        return {k: v for k, v in res.items() if k != "belts_geojson"}
 
     return {"error": f"Unknown tool: {name}"}
 

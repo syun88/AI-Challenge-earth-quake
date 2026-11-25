@@ -1285,3 +1285,90 @@ export interface HistoricResidentialResponse {
   r8_page_url: string;
   disclaimer: string;
 }
+
+export interface SeismicBeltImpactItem {
+  id: string;
+  name: string;
+  short_name: string;
+  type: string;
+  source_study: string;
+  magnitude_note: string;
+  primary_risks: string[];
+  liquefaction_note: string;
+  relationship_summary: string;
+  color: string;
+  coordinates: [number, number][];
+  focus_lat: number;
+  focus_lon: number;
+  impact: {
+    mesh_count: number;
+    exposed_buildings: number;
+    pre_1981_count: number;
+    wooden_pre_1981_count: number;
+    historic_pre1950_count: number;
+    soft_soil_meshes: number;
+    liquefaction_overlap_rate: number;
+    avg_arv: number | null;
+    impacted_wards: string[];
+    min_distance_km: number | null;
+    composite_score: number;
+  };
+}
+
+export interface MultiBeltHotspot {
+  rank: number;
+  meshcode: string;
+  ward_name: string;
+  centroid_lat: number;
+  centroid_lon: number;
+  jname: string;
+  arv: number;
+  t30_i55_ps: number;
+  is_liquefaction_prone: boolean;
+  total_buildings: number;
+  pre_1981_count: number;
+  historic_pre1950_count: number;
+  overlapping_belts: Array<{
+    id: string;
+    short_name: string;
+    dist_km: number;
+    color: string;
+  }>;
+  belt_count: number;
+  risk_score: number;
+  note: string;
+}
+
+export interface WardBeltMatrixItem {
+  ward_name: string;
+  dominant_belts: Array<{
+    belt_id: string;
+    short_name: string;
+    min_dist_km: number;
+    impact_buildings: number;
+    soft_meshes: number;
+  }>;
+  nankai_soft_meshes: number;
+}
+
+export interface SeismicBeltsAnalysisResponse {
+  source_url: string;
+  ward: string;
+  belt_id: string;
+  historical_case: {
+    title: string;
+    estimated_magnitude: string;
+    summary: string;
+    modern_lesson: string;
+    source_url: string;
+  };
+  belts: SeismicBeltImpactItem[];
+  belts_geojson: GeoJSON.FeatureCollection;
+  multi_belt_hotspots: MultiBeltHotspot[];
+  ward_belt_matrix: WardBeltMatrixItem[];
+  relationship_insights: Array<{
+    title: string;
+    summary: string;
+  }>;
+  disclaimer: string;
+}
