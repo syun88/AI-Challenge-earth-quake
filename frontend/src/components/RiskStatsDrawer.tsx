@@ -17,6 +17,8 @@ import {
   Download,
   ExternalLink,
   FileSpreadsheet,
+  Home,
+  Landmark,
   Loader2,
   MapPin,
   MessageSquareHeart,
@@ -24,12 +26,14 @@ import {
   Server,
   ShieldAlert,
   ShieldCheck,
+  Wrench,
 } from "lucide-react";
 import {
   buildDisasterCsvUrl,
   buildDisasterXlsxUrl,
   downloadAuthenticatedFile,
   getEnterpriseSafeSites,
+  getHistoricResidentialPriorities,
   getR8SeismicList,
   locateR8Record,
   locateR8Unlisted,
@@ -50,6 +54,10 @@ import {
   DamageReportSummaryResponse,
   EnterpriseAsset,
   HazardTier,
+  HistoricResidentialFocus,
+  HistoricResidentialMeshCandidate,
+  HistoricResidentialResponse,
+  HistoricResidentialSampleBuilding,
   PriorityArea,
   R8LocateResponse,
   R8SeismicListResponse,
@@ -81,9 +89,11 @@ interface RiskStatsDrawerProps {
   onSelectPriorityArea: (area: PriorityArea) => void;
   onSelectR8Record?: (loc: R8LocateResponse) => void;
   onSelectR8Unlisted?: (loc: R8UnlistedLocateResponse) => void;
-  statsTab?: "risk" | "bcp" | "shared_assets";
-  onChangeStatsTab?: (tab: "risk" | "bcp" | "shared_assets") => void;
+  statsTab?: "risk" | "bcp" | "shared_assets" | "heritage";
+  onChangeStatsTab?: (tab: "risk" | "bcp" | "shared_assets" | "heritage") => void;
   onSelectBcpSite?: (site: BcpSiteCandidate) => void;
+  onSelectHeritageMesh?: (mesh: HistoricResidentialMeshCandidate) => void;
+  onSelectHeritageBuilding?: (bldg: HistoricResidentialSampleBuilding) => void;
   onSelectEnterpriseAsset?: (asset: EnterpriseAsset) => void;
   onSelectWardFilter?: (ward: string) => void;
   onOpenSafety: () => void;
@@ -113,20 +123,22 @@ export function RiskStatsDrawer({
   statsTab: controlledStatsTab,
   onChangeStatsTab,
   onSelectBcpSite,
+  onSelectHeritageMesh,
+  onSelectHeritageBuilding,
   onSelectEnterpriseAsset,
   onSelectWardFilter,
   onOpenSafety,
   onOpenReports,
 }: RiskStatsDrawerProps) {
-  const [internalTab, setInternalTab] = useState<"risk" | "bcp" | "shared_assets">("risk");
+  const [internalTab, setInternalTab] = useState<"risk" | "bcp" | "shared_assets" | "heritage">("risk");
   const rawTab = controlledStatsTab ?? internalTab;
-  const activeTab: "risk" | "bcp" | "shared_assets" =
+  const activeTab: "risk" | "bcp" | "shared_assets" | "heritage" =
     rawTab === "bcp" && userRole !== "enterprise"
       ? "risk"
       : rawTab === "shared_assets" && userRole !== "government"
         ? "risk"
         : rawTab;
-  const setActiveTab = (next: "risk" | "bcp" | "shared_assets") => {
+  const setActiveTab = (next: "risk" | "bcp" | "shared_assets" | "heritage") => {
     setInternalTab(next);
     onChangeStatsTab?.(next);
   };
@@ -140,6 +152,32 @@ export function RiskStatsDrawer({
   const [bcpAvoidMountain, setBcpAvoidMountain] = useState(true);
   const [bcpData, setBcpData] = useState<BcpSiteResponse | null>(null);
   const [bcpLoading, setBcpLoading] = useState(false);
+
+  const [heritageFocus, setHeritageFocus] = useState<HistoricResidentialFocus>("all");
+  const [heritageData, setHeritageData] = useState<HistoricResidentialResponse | null>(null);
+  const [heritageLoading, setHeritageLoading] = useState(false);
+
+  useEffect(() => {
+    if (activeTab !== "heritage") return;
+    let cancelled = false;
+    getHistoricResidentialPriorities({
+      ward: selectedWard,
+      focus: heritageFocus,
+      limit: 6,
+    })
+      .then((res) => {
+        if (!cancelled) {
+          setHeritageData(res);
+          setHeritageLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setHeritageLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, selectedWard, heritageFocus]);
 
   useEffect(() => {
     if (activeTab !== "bcp" || userRole !== "enterprise") return;
@@ -278,54 +316,367 @@ export function RiskStatsDrawer({
         </div>
       )}
 
-      {/* Role-scoped Sub-Tab Switcher */}
-      {(userRole === "enterprise" || userRole === "government") && (
-        <div className="grid grid-cols-2 gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1 text-[11px]">
+      {/* Role-scoped Sub-Tab Switcher (all roles include Historic & Residential Priorities) */}
+      <div
+        className={`grid gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1 text-[11px] ${
+          userRole === "enterprise" || userRole === "government" ? "grid-cols-3" : "grid-cols-2"
+        }`}
+      >
+        <button
+          type="button"
+          data-testid="stats-tab-risk"
+          onClick={() => setActiveTab("risk")}
+          className={`inline-flex items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 font-semibold transition ${
+            activeTab === "risk"
+              ? "bg-slate-800 text-sky-200 shadow"
+              : "text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <BarChart3 className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">建物リスク・R8</span>
+        </button>
+        <button
+          type="button"
+          data-testid="stats-tab-heritage"
+          onClick={() => {
+            setHeritageLoading(true);
+            setActiveTab("heritage");
+          }}
+          className={`inline-flex items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 font-semibold transition ${
+            activeTab === "heritage"
+              ? "border border-amber-500/40 bg-amber-500/20 text-amber-100 shadow"
+              : "text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Landmark className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">歴史・住宅対策</span>
+        </button>
+        {userRole === "enterprise" && (
           <button
             type="button"
-            data-testid="stats-tab-risk"
-            onClick={() => setActiveTab("risk")}
-            className={`inline-flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
-              activeTab === "risk"
-                ? "bg-slate-800 text-sky-200 shadow"
+            data-testid="stats-tab-bcp"
+            onClick={() => {
+              setBcpLoading(true);
+              setActiveTab("bcp");
+            }}
+            className={`inline-flex items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 font-semibold transition ${
+              activeTab === "bcp"
+                ? "border border-emerald-500/40 bg-emerald-500/20 text-emerald-200 shadow"
                 : "text-slate-400 hover:text-slate-200"
             }`}
           >
-            <BarChart3 className="h-3.5 w-3.5" />
-            <span>建物リスク・R8比較</span>
+            <Server className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">企業BCP立地</span>
           </button>
-          {userRole === "enterprise" && (
-            <button
-              type="button"
-              data-testid="stats-tab-bcp"
-              onClick={() => {
-                setBcpLoading(true);
-                setActiveTab("bcp");
-              }}
-              className={`inline-flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
-                activeTab === "bcp"
-                  ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 shadow"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              <Server className="h-3.5 w-3.5" />
-              <span>企業BCP安全立地</span>
-            </button>
+        )}
+        {userRole === "government" && (
+          <button
+            type="button"
+            data-testid="stats-tab-shared-assets"
+            onClick={() => setActiveTab("shared_assets")}
+            className={`inline-flex items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 font-semibold transition ${
+              activeTab === "shared_assets"
+                ? "border border-amber-500/40 bg-amber-500/20 text-amber-200 shadow"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Building2 className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">共有・企業拠点</span>
+          </button>
+        )}
+      </div>
+
+      {activeTab === "heritage" && (
+        <div className="space-y-3" data-testid="heritage-residential-panel">
+          <div className="space-y-2 rounded-xl border border-amber-500/40 bg-amber-950/20 p-3 text-xs">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-1.5 font-bold text-amber-200">
+                  <Landmark className="h-4 w-4 text-amber-400" />
+                  <span>歴史的建造物 × 住宅系 優先順位と解決策提案</span>
+                </div>
+                <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+                  京町家・伝統木造（1950年以前）や旧耐震・81-00基準住宅を対象に、J-SHIS揺れ確率・表層地盤・PLATEAU築年から
+                  <strong>P1〜P4の対策優先順位</strong>と京都市公式助成を活用した具体策を提示します。
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1.5 pt-1">
+              {(
+                [
+                  { id: "all", label: "総合優先", sub: "歴史＋住宅系" },
+                  { id: "historic", label: "歴史的建物", sub: "〜1950・伝統木造" },
+                  { id: "residential", label: "住宅系", sub: "旧耐震・81-00木造" },
+                ] as const
+              ).map((f) => {
+                const active = heritageFocus === f.id;
+                return (
+                  <button
+                    key={f.id}
+                    type="button"
+                    data-testid={`heritage-focus-${f.id}`}
+                    onClick={() => {
+                      setHeritageLoading(true);
+                      setHeritageFocus(f.id);
+                    }}
+                    className={`rounded-xl border p-2 text-left transition ${
+                      active
+                        ? "border-amber-400 bg-amber-500/20 text-white"
+                        : "border-slate-700/80 bg-slate-900/70 text-slate-300 hover:border-slate-500"
+                    }`}
+                  >
+                    <div className="text-[11px] font-bold">{f.label}</div>
+                    <div className="text-[9px] text-slate-400">{f.sub}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {heritageLoading && !heritageData && (
+            <div className="flex items-center justify-center gap-2 py-8 text-xs text-slate-400">
+              <Loader2 className="h-4 w-4 animate-spin text-amber-400" />
+              <span>歴史的建物・住宅系の優先順位を解析しています...</span>
+            </div>
           )}
-          {userRole === "government" && (
-            <button
-              type="button"
-              data-testid="stats-tab-shared-assets"
-              onClick={() => setActiveTab("shared_assets")}
-              className={`inline-flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
-                activeTab === "shared_assets"
-                  ? "bg-amber-500/20 text-amber-200 border border-amber-500/40 shadow"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              <Building2 className="h-3.5 w-3.5" />
-              <span>連携許可・企業拠点</span>
-            </button>
+
+          {heritageData && (
+            <>
+              {/* P1-P4 Summary Counts */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-xl border border-rose-500/40 bg-rose-950/25 p-2.5">
+                  <div className="text-[10px] text-rose-200">P1 最優先（〜1950歴史×高危険）</div>
+                  <div className="font-mono text-base font-extrabold text-rose-300">
+                    {heritageData.counts.p1.toLocaleString("ja-JP")}棟
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    1950以前計 {heritageData.counts.historic_pre1950.toLocaleString("ja-JP")}棟
+                  </div>
+                </div>
+                <div className="rounded-xl border border-amber-500/40 bg-amber-950/25 p-2.5">
+                  <div className="text-[10px] text-amber-200">P2 高優先（旧耐震住宅等）</div>
+                  <div className="font-mono text-base font-extrabold text-amber-300">
+                    {heritageData.counts.p2.toLocaleString("ja-JP")}棟
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    住宅系計 {heritageData.counts.residential_total.toLocaleString("ja-JP")}棟
+                  </div>
+                </div>
+                <div className="rounded-xl border border-sky-500/40 bg-sky-950/20 p-2.5">
+                  <div className="text-[10px] text-sky-200">P3 中優先（81-00木造等）</div>
+                  <div className="font-mono text-base font-extrabold text-sky-300">
+                    {heritageData.counts.p3.toLocaleString("ja-JP")}棟
+                  </div>
+                  <div className="text-[10px] text-slate-400">接合金物補強・家具固定</div>
+                </div>
+                <div className="rounded-xl border border-slate-700 bg-slate-900/75 p-2.5">
+                  <div className="text-[10px] text-slate-300">P4 把握優先（築年不明）</div>
+                  <div className="font-mono text-base font-extrabold text-slate-100">
+                    {heritageData.counts.p4.toLocaleString("ja-JP")}棟
+                  </div>
+                  <div className="text-[10px] text-slate-400">登記・無料診断で築年確定</div>
+                </div>
+              </div>
+
+              {/* Priority Tiers + Concrete Solutions */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-200">
+                  <Wrench className="h-3.5 w-3.5 text-amber-400" />
+                  <span>優先順位別 解決方法提案（P1 → P4）</span>
+                </div>
+                {heritageData.priority_tiers.map((tier) => (
+                  <div
+                    key={tier.tier}
+                    data-testid={`heritage-tier-${tier.tier}`}
+                    className={`space-y-2 rounded-xl border p-3 text-xs ${
+                      tier.tier === "P1"
+                        ? "border-rose-500/45 bg-rose-950/20"
+                        : tier.tier === "P2"
+                          ? "border-amber-500/45 bg-amber-950/20"
+                          : tier.tier === "P3"
+                            ? "border-sky-500/35 bg-sky-950/15"
+                            : "border-slate-700 bg-slate-900/70"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="rounded bg-slate-950 px-1.5 py-0.5 font-mono text-[10px] font-extrabold text-white">
+                            {tier.tier}・{tier.urgency_label}
+                          </span>
+                          <span className="font-mono text-[11px] font-bold text-slate-200">
+                            {tier.building_count.toLocaleString("ja-JP")}棟
+                          </span>
+                        </div>
+                        <div className="mt-1 text-[11px] font-bold text-white">{tier.title}</div>
+                      </div>
+                    </div>
+                    <p className="text-[10px] leading-relaxed text-slate-400">
+                      対象: {tier.target_criteria}
+                    </p>
+                    <div className="space-y-1.5">
+                      {tier.solutions.map((sol, idx) => (
+                        <div
+                          key={idx}
+                          className="rounded-lg border border-slate-800/90 bg-slate-950/70 px-2.5 py-1.5"
+                        >
+                          <div className="text-[10px] font-bold text-amber-200">
+                            [{sol.kind}] {sol.action}
+                          </div>
+                          <div className="mt-0.5 text-[10px] leading-relaxed text-slate-300">
+                            {sol.detail}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Official Subsidy Programs */}
+              <div className="space-y-1.5 rounded-xl border border-emerald-500/35 bg-emerald-950/15 p-3 text-xs">
+                <div className="font-bold text-emerald-200">京都市 公式耐震診断・補助制度</div>
+                {heritageData.official_programs.map((prog) => (
+                  <a
+                    key={prog.url}
+                    href={prog.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-start justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/75 px-2.5 py-2 text-[11px] transition hover:border-emerald-400/60"
+                  >
+                    <div>
+                      <div className="font-semibold text-emerald-100">{prog.title}</div>
+                      <div className="mt-0.5 text-[10px] text-slate-400">{prog.summary}</div>
+                    </div>
+                    <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-300" />
+                  </a>
+                ))}
+              </div>
+
+              {/* Ward Comparative Ranking */}
+              <div className="space-y-1.5 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-bold text-slate-200">
+                    行政区別 歴史・住宅優先対策ランキング
+                  </span>
+                  {selectedWard !== "all" && (
+                    <button
+                      type="button"
+                      onClick={() => onSelectWardFilter?.("all")}
+                      className="text-[10px] text-cyan-300 hover:underline"
+                    >
+                      全区表示に戻す
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  {heritageData.ward_ranking.slice(0, 6).map((w, idx) => (
+                    <button
+                      key={w.ward_name}
+                      type="button"
+                      onClick={() => onSelectWardFilter?.(w.ward_name)}
+                      className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-[11px] transition ${
+                        selectedWard === w.ward_name
+                          ? "border-amber-400 bg-amber-950/35"
+                          : "border-slate-800/80 bg-slate-900/60 hover:border-slate-600"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[10px] font-bold text-amber-300">
+                          {idx + 1}.
+                        </span>
+                        <span className="font-bold text-white">{w.ward_name}</span>
+                        <span className="text-[10px] text-slate-400">
+                          〜1950: {w.historic_pre1950_count.toLocaleString("ja-JP")}棟
+                        </span>
+                      </div>
+                      <div className="font-mono text-[10px] text-rose-300">
+                        P1 {w.p1_count.toLocaleString("ja-JP")} / P2 {w.p2_count.toLocaleString("ja-JP")}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Priority 250m Meshes */}
+              <div className="space-y-2">
+                <div className="text-[11px] font-bold text-slate-300">
+                  重点対策エリア Top {heritageData.priority_meshes.length}（クリックで地図へ移動）
+                </div>
+                {heritageData.priority_meshes.map((m) => (
+                  <button
+                    key={m.meshcode}
+                    type="button"
+                    data-testid={`heritage-mesh-card-${m.rank}`}
+                    onClick={() => onSelectHeritageMesh?.(m)}
+                    className="w-full space-y-1.5 rounded-xl border border-slate-700/80 bg-slate-900/75 p-2.5 text-left text-xs transition hover:border-amber-400/70 hover:bg-slate-900"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 font-bold text-white">
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-[10px] font-black text-slate-950">
+                          {m.rank}
+                        </span>
+                        <span>
+                          {m.ward_name} ／ {m.jname}
+                        </span>
+                        <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
+                          {m.meshcode}
+                        </span>
+                      </div>
+                      <span className="rounded bg-rose-500/20 px-1.5 py-0.5 font-mono text-[10px] font-bold text-rose-200">
+                        {m.dominant_priority}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-slate-300">
+                      P1(〜1950高危険): <strong>{m.p1_count}</strong>棟 / 旧耐震住宅:{" "}
+                      <strong>{m.pre_1981_residential_count}</strong>棟 / 6弱+{" "}
+                      {m.t30_i55_ps != null ? `${(m.t30_i55_ps * 100).toFixed(1)}%` : "—"}
+                    </div>
+                    <div className="text-[10px] text-amber-200/90">{m.recommended_action}</div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Sample Concrete Historic / Residential Buildings */}
+              {heritageData.sample_buildings.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-300">
+                    <Home className="h-3.5 w-3.5 text-sky-400" />
+                    <span>代表的な対象建物（クリックで建物を強調表示）</span>
+                  </div>
+                  {heritageData.sample_buildings.map((b) => (
+                    <button
+                      key={b.building_id}
+                      type="button"
+                      data-testid={`heritage-building-card-${b.rank}`}
+                      onClick={() => onSelectHeritageBuilding?.(b)}
+                      className="flex w-full items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-900/75 px-3 py-2 text-left text-xs transition hover:border-sky-400/70 hover:bg-slate-800"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 font-bold text-white">
+                          <span className="rounded bg-rose-500/25 px-1.5 py-0.5 font-mono text-[10px] text-rose-200">
+                            {b.priority_tier}
+                          </span>
+                          <span className="truncate">
+                            {b.ward_name} ／ {b.year_built ? `${b.year_built}年築` : "築年不明"} ／{" "}
+                            {b.usage_label}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 truncate text-[10px] text-slate-400">
+                          {b.structure_label} ・ {b.category_tag}
+                        </div>
+                      </div>
+                      <MapPin className="h-4 w-4 shrink-0 text-sky-400" />
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="rounded-lg border border-slate-800 bg-slate-950/70 px-2.5 py-2 text-[10px] leading-relaxed text-slate-400">
+                {heritageData.disclaimer}
+              </div>
+            </>
           )}
         </div>
       )}

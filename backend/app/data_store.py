@@ -12,6 +12,7 @@ from typing import Any
 import geopandas as gpd
 import pandas as pd
 
+from app.heritage_residential import classify_single_building_priority
 from app.mvt import encode_buildings_mvt
 from app.r8_seismic import r8_seismic_store
 
@@ -472,6 +473,7 @@ class QuakeLensDataStore:
         else:
             era_note = "2001年以降建築です。"
 
+        row_dict = row.to_dict()
         return {
             "building_id": row["building_id"],
             "ward_name": row["ward_name"],
@@ -501,7 +503,8 @@ class QuakeLensDataStore:
             "centroid_lat": round(float(centroid.y), 6),
             "hazard_disclaimer": "※J-SHISハザード値は250mメッシュにおける今後30年間に一定の揺れに見舞われる確率であり、この建物個別の倒壊確率や耐震性能を示すものではありません。",
             "official_programs": OFFICIAL_RETROFIT_PROGRAMS,
-            "r8_seismic_assessment": r8_seismic_store.assess_building(row.to_dict()),
+            "r8_seismic_assessment": r8_seismic_store.assess_building(row_dict),
+            "priority_solution": classify_single_building_priority(row_dict),
         }
 
     def get_mesh_detail(self, meshcode: str) -> dict[str, Any] | None:

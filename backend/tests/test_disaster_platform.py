@@ -1131,3 +1131,48 @@ def test_ai_tools_definitions_validate_for_interactions() -> None:
         }
     )
     assert len(validated.tools or []) == len(ai_assistant.TOOLS)
+
+
+def test_historic_and_residential_priority_and_solutions(isolated_env) -> None:
+    """Historic and residential prioritization ranks P1-P4 tiers, solutions, ward hotspots, and AI actions."""
+    client, s_store, _, _ = isolated_env
+    # Accessible by citizen role as well as enterprise/government
+    r = client.get("/api/priority/historic-residential?focus=all&limit=5")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["focus"] == "all"
+    assert [t["tier"] for t in data["priority_tiers"]] == ["P1", "P2", "P3", "P4"]
+    assert all(len(t["solutions"]) >= 2 for t in data["priority_tiers"])
+    assert len(data["official_programs"]) >= 3
+    assert len(data["ward_ranking"]) >= 2
+    assert len(data["priority_meshes"]) >= 1
+    assert len(data["sample_buildings"]) >= 1
+
+    # Historic focus & ward filter
+    r_hist = client.get("/api/priority/historic-residential?ward=伏見区&focus=historic&limit=3")
+    assert r_hist.status_code == 200
+    h_data = r_hist.json()
+    assert h_data["focus"] == "historic"
+    assert all(m["ward_name"] == "伏見区" for m in h_data["priority_meshes"])
+
+    # Building detail endpoint attaches priority_solution
+    b_id = data["sample_buildings"][0]["building_id"]
+    r_b = client.get(f"/api/buildings/{b_id}")
+    assert r_b.status_code == 200
+    b_detail = r_b.json()
+    assert "priority_solution" in b_detail
+    assert b_detail["priority_solution"]["priority_tier"] in ("P1", "P2", "P3", "P4", "OK")
+    assert len(b_detail["priority_solution"]["recommended_actions"]) >= 1
+
+    # AI tool & map action extraction work for citizen role too
+    from app import ai_assistant
+
+    assert "get_historic_and_residential_priorities" in ai_assistant.get_allowed_tool_names("citizen")
+    t_res = ai_assistant._execute_tool(
+        s_store,
+        "get_historic_and_residential_priorities",
+        {"ward": "all", "focus": "residential"},
+    )
+    assert t_res["focus"] == "residential"
+    actions = ai_assistant._extract_map_actions("get_historic_and_residential_priorities", t_res)
+    assert any(act["type"] in ("fly_to_mesh", "focus_building") for act in actions)

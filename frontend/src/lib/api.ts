@@ -22,6 +22,8 @@ import {
   DisasterUpdatesResponse,
   EarthquakeEvent,
   EnterpriseAssetsAssessResponse,
+  HistoricResidentialFocus,
+  HistoricResidentialResponse,
   InteractiveRoadsGeoJSON,
   LocationSearchResponse,
   MeshDetail,
@@ -963,3 +965,18 @@ export function askBoardChatAgent(
 }
 
 export type { AgentMapPin };
+
+export function getHistoricResidentialPriorities(params?: {
+  ward?: string;
+  focus?: HistoricResidentialFocus;
+  limit?: number;
+}) {
+  const sp = new URLSearchParams({
+    ward: params?.ward ?? "all",
+    focus: params?.focus ?? "all",
+    limit: String(params?.limit ?? 6),
+  });
+  return fetchJson<HistoricResidentialResponse>(
+    `/api/priority/historic-residential?${sp.toString()}`
+  );
+}

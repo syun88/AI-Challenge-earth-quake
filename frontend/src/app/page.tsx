@@ -98,6 +98,8 @@ import {
   EnterpriseAssetType,
   EnterpriseConfidentiality,
   HazardTier,
+  HistoricResidentialMeshCandidate,
+  HistoricResidentialSampleBuilding,
   KyotoEarthquakeArchiveItem,
   LocationSearchResult,
   Map3DMode,
@@ -210,7 +212,7 @@ export default function HomePage() {
   const [updatesRefreshMsg, setUpdatesRefreshMsg] = useState<string | null>(null);
 
   // Active Selections & Map Pickers
-  const [statsTab, setStatsTab] = useState<"risk" | "bcp" | "shared_assets">("risk");
+  const [statsTab, setStatsTab] = useState<"risk" | "bcp" | "shared_assets" | "heritage">("risk");
   const [enterpriseAssets, setEnterpriseAssets] = useState<EnterpriseAsset[]>([]);
   const [pickedEnterpriseCoords, setPickedEnterpriseCoords] = useState<{
     lat: number;
@@ -219,6 +221,8 @@ export default function HomePage() {
   const [selectedBuilding, setSelectedBuilding] = useState<BuildingDetail | null>(null);
   const [selectedMesh, setSelectedMesh] = useState<MeshDetail | null>(null);
   const [selectedBcpSite, setSelectedBcpSite] = useState<BcpSiteCandidate | null>(null);
+  const [selectedHeritageMesh, setSelectedHeritageMesh] =
+    useState<HistoricResidentialMeshCandidate | null>(null);
   const [selectedReport, setSelectedReport] = useState<DamageReport | null>(null);
   const [selectedBlockedRoad, setSelectedBlockedRoad] = useState<NetworkEdgeFeature | null>(null);
   const [selectedShelterHub, setSelectedShelterHub] = useState<ShelterHub | null>(null);
@@ -517,6 +521,7 @@ export default function HomePage() {
     setSelectedBuilding(null);
     setSelectedMesh(null);
     setSelectedBcpSite(null);
+    setSelectedHeritageMesh(null);
     setSelectedReport(null);
     setSelectedBlockedRoad(null);
     setSelectedShelterHub(null);
@@ -923,6 +928,57 @@ export default function HomePage() {
         void loadReverseAddress(site.centroid_lat, site.centroid_lon);
       } catch {
         // ignore mesh detail fallback
+      }
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        setActivePanel("none");
+      }
+    },
+    [clearSelections, loadReverseAddress]
+  );
+
+  const handleSelectHeritageMesh = useCallback(
+    async (mesh: HistoricResidentialMeshCandidate) => {
+      clearSelections();
+      setSelectedHeritageMesh(mesh);
+      setSelectedMeshcode(mesh.meshcode);
+      setShowHazardMesh(true);
+      setFlyToTarget({
+        lat: mesh.centroid_lat,
+        lon: mesh.centroid_lon,
+        zoom: 15.8,
+        ts: Date.now(),
+      });
+      try {
+        const detail = await getMeshDetail(mesh.meshcode);
+        setSelectedMesh(detail);
+        void loadReverseAddress(mesh.centroid_lat, mesh.centroid_lon);
+      } catch {
+        // ignore mesh detail fallback
+      }
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        setActivePanel("none");
+      }
+    },
+    [clearSelections, loadReverseAddress]
+  );
+
+  const handleSelectHeritageBuilding = useCallback(
+    async (bldg: HistoricResidentialSampleBuilding) => {
+      clearSelections();
+      setShowBuildings(true);
+      setSelectedMeshcode(bldg.meshcode);
+      setFlyToTarget({
+        lat: bldg.centroid_lat,
+        lon: bldg.centroid_lon,
+        zoom: 17.2,
+        ts: Date.now(),
+      });
+      try {
+        const detail = await getBuildingDetail(bldg.building_id);
+        setSelectedBuilding(detail);
+        void loadReverseAddress(detail.centroid_lat, detail.centroid_lon);
+      } catch {
+        // ignore
       }
       if (typeof window !== "undefined" && window.innerWidth < 1024) {
         setActivePanel("none");
@@ -2056,7 +2112,15 @@ export default function HomePage() {
                       subLabel: `安全度 ${selectedBcpSite.safety_score}点 / ARV ${selectedBcpSite.arv.toFixed(2)}`,
                       tone: "emerald",
                     }
-                  : selectedOfficialShelter
+                  : selectedHeritageMesh
+                    ? {
+                        lat: selectedHeritageMesh.centroid_lat,
+                        lon: selectedHeritageMesh.centroid_lon,
+                        label: `重点対策${selectedHeritageMesh.rank}位(${selectedHeritageMesh.dominant_priority}): ${selectedHeritageMesh.ward_name}`,
+                        subLabel: `〜1950歴史 ${selectedHeritageMesh.historic_pre1950_count}棟 / 旧耐震住宅 ${selectedHeritageMesh.pre_1981_residential_count}棟`,
+                        tone: "amber",
+                      }
+                    : selectedOfficialShelter
                     ? {
                         lat: selectedOfficialShelter.lat,
                         lon: selectedOfficialShelter.lon,
@@ -2219,9 +2283,11 @@ export default function HomePage() {
                             ? "Gemini AI 状況分析"
                             : statsTab === "bcp" && profile.role === "enterprise"
                               ? "企業BCP・重要施設 安全立地候補"
-                              : statsTab === "shared_assets" && profile.role === "government"
-                                ? "政府連携共有・企業重要拠点"
-                                : "災害統計・建物リスク分析"}
+                              : statsTab === "heritage"
+                                ? "歴史的建物 × 住宅系 優先順位と解決策"
+                                : statsTab === "shared_assets" && profile.role === "government"
+                                  ? "政府連携共有・企業重要拠点"
+                                  : "災害統計・建物リスク分析"}
             </span>
             <button
               type="button"
@@ -2450,6 +2516,8 @@ export default function HomePage() {
                 statsTab={statsTab}
                 onChangeStatsTab={setStatsTab}
                 onSelectBcpSite={(site) => void handleSelectBcpSite(site)}
+                onSelectHeritageMesh={(m) => void handleSelectHeritageMesh(m)}
+                onSelectHeritageBuilding={(b) => void handleSelectHeritageBuilding(b)}
                 onSelectEnterpriseAsset={(asset) => {
                   setFlyToTarget({
                     lon: asset.lon,

@@ -767,6 +767,41 @@ export function SelectedFeatureCard({
             </div>
           )}
 
+          {selectedBuilding.priority_solution && (
+            <div
+              data-testid="building-heritage-solution-box"
+              className="space-y-1 rounded-xl border border-amber-500/45 bg-amber-950/25 p-2.5 text-[11px] text-amber-100"
+            >
+              <div className="flex items-center justify-between gap-1.5 font-bold">
+                <span>{selectedBuilding.priority_solution.title}</span>
+                <span className="shrink-0 rounded bg-slate-950 px-1.5 py-0.5 font-mono text-[10px] text-amber-300">
+                  {selectedBuilding.priority_solution.priority_tier}
+                </span>
+              </div>
+              <div className="text-[10px] text-amber-200/85">
+                区分: {selectedBuilding.priority_solution.category_tag}
+              </div>
+              <ul className="list-disc space-y-0.5 pl-4 text-[10px] text-slate-200">
+                {selectedBuilding.priority_solution.recommended_actions.map((act, idx) => (
+                  <li key={idx}>{act}</li>
+                ))}
+              </ul>
+              {selectedBuilding.priority_solution.primary_program && (
+                <a
+                  href={selectedBuilding.priority_solution.primary_program.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 pt-0.5 text-[10px] font-semibold text-emerald-300 underline hover:text-emerald-200"
+                >
+                  <span>
+                    活用可能制度: {selectedBuilding.priority_solution.primary_program.title}
+                  </span>
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                </a>
+              )}
+            </div>
+          )}
+
           <div className={userRole === "government" ? "grid grid-cols-2 gap-1.5" : "grid grid-cols-1 gap-1.5"}>
             <button
               type="button"
