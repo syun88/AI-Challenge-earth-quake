@@ -557,9 +557,13 @@ def auto_select_optimal_shelter(
             )
 
         r8 = selected.get("r8_seismic") or {}
-        if r8.get("listed_in_r8") and not r8.get("needs_retrofit"):
+        if r8.get("listed_in_r8") and r8.get("seismic_grade") in ("新耐震", "Ⅲ"):
             detection_reasons.append(
                 f"避難先施設はR8市有耐震リスト適合（区分: {r8.get('seismic_grade')}）を確認済み"
+            )
+        elif selected.get("is_wide_area"):
+            detection_reasons.append(
+                "屋外の広い避難スペース（公園・城郭等）を含む広域避難場所のため、建築物倒壊リスクが低い空間を確保可能"
             )
         if selected.get("rerouted"):
             detection_reasons.append(
