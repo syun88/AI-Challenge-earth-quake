@@ -8,6 +8,7 @@ import re
 import secrets
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +17,13 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.constants import WARD_CENTERS
+from app.firebase_backend import (
+    delete_firestore_doc,
+    fetch_firestore_collection,
+    get_firestore_sync_ttl_seconds,
+    is_firestore_persistence_enabled,
+    push_firestore_doc,
+)
 
 JST = timezone(timedelta(hours=9))
 DEFAULT_BOARD_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "board.db"
@@ -56,12 +64,101 @@ def _now_jst_iso() -> str:
 
 
 class DisasterBoardStore:
-    """Thread-safe SQLite store for disaster safety message board entries."""
+    """Thread-safe SQLite + optional Cloud Firestore write-through store for disaster safety message board entries."""
 
-    def __init__(self, db_path: Path | None = None) -> None:
+    def __init__(self, db_path: Path | None = None, *, use_firestore: bool | None = None) -> None:
         self.db_path = db_path or DEFAULT_BOARD_DB_PATH
+        self._use_firestore_override = use_firestore
         self._lock = threading.Lock()
         self._initialized = False
+        self._last_fs_sync = 0.0
+
+    def _use_firestore(self) -> bool:
+        if self._use_firestore_override is not None:
+            return self._use_firestore_override and is_firestore_persistence_enabled()
+        return self.db_path == DEFAULT_BOARD_DB_PATH and is_firestore_persistence_enabled()
+
+    @staticmethod
+    def _row_to_firestore_doc(row: sqlite3.Row) -> dict[str, Any]:
+        keys = row.keys()
+        return {
+            "id": str(row["id"]),
+            "phone": str(row["phone"]),
+            "name": str(row["name"]),
+            "status": str(row["status"]),
+            "ward_name": str(row["ward_name"]),
+            "meshcode": row["meshcode"],
+            "message": str(row["message"]),
+            "passcode_salt": row["passcode_salt"],
+            "passcode_hash": row["passcode_hash"],
+            "is_sample": int(row["is_sample"]),
+            "location_consent": int(row["location_consent"]) if "location_consent" in keys else 0,
+            "owner_uid": row["owner_uid"] if "owner_uid" in keys else None,
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]) if ("updated_at" in keys and row["updated_at"]) else str(row["created_at"]),
+        }
+
+    def _hydrate_firestore_conn(
+        self, conn: sqlite3.Connection, *, initial_migration: bool = False
+    ) -> None:
+        fs_docs = fetch_firestore_collection("server_board_entries")
+        if fs_docs is None:
+            return
+        if fs_docs:
+            fs_ids: list[str] = []
+            for doc in fs_docs:
+                bid = str(doc.get("id") or "").strip()
+                if not bid:
+                    continue
+                fs_ids.append(bid)
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO board_entries (
+                        id, phone, name, status, ward_name, meshcode, message,
+                        passcode_salt, passcode_hash, is_sample, location_consent, owner_uid,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+                    """,
+                    (
+                        bid,
+                        str(doc.get("phone") or ""),
+                        str(doc.get("name") or ""),
+                        str(doc.get("status") or "safe"),
+                        str(doc.get("ward_name") or "京都市全域"),
+                        doc.get("meshcode"),
+                        str(doc.get("message") or ""),
+                        doc.get("passcode_salt"),
+                        doc.get("passcode_hash"),
+                        1 if doc.get("location_consent") else 0,
+                        doc.get("owner_uid"),
+                        str(doc.get("created_at") or _now_jst_iso()),
+                        str(doc.get("updated_at") or _now_jst_iso()),
+                    ),
+                )
+            if fs_ids:
+                placeholders = ",".join("?" for _ in fs_ids)
+                conn.execute(
+                    f"DELETE FROM board_entries WHERE is_sample = 0 AND id NOT IN ({placeholders})",
+                    fs_ids,
+                )
+        elif initial_migration:
+            local_rows = conn.execute("SELECT * FROM board_entries WHERE is_sample = 0").fetchall()
+            for r in local_rows:
+                push_firestore_doc("server_board_entries", str(r["id"]), self._row_to_firestore_doc(r))
+        else:
+            conn.execute("DELETE FROM board_entries WHERE is_sample = 0")
+        self._last_fs_sync = time.monotonic()
+
+    def _sync_from_firestore_if_needed(self) -> None:
+        if not self._use_firestore():
+            return
+        if time.monotonic() - self._last_fs_sync < get_firestore_sync_ttl_seconds():
+            return
+        with self._lock, self._connect() as conn:
+            if time.monotonic() - self._last_fs_sync < get_firestore_sync_ttl_seconds():
+                return
+            self._hydrate_firestore_conn(conn, initial_migration=False)
+            conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -91,6 +188,7 @@ class DisasterBoardStore:
                         passcode_hash TEXT,
                         is_sample INTEGER NOT NULL DEFAULT 0,
                         location_consent INTEGER NOT NULL DEFAULT 0,
+                        owner_uid TEXT,
                         created_at TEXT NOT NULL,
                         updated_at TEXT
                     )
@@ -106,6 +204,11 @@ class DisasterBoardStore:
                     )
                 if "updated_at" not in existing_cols:
                     conn.execute("ALTER TABLE board_entries ADD COLUMN updated_at TEXT")
+                if "owner_uid" not in existing_cols:
+                    conn.execute("ALTER TABLE board_entries ADD COLUMN owner_uid TEXT")
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_board_owner ON board_entries (owner_uid)"
+                )
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_board_phone ON board_entries (phone)"
                 )
@@ -167,28 +270,47 @@ class DisasterBoardStore:
                         """,
                         samples,
                     )
+                if self._use_firestore():
+                    self._hydrate_firestore_conn(conn, initial_migration=True)
                 conn.commit()
             self._initialized = True
 
     @staticmethod
-    def _serialize_row(row: sqlite3.Row, reveal_exact_phone: bool = False) -> dict[str, Any]:
+    def _serialize_row(
+        row: sqlite3.Row,
+        reveal_exact_phone: bool = False,
+        *,
+        viewer_role: str = "government",
+        viewer_uid: str | None = None,
+        allow_message_detail: bool = True,
+    ) -> dict[str, Any]:
         status = str(row["status"])
         phone = str(row["phone"])
         keys = row.keys()
         updated_at = row["updated_at"] if "updated_at" in keys and row["updated_at"] else row["created_at"]
         location_consent = bool(row["location_consent"]) if "location_consent" in keys else bool(row["meshcode"])
+        owner_uid = str(row["owner_uid"]) if ("owner_uid" in keys and row["owner_uid"]) else None
+        is_sample = bool(row["is_sample"])
+        is_mine = bool(viewer_uid and owner_uid and owner_uid == viewer_uid)
+        can_read_detail = viewer_role == "government" or is_mine or is_sample or allow_message_detail
+
         return {
             "id": str(row["id"]),
             "phone_masked": phone if reveal_exact_phone else mask_phone(phone),
-            "name": str(row["name"]),
+            "name": str(row["name"]) if can_read_detail else "登録者（非公開）",
             "status": status,
             "status_label": BOARD_STATUS_LABELS.get(status, status),
             "ward_name": str(row["ward_name"]),
             "meshcode": str(row["meshcode"]) if row["meshcode"] else None,
             "location_consent": location_consent,
-            "message": str(row["message"]),
+            "message": (
+                str(row["message"])
+                if can_read_detail
+                else "※安否メッセージ本文は登録者本人・電話番号照会・政府関連機関のみ閲覧できます。"
+            ),
             "has_passcode": bool(row["passcode_hash"]),
-            "is_sample": bool(row["is_sample"]),
+            "is_sample": is_sample,
+            "is_mine": is_mine,
             "created_at": str(row["created_at"]),
             "updated_at": str(updated_at),
         }
@@ -203,9 +325,12 @@ class DisasterBoardStore:
         include_samples: bool = True,
         ids: list[str] | None = None,
         limit: int = 50,
+        viewer_role: str = "government",
+        viewer_uid: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Query disaster message board entries with optional phone, keyword, ward, mesh, status, or ID filters."""
+        """Query disaster message board entries with optional filters and privacy protection."""
         self.ensure_initialized()
+        self._sync_from_firestore_if_needed()
         clauses: list[str] = []
         params: list[Any] = []
         exact_phone_lookup = False
@@ -228,11 +353,20 @@ class DisasterBoardStore:
         if q and q.strip():
             kw = q.strip()
             norm_kw = normalize_phone(kw)
-            if norm_kw and norm_kw.isdigit() and len(norm_kw) >= 4:
-                clauses.append("(name LIKE ? OR message LIKE ? OR ward_name LIKE ? OR phone LIKE ?)")
-                params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%", f"%{norm_kw}%"])
+            if viewer_role == "government":
+                if norm_kw and norm_kw.isdigit() and len(norm_kw) >= 4:
+                    clauses.append("(name LIKE ? OR message LIKE ? OR ward_name LIKE ? OR phone LIKE ?)")
+                    params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%", f"%{norm_kw}%"])
+                else:
+                    clauses.append("(name LIKE ? OR message LIKE ? OR ward_name LIKE ?)")
+                    params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%"])
+            elif viewer_uid:
+                clauses.append(
+                    "(ward_name LIKE ? OR is_sample = 1 AND (name LIKE ? OR message LIKE ?) OR (owner_uid = ? AND (name LIKE ? OR message LIKE ?)))"
+                )
+                params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%", viewer_uid, f"%{kw}%", f"%{kw}%"])
             else:
-                clauses.append("(name LIKE ? OR message LIKE ? OR ward_name LIKE ?)")
+                clauses.append("(ward_name LIKE ? OR (is_sample = 1 AND (name LIKE ? OR message LIKE ?)))")
                 params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%"])
 
         if ward and ward != "all":
@@ -247,6 +381,7 @@ class DisasterBoardStore:
             clauses.append("status = ?")
             params.append(status)
 
+        id_lookup = False
         if ids:
             clean_ids = [i.strip() for i in ids if i and i.strip()][:50]
             if not clean_ids:
@@ -254,10 +389,18 @@ class DisasterBoardStore:
             placeholders = ",".join("?" for _ in clean_ids)
             clauses.append(f"id IN ({placeholders})")
             params.extend(clean_ids)
+            id_lookup = True
+
+        if viewer_role != "government" and not exact_phone_lookup:
+            if viewer_uid:
+                clauses.append("(is_sample = 1 OR owner_uid = ?)")
+                params.append(viewer_uid)
+            else:
+                clauses.append("is_sample = 1")
 
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"""
-            SELECT id, phone, name, status, ward_name, meshcode, message, passcode_hash, is_sample, location_consent, created_at, updated_at
+            SELECT id, phone, name, status, ward_name, meshcode, message, passcode_hash, is_sample, location_consent, owner_uid, created_at, updated_at
             FROM board_entries
             {where_sql}
             ORDER BY created_at DESC
@@ -267,7 +410,17 @@ class DisasterBoardStore:
 
         with self._lock, self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [self._serialize_row(r, reveal_exact_phone=exact_phone_lookup) for r in rows]
+        allow_detail = viewer_role == "government" or exact_phone_lookup or id_lookup
+        return [
+            self._serialize_row(
+                r,
+                reveal_exact_phone=exact_phone_lookup,
+                viewer_role=viewer_role,
+                viewer_uid=viewer_uid,
+                allow_message_detail=allow_detail,
+            )
+            for r in rows
+        ]
 
     def create_entry(
         self,
@@ -279,6 +432,7 @@ class DisasterBoardStore:
         meshcode: str | None = None,
         passcode: str | None = None,
         location_consent: bool | None = None,
+        owner_uid: str | None = None,
     ) -> dict[str, Any]:
         """Validate and store a new disaster safety registration without storing personal GPS coordinates."""
         self.ensure_initialized()
@@ -324,6 +478,7 @@ class DisasterBoardStore:
 
         salt = secrets.token_hex(8) if clean_pass else None
         p_hash = _hash_passcode(clean_pass, salt) if (clean_pass and salt) else None
+        clean_owner_uid = owner_uid.strip()[:128] if owner_uid and owner_uid.strip() else None
         entry_id = uuid.uuid4().hex[:12]
         created_at = _now_jst_iso()
 
@@ -331,8 +486,8 @@ class DisasterBoardStore:
             conn.execute(
                 """
                 INSERT INTO board_entries
-                (id, phone, name, status, ward_name, meshcode, message, passcode_salt, passcode_hash, is_sample, location_consent, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                (id, phone, name, status, ward_name, meshcode, message, passcode_salt, passcode_hash, is_sample, location_consent, owner_uid, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
                 """,
                 (
                     entry_id,
@@ -345,18 +500,60 @@ class DisasterBoardStore:
                     salt,
                     p_hash,
                     consent_flag,
+                    clean_owner_uid,
                     created_at,
                     created_at,
                 ),
             )
             conn.commit()
             row = conn.execute(
-                "SELECT id, phone, name, status, ward_name, meshcode, message, passcode_hash, is_sample, location_consent, created_at, updated_at FROM board_entries WHERE id = ?",
+                "SELECT * FROM board_entries WHERE id = ?",
                 (entry_id,),
             ).fetchone()
 
         assert row is not None
-        return self._serialize_row(row, reveal_exact_phone=False)
+        if self._use_firestore():
+            push_firestore_doc("server_board_entries", entry_id, self._row_to_firestore_doc(row))
+            self._last_fs_sync = time.monotonic()
+        return self._serialize_row(
+            row,
+            reveal_exact_phone=False,
+            viewer_role="government" if not clean_owner_uid else "citizen",
+            viewer_uid=clean_owner_uid,
+            allow_message_detail=True,
+        )
+
+    @staticmethod
+    def _verify_board_mutation(
+        row: sqlite3.Row,
+        passcode: str | None,
+        *,
+        actor_uid: str | None = None,
+        actor_role: str = "citizen",
+    ) -> None:
+        if int(row["is_sample"]) == 1:
+            raise HTTPException(
+                status_code=403,
+                detail="訓練サンプルデータは編集・削除できません。",
+            )
+        if actor_role == "government":
+            return
+        keys = row.keys()
+        owner_uid = str(row["owner_uid"]) if ("owner_uid" in keys and row["owner_uid"]) else None
+        if owner_uid and (not actor_uid or owner_uid != actor_uid):
+            raise HTTPException(
+                status_code=403,
+                detail="他者が登録した安否情報を編集・削除することはできません。",
+            )
+        stored_hash = row["passcode_hash"]
+        stored_salt = row["passcode_salt"]
+        if stored_hash and stored_salt:
+            candidate = _hash_passcode((passcode or "").strip(), str(stored_salt))
+            if not hmac.compare_digest(candidate, str(stored_hash)):
+                raise HTTPException(
+                    status_code=403,
+                    detail="編集・削除用暗証番号が一致しません。",
+                )
 
     def update_entry(
         self,
@@ -367,8 +564,10 @@ class DisasterBoardStore:
         ward_name: str | None = None,
         meshcode: str | None = None,
         location_consent: bool | None = None,
+        actor_uid: str | None = None,
+        actor_role: str = "citizen",
     ) -> dict[str, Any]:
-        """Update an existing user-registered safety entry after verifying its passcode."""
+        """Update an existing user-registered safety entry after verifying owner/passcode."""
         self.ensure_initialized()
         clean_id = entry_id.strip()
         if not clean_id:
@@ -381,20 +580,7 @@ class DisasterBoardStore:
             ).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="指定された伝言が見つかりません。")
-            if int(row["is_sample"]) == 1:
-                raise HTTPException(
-                    status_code=403,
-                    detail="訓練サンプルデータは編集できません。",
-                )
-            stored_hash = row["passcode_hash"]
-            stored_salt = row["passcode_salt"]
-            if stored_hash and stored_salt:
-                candidate = _hash_passcode((passcode or "").strip(), str(stored_salt))
-                if not hmac.compare_digest(candidate, str(stored_hash)):
-                    raise HTTPException(
-                        status_code=403,
-                        detail="編集・削除用暗証番号が一致しません。",
-                    )
+            self._verify_board_mutation(row, passcode, actor_uid=actor_uid, actor_role=actor_role)
 
             next_status = str(row["status"])
             if status is not None:
@@ -438,15 +624,31 @@ class DisasterBoardStore:
             )
             conn.commit()
             updated_row = conn.execute(
-                "SELECT id, phone, name, status, ward_name, meshcode, message, passcode_hash, is_sample, location_consent, created_at, updated_at FROM board_entries WHERE id = ?",
+                "SELECT * FROM board_entries WHERE id = ?",
                 (clean_id,),
             ).fetchone()
 
         assert updated_row is not None
-        return self._serialize_row(updated_row, reveal_exact_phone=False)
+        if self._use_firestore():
+            push_firestore_doc("server_board_entries", clean_id, self._row_to_firestore_doc(updated_row))
+            self._last_fs_sync = time.monotonic()
+        return self._serialize_row(
+            updated_row,
+            reveal_exact_phone=False,
+            viewer_role=actor_role,
+            viewer_uid=actor_uid,
+            allow_message_detail=True,
+        )
 
-    def delete_entry(self, entry_id: str, passcode: str | None = None) -> dict[str, Any]:
-        """Delete a user-registered entry after verifying its passcode."""
+    def delete_entry(
+        self,
+        entry_id: str,
+        passcode: str | None = None,
+        *,
+        actor_uid: str | None = None,
+        actor_role: str = "citizen",
+    ) -> dict[str, Any]:
+        """Delete a user-registered entry after verifying owner/passcode."""
         self.ensure_initialized()
         clean_id = entry_id.strip()
         if not clean_id:
@@ -454,27 +656,17 @@ class DisasterBoardStore:
 
         with self._lock, self._connect() as conn:
             row = conn.execute(
-                "SELECT id, passcode_salt, passcode_hash, is_sample FROM board_entries WHERE id = ?",
+                "SELECT id, passcode_salt, passcode_hash, is_sample, owner_uid FROM board_entries WHERE id = ?",
                 (clean_id,),
             ).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="指定された伝言が見つかりません。")
-            if int(row["is_sample"]) == 1:
-                raise HTTPException(
-                    status_code=403,
-                    detail="訓練サンプルデータは削除できません。",
-                )
-            stored_hash = row["passcode_hash"]
-            stored_salt = row["passcode_salt"]
-            if stored_hash and stored_salt:
-                candidate = _hash_passcode((passcode or "").strip(), str(stored_salt))
-                if not hmac.compare_digest(candidate, str(stored_hash)):
-                    raise HTTPException(
-                        status_code=403,
-                        detail="削除用暗証番号が一致しません。",
-                    )
+            self._verify_board_mutation(row, passcode, actor_uid=actor_uid, actor_role=actor_role)
             conn.execute("DELETE FROM board_entries WHERE id = ?", (clean_id,))
             conn.commit()
+        if self._use_firestore():
+            delete_firestore_doc("server_board_entries", clean_id)
+            self._last_fs_sync = time.monotonic()
 
         return {"deleted": True, "id": clean_id}
 
@@ -486,6 +678,7 @@ class DisasterBoardStore:
     ) -> dict[str, Any]:
         """Aggregate safety status counts by ward and 250m mesh without exposing personal coordinates."""
         self.ensure_initialized()
+        self._sync_from_firestore_if_needed()
         clauses: list[str] = []
         params: list[Any] = []
         if not include_samples:

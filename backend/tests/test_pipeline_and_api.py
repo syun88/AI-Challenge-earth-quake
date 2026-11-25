@@ -15,9 +15,42 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
 from app.constants import classify_age_category, classify_hazard_tier  # noqa: E402
+from app.auth import AuthProfileStore  # noqa: E402
 from app.data_store import QuakeLensDataStore  # noqa: E402
 from app.main import app, store  # noqa: E402
 from scripts.fetch_and_build import latlon_to_mesh250, parse_citygml_bytes  # noqa: E402
+
+
+def _setup_test_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    role: str = "government",
+) -> dict[str, str]:
+    auth_db = tmp_path / "test_auth.db"
+    a_store = AuthProfileStore(db_path=auth_db)
+    a_store.ensure_initialized()
+    monkeypatch.setenv("GOV_REGISTRATION_CODE", "test-gov-secret")
+    monkeypatch.setattr("app.auth.auth_profile_store", a_store)
+    monkeypatch.setattr("app.main.auth_profile_store", a_store)
+    a_store.register_or_update_profile(
+        uid=f"{role}-test-uid",
+        email=f"{role}@example.jp",
+        display_name="テスト利用者",
+        role=role,
+        organization_name="テスト機関" if role in {"government", "enterprise"} else "",
+        gov_code="test-gov-secret" if role == "government" else "",
+    )
+
+    def _fake_verify(token: str) -> dict[str, object]:
+        if token == f"tok-{role}":
+            return {"sub": f"{role}-test-uid", "email": f"{role}@example.jp", "email_verified": True}
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=401, detail="invalid test token")
+
+    monkeypatch.setattr("app.auth.verify_firebase_id_token", _fake_verify)
+    return {"Authorization": f"Bearer tok-{role}"}
 
 
 def test_age_and_hazard_classification() -> None:
@@ -232,14 +265,19 @@ def synthetic_store(tmp_path: Path) -> QuakeLensDataStore:
     return s
 
 
-def test_api_endpoints_with_store(synthetic_store: QuakeLensDataStore, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_api_endpoints_with_store(
+    synthetic_store: QuakeLensDataStore,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     from app.security import ai_guard
 
     ai_guard.reset()
     monkeypatch.setattr("app.main.store", synthetic_store)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("AI_ACCESS_CODE", raising=False)
-    client = TestClient(app)
+    auth_headers = _setup_test_auth(tmp_path, monkeypatch, role="government")
+    client = TestClient(app, headers=auth_headers)
 
     root_resp = client.get("/")
     assert root_resp.status_code == 200
@@ -392,12 +430,15 @@ def test_real_processed_data_consistency_and_ai_tools() -> None:
 
 
 def test_public_ai_security_and_cost_protection(
-    synthetic_store: QuakeLensDataStore, monkeypatch: pytest.MonkeyPatch
+    synthetic_store: QuakeLensDataStore,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     from app.security import ai_guard, redact_secrets, sanitize_chat_context
 
     ai_guard.reset()
     monkeypatch.setattr("app.main.store", synthetic_store)
+    auth_headers = _setup_test_auth(tmp_path, monkeypatch, role="government")
     monkeypatch.setenv("GEMINI_API_KEY", "AIzaFakeServerKeyForGuardTest123456")
     monkeypatch.setenv("AI_PUBLIC_SERVER_KEY_ENABLED", "true")
     monkeypatch.setenv("AI_ALLOW_PREMIUM_MODELS", "false")
@@ -417,7 +458,7 @@ def test_public_ai_security_and_cost_protection(
             "model": kw.get("model") or "gemini-3.5-flash-lite",
         },
     )
-    client = TestClient(app)
+    client = TestClient(app, headers=auth_headers)
 
     # Health exposes protection policy without leaking secrets
     health = client.get("/api/health").json()
@@ -480,7 +521,7 @@ def test_public_ai_security_and_cost_protection(
 
 
 def test_streaming_never_reports_done_when_incomplete(
-    synthetic_store: QuakeLensDataStore, monkeypatch: pytest.MonkeyPatch
+    synthetic_store: QuakeLensDataStore, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from types import SimpleNamespace
     from app.ai_assistant import stream_quakelens_ai
@@ -560,11 +601,12 @@ def test_streaming_never_reports_done_when_incomplete(
 
     # Case 4: HTTP /api/chat/stream guard if worker ends without terminal event -> appends error
     monkeypatch.setattr("app.main.store", synthetic_store)
+    auth_headers = _setup_test_auth(tmp_path, monkeypatch, role="government")
     monkeypatch.setattr(
         "app.main.stream_quakelens_ai",
         lambda **kw: iter([{"type": "text_delta", "delta": "断片のみ"}]),
     )
-    client = TestClient(app)
+    client = TestClient(app, headers=auth_headers)
     with client.stream("POST", "/api/chat/stream", json={"message": "hello"}) as resp:
         assert resp.status_code == 200
         events = [
@@ -739,8 +781,9 @@ def test_disaster_board_crud_and_passcode(tmp_path: Path, monkeypatch: pytest.Mo
 
     isolated_board = DisasterBoardStore(db_path=tmp_path / "test_board.db")
     monkeypatch.setattr(main_mod, "board_store", isolated_board)
+    auth_headers = _setup_test_auth(tmp_path, monkeypatch, role="citizen")
 
-    client = TestClient(app)
+    client = TestClient(app, headers=auth_headers)
 
     # Initial seeded drill sample entries exist
     r0 = client.get("/api/board")

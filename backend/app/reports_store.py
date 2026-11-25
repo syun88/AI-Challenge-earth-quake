@@ -10,6 +10,7 @@ import re
 import secrets
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,6 +25,13 @@ from app.constants import (
     VERIFICATION_STATUS_LABELS,
     WARD_CENTERS,
 )
+from app.firebase_backend import (
+    delete_firestore_doc,
+    fetch_firestore_collection,
+    get_firestore_sync_ttl_seconds,
+    is_firestore_persistence_enabled,
+    push_firestore_doc,
+)
 
 JST = timezone(timedelta(hours=9))
 DEFAULT_REPORTS_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "board.db"
@@ -31,6 +39,19 @@ DEFAULT_REPORTS_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "boa
 KYOTO_LAT_MIN, KYOTO_LAT_MAX = 34.78, 35.33
 KYOTO_LON_MIN, KYOTO_LON_MAX = 135.42, 135.95
 RE_MESHCODE = re.compile(r"^\d{10}$")
+PUBLIC_COMMON_REPORT_CATEGORIES: frozenset[str] = frozenset({
+    "building_damage",
+    "road_blocked",
+    "shelter_status",
+})
+GOVERNMENT_ONLY_REPORT_CATEGORIES: frozenset[str] = frozenset({
+    "rescue_support",
+    "other_disaster",
+})
+REDACTED_DESCRIPTION_NOTICE = (
+    "【共通災害情報】安全確保のため被害建物・通行止め道路・避難所の状況のみ共有されています"
+    "（通報内容の本文および通報者情報は政府関連機関のみ閲覧可能です）。"
+)
 
 
 def _now_jst_iso() -> str:
@@ -69,12 +90,124 @@ def text_similarity(a: str, b: str) -> float:
 
 
 class DamageReportStore:
-    """Thread-safe SQLite store for citizen/sample disaster and damage reports."""
+    """Thread-safe SQLite + optional Cloud Firestore write-through store for disaster and damage reports."""
 
-    def __init__(self, db_path: Path | None = None) -> None:
+    def __init__(self, db_path: Path | None = None, *, use_firestore: bool | None = None) -> None:
         self.db_path = db_path or DEFAULT_REPORTS_DB_PATH
+        self._use_firestore_override = use_firestore
         self._lock = threading.Lock()
         self._initialized = False
+        self._last_fs_sync = 0.0
+
+    def _use_firestore(self) -> bool:
+        if self._use_firestore_override is not None:
+            return self._use_firestore_override and is_firestore_persistence_enabled()
+        return self.db_path == DEFAULT_REPORTS_DB_PATH and is_firestore_persistence_enabled()
+
+    @staticmethod
+    def _row_to_firestore_doc(row: sqlite3.Row) -> dict[str, Any]:
+        keys = row.keys()
+        return {
+            "id": str(row["id"]),
+            "category": str(row["category"]),
+            "severity": str(row["severity"]),
+            "verification_status": str(row["verification_status"]),
+            "title": str(row["title"]),
+            "description": str(row["description"]),
+            "ward_name": str(row["ward_name"]),
+            "meshcode": row["meshcode"],
+            "building_id": row["building_id"] if "building_id" in keys else None,
+            "blocked_edge_ids_json": row["blocked_edge_ids_json"] if "blocked_edge_ids_json" in keys else None,
+            "location_label": row["location_label"],
+            "lat": float(row["lat"]) if row["lat"] is not None else None,
+            "lon": float(row["lon"]) if row["lon"] is not None else None,
+            "location_consent": int(row["location_consent"]),
+            "reporter_alias": str(row["reporter_alias"]),
+            "corroborations": int(row["corroborations"]),
+            "is_sample": int(row["is_sample"]),
+            "resolved": int(row["resolved"]),
+            "passcode_salt": row["passcode_salt"],
+            "passcode_hash": row["passcode_hash"],
+            "owner_uid": row["owner_uid"] if "owner_uid" in keys else None,
+            "owner_role": str(row["owner_role"]) if ("owner_role" in keys and row["owner_role"]) else "citizen",
+            "reported_at": str(row["reported_at"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
+
+    def _hydrate_firestore_conn(
+        self, conn: sqlite3.Connection, *, initial_migration: bool = False
+    ) -> None:
+        fs_docs = fetch_firestore_collection("server_damage_reports")
+        if fs_docs is None:
+            return
+        if fs_docs:
+            fs_ids: list[str] = []
+            for doc in fs_docs:
+                rid = str(doc.get("id") or "").strip()
+                if not rid:
+                    continue
+                fs_ids.append(rid)
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO damage_reports (
+                        id, category, severity, verification_status, title, description,
+                        ward_name, meshcode, building_id, blocked_edge_ids_json, location_label,
+                        lat, lon, location_consent, reporter_alias, corroborations, is_sample, resolved,
+                        passcode_salt, passcode_hash, owner_uid, owner_role, reported_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        rid,
+                        str(doc.get("category") or "other_disaster"),
+                        str(doc.get("severity") or "moderate"),
+                        str(doc.get("verification_status") or "unverified"),
+                        str(doc.get("title") or ""),
+                        str(doc.get("description") or ""),
+                        str(doc.get("ward_name") or "京都市全域"),
+                        doc.get("meshcode"),
+                        doc.get("building_id"),
+                        doc.get("blocked_edge_ids_json"),
+                        doc.get("location_label"),
+                        float(doc["lat"]) if doc.get("lat") is not None else None,
+                        float(doc["lon"]) if doc.get("lon") is not None else None,
+                        1 if doc.get("location_consent") else 0,
+                        str(doc.get("reporter_alias") or "匿名市民"),
+                        int(doc.get("corroborations") or 1),
+                        1 if doc.get("resolved") else 0,
+                        doc.get("passcode_salt"),
+                        doc.get("passcode_hash"),
+                        doc.get("owner_uid"),
+                        str(doc.get("owner_role") or "citizen"),
+                        str(doc.get("reported_at") or _now_jst_iso()),
+                        str(doc.get("created_at") or _now_jst_iso()),
+                        str(doc.get("updated_at") or _now_jst_iso()),
+                    ),
+                )
+            if fs_ids:
+                placeholders = ",".join("?" for _ in fs_ids)
+                conn.execute(
+                    f"DELETE FROM damage_reports WHERE is_sample = 0 AND id NOT IN ({placeholders})",
+                    fs_ids,
+                )
+        elif initial_migration:
+            local_rows = conn.execute("SELECT * FROM damage_reports WHERE is_sample = 0").fetchall()
+            for r in local_rows:
+                push_firestore_doc("server_damage_reports", str(r["id"]), self._row_to_firestore_doc(r))
+        else:
+            conn.execute("DELETE FROM damage_reports WHERE is_sample = 0")
+        self._last_fs_sync = time.monotonic()
+
+    def _sync_from_firestore_if_needed(self) -> None:
+        if not self._use_firestore():
+            return
+        if time.monotonic() - self._last_fs_sync < get_firestore_sync_ttl_seconds():
+            return
+        with self._lock, self._connect() as conn:
+            if time.monotonic() - self._last_fs_sync < get_firestore_sync_ttl_seconds():
+                return
+            self._hydrate_firestore_conn(conn)
+            conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,6 +245,8 @@ class DamageReportStore:
                         resolved INTEGER NOT NULL DEFAULT 0,
                         passcode_salt TEXT,
                         passcode_hash TEXT,
+                        owner_uid TEXT,
+                        owner_role TEXT NOT NULL DEFAULT 'citizen',
                         reported_at TEXT NOT NULL,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
@@ -126,6 +261,13 @@ class DamageReportStore:
                     conn.execute("ALTER TABLE damage_reports ADD COLUMN building_id TEXT")
                 if "blocked_edge_ids_json" not in existing_cols:
                     conn.execute("ALTER TABLE damage_reports ADD COLUMN blocked_edge_ids_json TEXT")
+                if "owner_uid" not in existing_cols:
+                    conn.execute("ALTER TABLE damage_reports ADD COLUMN owner_uid TEXT")
+                if "owner_role" not in existing_cols:
+                    conn.execute("ALTER TABLE damage_reports ADD COLUMN owner_role TEXT NOT NULL DEFAULT 'citizen'")
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_reports_owner ON damage_reports (owner_uid)"
+                )
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_reports_ward ON damage_reports (ward_name)"
                 )
@@ -277,16 +419,46 @@ class DamageReportStore:
                         """,
                         samples,
                     )
+                if self._use_firestore():
+                    self._hydrate_firestore_conn(conn, initial_migration=True)
                 conn.commit()
             self._initialized = True
 
     @staticmethod
-    def _serialize_row(row: sqlite3.Row) -> dict[str, Any]:
+    def _is_visible_to_viewer(
+        row: sqlite3.Row,
+        *,
+        viewer_role: str = "government",
+        viewer_uid: str | None = None,
+    ) -> bool:
+        if viewer_role == "government":
+            return True
+        if int(row["is_sample"]) == 1:
+            return True
+        keys = row.keys()
+        owner_uid = str(row["owner_uid"]) if ("owner_uid" in keys and row["owner_uid"]) else None
+        if viewer_uid and owner_uid and owner_uid == viewer_uid:
+            return True
+        return str(row["category"]) in PUBLIC_COMMON_REPORT_CATEGORIES
+
+    @staticmethod
+    def _serialize_row(
+        row: sqlite3.Row,
+        *,
+        viewer_role: str = "government",
+        viewer_uid: str | None = None,
+    ) -> dict[str, Any]:
         cat = str(row["category"])
         sev = str(row["severity"])
         ver = str(row["verification_status"])
         keys = row.keys()
         building_id = str(row["building_id"]) if ("building_id" in keys and row["building_id"]) else None
+        owner_uid = str(row["owner_uid"]) if ("owner_uid" in keys and row["owner_uid"]) else None
+        owner_role = str(row["owner_role"]) if ("owner_role" in keys and row["owner_role"]) else "citizen"
+        is_sample = bool(row["is_sample"])
+        is_mine = bool(viewer_uid and owner_uid and owner_uid == viewer_uid)
+        can_view_details = viewer_role == "government" or is_mine or is_sample
+
         blocked_edge_ids: list[int] | None = None
         raw_edges = row["blocked_edge_ids_json"] if "blocked_edge_ids_json" in keys else None
         if raw_edges:
@@ -298,6 +470,9 @@ class DamageReportStore:
                     ]
             except Exception:
                 blocked_edge_ids = None
+
+        raw_desc = str(row["description"])
+        raw_alias = str(row["reporter_alias"])
         return {
             "id": str(row["id"]),
             "category": cat,
@@ -307,7 +482,7 @@ class DamageReportStore:
             "verification_status": ver,
             "verification_label": VERIFICATION_STATUS_LABELS.get(ver, ver),
             "title": str(row["title"]),
-            "description": str(row["description"]),
+            "description": raw_desc if can_view_details else REDACTED_DESCRIPTION_NOTICE,
             "ward_name": str(row["ward_name"]),
             "meshcode": str(row["meshcode"]) if row["meshcode"] else None,
             "building_id": building_id,
@@ -316,9 +491,12 @@ class DamageReportStore:
             "lat": float(row["lat"]) if row["lat"] is not None else None,
             "lon": float(row["lon"]) if row["lon"] is not None else None,
             "location_consent": bool(row["location_consent"]),
-            "reporter_alias": str(row["reporter_alias"]),
+            "reporter_alias": raw_alias if can_view_details else "非公開",
             "corroborations": int(row["corroborations"]),
-            "is_sample": bool(row["is_sample"]),
+            "is_sample": is_sample,
+            "is_mine": is_mine,
+            "details_redacted": not can_view_details,
+            "owner_role": owner_role if can_view_details else None,
             "resolved": bool(row["resolved"]),
             "has_passcode": bool(row["passcode_hash"]),
             "reported_at": str(row["reported_at"]),
@@ -337,9 +515,13 @@ class DamageReportStore:
         include_samples: bool = True,
         include_resolved: bool = True,
         limit: int = 100,
+        viewer_role: str = "government",
+        viewer_uid: str | None = None,
+        only_mine: bool = False,
     ) -> list[dict[str, Any]]:
-        """List disaster/damage reports with filters."""
+        """List disaster/damage reports with filters and strict role-based visibility."""
         self.ensure_initialized()
+        self._sync_from_firestore_if_needed()
         clauses: list[str] = []
         params: list[Any] = []
 
@@ -362,10 +544,31 @@ class DamageReportStore:
         if meshcode and meshcode.strip():
             clauses.append("meshcode = ?")
             params.append(meshcode.strip())
+        if only_mine:
+            if not viewer_uid:
+                return []
+            clauses.append("owner_uid = ?")
+            params.append(viewer_uid)
+        elif viewer_role != "government":
+            public_cats = ", ".join(f"'{c}'" for c in sorted(PUBLIC_COMMON_REPORT_CATEGORIES))
+            if viewer_uid:
+                clauses.append(f"(is_sample = 1 OR owner_uid = ? OR category IN ({public_cats}))")
+                params.append(viewer_uid)
+            else:
+                clauses.append(f"(is_sample = 1 OR category IN ({public_cats}))")
         if q and q.strip():
             kw = f"%{q.strip()}%"
-            clauses.append("(title LIKE ? OR description LIKE ? OR ward_name LIKE ? OR location_label LIKE ?)")
-            params.extend([kw, kw, kw, kw])
+            if viewer_role == "government":
+                clauses.append("(title LIKE ? OR description LIKE ? OR ward_name LIKE ? OR location_label LIKE ?)")
+                params.extend([kw, kw, kw, kw])
+            elif viewer_uid:
+                clauses.append(
+                    "(title LIKE ? OR ward_name LIKE ? OR location_label LIKE ? OR (owner_uid = ? AND description LIKE ?))"
+                )
+                params.extend([kw, kw, kw, viewer_uid, kw])
+            else:
+                clauses.append("(title LIKE ? OR ward_name LIKE ? OR location_label LIKE ?)")
+                params.extend([kw, kw, kw])
 
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"""
@@ -378,7 +581,10 @@ class DamageReportStore:
 
         with self._lock, self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [self._serialize_row(r) for r in rows]
+        return [
+            self._serialize_row(r, viewer_role=viewer_role, viewer_uid=viewer_uid)
+            for r in rows
+        ]
 
     def find_similar_reports(
         self,
@@ -391,11 +597,21 @@ class DamageReportStore:
         lat: float | None = None,
         lon: float | None = None,
         include_samples: bool = False,
+        viewer_role: str = "government",
+        viewer_uid: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Detect potentially duplicate or co-located unresolved reports within the same ward & category."""
+        """Detect potentially duplicate or co-located unresolved reports within viewer visibility."""
         self.ensure_initialized()
-        clauses = ["ward_name = ?", "category = ?", "resolved = 0"]
-        params: list[Any] = [ward_name, category]
+        if viewer_role != "government" and category not in PUBLIC_COMMON_REPORT_CATEGORIES:
+            # Never expose private rescue/other reports from other citizens during duplicate check
+            if not viewer_uid:
+                return []
+            clauses = ["ward_name = ?", "category = ?", "resolved = 0", "owner_uid = ?"]
+            params: list[Any] = [ward_name, category, viewer_uid]
+        else:
+            clauses = ["ward_name = ?", "category = ?", "resolved = 0"]
+            params = [ward_name, category]
+
         if not include_samples:
             clauses.append("is_sample = 0")
 
@@ -420,7 +636,7 @@ class DamageReportStore:
                 if sim >= 0.35:
                     reasons.append("類似内容")
             if reasons:
-                serialized = self._serialize_row(r)
+                serialized = self._serialize_row(r, viewer_role=viewer_role, viewer_uid=viewer_uid)
                 serialized["duplicate_reasons"] = reasons
                 matches.append(serialized)
         return matches[:5]
@@ -485,8 +701,11 @@ class DamageReportStore:
         passcode: str | None = None,
         reported_at: str | None = None,
         force_duplicate: bool = False,
+        owner_uid: str | None = None,
+        owner_role: str = "citizen",
+        requested_verification_status: str | None = None,
     ) -> dict[str, Any]:
-        """Validate and persist a new user disaster report (strictly tagged 'unverified')."""
+        """Validate and persist a new disaster report (non-government submissions strictly forced to 'unverified')."""
         self.ensure_initialized()
         if category not in REPORT_CATEGORY_LABELS:
             raise HTTPException(status_code=400, detail=f"不正な被害カテゴリです: {category}")
@@ -521,7 +740,20 @@ class DamageReportStore:
                 unique_edges = unique_edges[:400]
             if unique_edges:
                 clean_edge_json = json.dumps(unique_edges)
-        clean_alias = (reporter_alias or "匿名市民").strip()[:32] or "匿名市民"
+        default_alias = (
+            "政府関連機関"
+            if owner_role == "government"
+            else "企業担当者"
+            if owner_role == "enterprise"
+            else "匿名市民"
+        )
+        clean_alias = (reporter_alias or default_alias).strip()[:32] or default_alias
+
+        clean_owner_uid = owner_uid.strip()[:128] if owner_uid and owner_uid.strip() else None
+        clean_owner_role = owner_role if owner_role in {"government", "citizen", "enterprise"} else "citizen"
+        eff_ver_status = "unverified"
+        if clean_owner_role == "government" and requested_verification_status in {"unverified", "verified", "official"}:
+            eff_ver_status = requested_verification_status
 
         clean_pass = (passcode or "").strip()
         if clean_pass and len(clean_pass) > 32:
@@ -551,6 +783,8 @@ class DamageReportStore:
                 lat=clean_lat,
                 lon=clean_lon,
                 include_samples=False,
+                viewer_role=clean_owner_role,
+                viewer_uid=clean_owner_uid,
             )
 
         report_id = f"rep-{uuid.uuid4().hex[:10]}"
@@ -561,13 +795,14 @@ class DamageReportStore:
                     id, category, severity, verification_status, title, description,
                     ward_name, meshcode, building_id, blocked_edge_ids_json, location_label, lat, lon, location_consent,
                     reporter_alias, corroborations, is_sample, resolved,
-                    passcode_salt, passcode_hash, reported_at, created_at, updated_at
-                ) VALUES (?, ?, ?, 'unverified', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, ?, ?, ?, ?, ?)
+                    passcode_salt, passcode_hash, owner_uid, owner_role, reported_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     report_id,
                     category,
                     severity,
+                    eff_ver_status,
                     clean_title,
                     clean_desc,
                     clean_ward,
@@ -581,6 +816,8 @@ class DamageReportStore:
                     clean_alias,
                     salt,
                     p_hash,
+                    clean_owner_uid,
+                    clean_owner_role,
                     eff_reported_at,
                     now_iso,
                     now_iso,
@@ -590,11 +827,40 @@ class DamageReportStore:
             row = conn.execute("SELECT * FROM damage_reports WHERE id = ?", (report_id,)).fetchone()
 
         assert row is not None
-        out = self._serialize_row(row)
+        if self._use_firestore():
+            push_firestore_doc("server_damage_reports", report_id, self._row_to_firestore_doc(row))
+            self._last_fs_sync = time.monotonic()
+        out = self._serialize_row(row, viewer_role=clean_owner_role, viewer_uid=clean_owner_uid)
         return {"report": out, "similar_reports": similar}
 
-    def confirm_report(self, report_id: str) -> dict[str, Any]:
-        """Increment corroboration count on an existing unresolved report (remains unverified)."""
+    def get_report(
+        self,
+        report_id: str,
+        *,
+        viewer_role: str = "government",
+        viewer_uid: str | None = None,
+    ) -> dict[str, Any] | None:
+        self.ensure_initialized()
+        self._sync_from_firestore_if_needed()
+        clean_id = report_id.strip()
+        if not clean_id:
+            return None
+        with self._lock, self._connect() as conn:
+            row = conn.execute("SELECT * FROM damage_reports WHERE id = ?", (clean_id,)).fetchone()
+        if not row:
+            return None
+        if not self._is_visible_to_viewer(row, viewer_role=viewer_role, viewer_uid=viewer_uid):
+            return None
+        return self._serialize_row(row, viewer_role=viewer_role, viewer_uid=viewer_uid)
+
+    def confirm_report(
+        self,
+        report_id: str,
+        *,
+        viewer_role: str = "government",
+        viewer_uid: str | None = None,
+    ) -> dict[str, Any]:
+        """Increment corroboration count on an existing unresolved report visible to the viewer."""
         self.ensure_initialized()
         clean_id = report_id.strip()
         if not clean_id:
@@ -605,6 +871,8 @@ class DamageReportStore:
             row = conn.execute("SELECT * FROM damage_reports WHERE id = ?", (clean_id,)).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="指定された被害報告が見つかりません。")
+            if not self._is_visible_to_viewer(row, viewer_role=viewer_role, viewer_uid=viewer_uid):
+                raise HTTPException(status_code=403, detail="この通報へのアクセス権限がありません。")
             if int(row["is_sample"]) == 1:
                 raise HTTPException(status_code=403, detail="訓練用サンプルには追加確認できません。")
             conn.execute(
@@ -615,16 +883,41 @@ class DamageReportStore:
             updated = conn.execute("SELECT * FROM damage_reports WHERE id = ?", (clean_id,)).fetchone()
 
         assert updated is not None
-        return self._serialize_row(updated)
+        if self._use_firestore():
+            push_firestore_doc("server_damage_reports", clean_id, self._row_to_firestore_doc(updated))
+            self._last_fs_sync = time.monotonic()
+        return self._serialize_row(updated, viewer_role=viewer_role, viewer_uid=viewer_uid)
 
-    def _verify_mutation_auth(self, row: sqlite3.Row, passcode: str | None) -> None:
+    def _verify_mutation_auth(
+        self,
+        row: sqlite3.Row,
+        passcode: str | None,
+        *,
+        actor_uid: str | None = None,
+        actor_role: str = "citizen",
+    ) -> None:
         if int(row["is_sample"]) == 1:
             raise HTTPException(status_code=403, detail="訓練サンプルデータは編集・削除できません。")
+        if actor_role == "government":
+            return
+
+        keys = row.keys()
+        owner_uid = str(row["owner_uid"]) if ("owner_uid" in keys and row["owner_uid"]) else None
+        if owner_uid and (not actor_uid or owner_uid != actor_uid):
+            raise HTTPException(
+                status_code=403,
+                detail="他者が送信した通報を編集・削除することはできません。",
+            )
+
         stored_hash = row["passcode_hash"]
         stored_salt = row["passcode_salt"]
         if stored_hash and stored_salt:
-            candidate = _hash_passcode((passcode or "").strip(), str(stored_salt))
-            if not hmac.compare_digest(candidate, str(stored_hash)):
+            # If authenticated owner omits passcode or supplies it, verify when provided
+            if passcode is not None and passcode != "":
+                candidate = _hash_passcode(passcode.strip(), str(stored_salt))
+                if not hmac.compare_digest(candidate, str(stored_hash)):
+                    raise HTTPException(status_code=403, detail="編集・削除用暗証番号が一致しません。")
+            elif not (owner_uid and actor_uid and owner_uid == actor_uid):
                 raise HTTPException(status_code=403, detail="編集・削除用暗証番号が一致しません。")
 
     def update_report(
@@ -637,15 +930,29 @@ class DamageReportStore:
         description: str | None = None,
         resolved: bool | None = None,
         ward_name: str | None = None,
+        verification_status: str | None = None,
+        actor_uid: str | None = None,
+        actor_role: str = "citizen",
     ) -> dict[str, Any]:
-        """Update an existing user report after passcode verification."""
+        """Update an existing report (owners manage own report; government can verify/manage all)."""
         self.ensure_initialized()
         clean_id = report_id.strip()
+        if verification_status is not None and actor_role != "government":
+            raise HTTPException(
+                status_code=403,
+                detail="確認ステータス（確認済・公式発表）の変更は政府関連機関のみ可能です。",
+            )
+
         with self._lock, self._connect() as conn:
             row = conn.execute("SELECT * FROM damage_reports WHERE id = ?", (clean_id,)).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="指定された被害報告が見つかりません。")
-            self._verify_mutation_auth(row, passcode)
+            self._verify_mutation_auth(
+                row,
+                passcode,
+                actor_uid=actor_uid,
+                actor_role=actor_role,
+            )
 
             next_sev = str(row["severity"])
             if severity is not None:
@@ -674,34 +981,58 @@ class DamageReportStore:
                     raise HTTPException(status_code=400, detail=f"対象外の地域名です: {w}")
                 next_ward = w
 
+            next_ver = str(row["verification_status"])
+            if verification_status is not None:
+                if verification_status not in {"unverified", "verified", "official"}:
+                    raise HTTPException(status_code=400, detail=f"不正な確認区分です: {verification_status}")
+                next_ver = verification_status
+
             next_resolved = int(row["resolved"]) if resolved is None else (1 if resolved else 0)
             updated_at = _now_jst_iso()
 
             conn.execute(
                 """
                 UPDATE damage_reports
-                SET severity = ?, title = ?, description = ?, ward_name = ?, resolved = ?, updated_at = ?
+                SET severity = ?, verification_status = ?, title = ?, description = ?, ward_name = ?, resolved = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (next_sev, next_title, next_desc, next_ward, next_resolved, updated_at, clean_id),
+                (next_sev, next_ver, next_title, next_desc, next_ward, next_resolved, updated_at, clean_id),
             )
             conn.commit()
             updated = conn.execute("SELECT * FROM damage_reports WHERE id = ?", (clean_id,)).fetchone()
 
         assert updated is not None
-        return self._serialize_row(updated)
+        if self._use_firestore():
+            push_firestore_doc("server_damage_reports", clean_id, self._row_to_firestore_doc(updated))
+            self._last_fs_sync = time.monotonic()
+        return self._serialize_row(updated, viewer_role=actor_role, viewer_uid=actor_uid)
 
-    def delete_report(self, report_id: str, passcode: str | None = None) -> dict[str, Any]:
-        """Delete a user report after passcode verification."""
+    def delete_report(
+        self,
+        report_id: str,
+        passcode: str | None = None,
+        *,
+        actor_uid: str | None = None,
+        actor_role: str = "citizen",
+    ) -> dict[str, Any]:
+        """Delete a user report after owner/government authorization."""
         self.ensure_initialized()
         clean_id = report_id.strip()
         with self._lock, self._connect() as conn:
             row = conn.execute("SELECT * FROM damage_reports WHERE id = ?", (clean_id,)).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="指定された被害報告が見つかりません。")
-            self._verify_mutation_auth(row, passcode)
+            self._verify_mutation_auth(
+                row,
+                passcode,
+                actor_uid=actor_uid,
+                actor_role=actor_role,
+            )
             conn.execute("DELETE FROM damage_reports WHERE id = ?", (clean_id,))
             conn.commit()
+        if self._use_firestore():
+            delete_firestore_doc("server_damage_reports", clean_id)
+            self._last_fs_sync = time.monotonic()
         return {"deleted": True, "id": clean_id}
 
     def summarize_reports(
@@ -711,9 +1042,12 @@ class DamageReportStore:
         include_samples: bool = True,
         include_resolved: bool = False,
         store: Any | None = None,
+        viewer_role: str = "government",
+        viewer_uid: str | None = None,
     ) -> dict[str, Any]:
-        """Aggregate damage reports by ward, category, severity, and verification tier."""
+        """Aggregate damage reports by ward, category, severity, and verification tier within viewer role."""
         self.ensure_initialized()
+        self._sync_from_firestore_if_needed()
         clauses: list[str] = []
         params: list[Any] = []
         if not include_samples:
@@ -726,6 +1060,13 @@ class DamageReportStore:
         if category and category != "all":
             clauses.append("category = ?")
             params.append(category)
+        if viewer_role != "government":
+            public_cats = ", ".join(f"'{c}'" for c in sorted(PUBLIC_COMMON_REPORT_CATEGORIES))
+            if viewer_uid:
+                clauses.append(f"(is_sample = 1 OR owner_uid = ? OR category IN ({public_cats}))")
+                params.append(viewer_uid)
+            else:
+                clauses.append(f"(is_sample = 1 OR category IN ({public_cats}))")
 
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._lock, self._connect() as conn:

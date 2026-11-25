@@ -17,6 +17,8 @@ export async function POST(req: NextRequest) {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
+  const authHeader = req.headers.get("authorization");
+  if (authHeader) headers["Authorization"] = authHeader;
   const apiKeyHeader = req.headers.get("x-gemini-api-key");
   if (apiKeyHeader) headers["X-Gemini-Api-Key"] = apiKeyHeader;
   const accessCodeHeader = req.headers.get("x-ai-access-code");

@@ -16,6 +16,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from app import geocoding as geo_mod  # noqa: E402
 from app import main as main_mod  # noqa: E402
+from app.auth import AuthProfileStore  # noqa: E402
 from app.board_store import DisasterBoardStore  # noqa: E402
 from app.data_store import QuakeLensDataStore  # noqa: E402
 from app.reports_store import DamageReportStore  # noqa: E402
@@ -26,10 +27,29 @@ def geo_test_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Provide an isolated FastAPI TestClient with a synthetic Kyoto spatial store."""
     geo_mod.clear_geocode_cache()
     db_file = tmp_path / "geo.db"
+    a_store = AuthProfileStore(db_path=db_file)
     b_store = DisasterBoardStore(db_path=db_file)
     r_store = DamageReportStore(db_path=db_file)
+    a_store.ensure_initialized()
     b_store.ensure_initialized()
     r_store.ensure_initialized()
+    a_store.register_or_update_profile(
+        uid="geo-test-uid",
+        email="geo@example.com",
+        display_name="Geo Test User",
+        role="citizen",
+    )
+    monkeypatch.setattr("app.auth.auth_profile_store", a_store)
+    monkeypatch.setattr(main_mod, "auth_profile_store", a_store)
+
+    def _fake_verify(token: str) -> dict[str, object]:
+        if token == "tok-geo":
+            return {"sub": "geo-test-uid", "email": "geo@example.com", "email_verified": True}
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=401, detail="invalid test token")
+
+    monkeypatch.setattr("app.auth.verify_firebase_id_token", _fake_verify)
 
     poly = Polygon([
         (135.7590, 35.0105),
@@ -114,7 +134,7 @@ def geo_test_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(main_mod, "store", s_store)
     monkeypatch.setattr(main_mod, "board_store", b_store)
     monkeypatch.setattr(main_mod, "reports_store", r_store)
-    return TestClient(main_mod.app)
+    return TestClient(main_mod.app, headers={"Authorization": "Bearer tok-geo"})
 
 
 def test_torina_and_coordinate_parsing() -> None:

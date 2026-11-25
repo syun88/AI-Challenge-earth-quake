@@ -32,6 +32,7 @@ import {
   confirmDamageReport,
   createDamageReport,
   deleteDamageReport,
+  downloadAuthenticatedFile,
   updateDamageReport,
 } from "@/lib/api";
 import {
@@ -46,6 +47,7 @@ import {
   DamageReportSummaryResponse,
   ReportCategory,
   ReportSeverity,
+  UserRole,
   VerificationStatus,
 } from "@/types/quakelens";
 
@@ -148,6 +150,7 @@ export function VerificationBadge({ status }: { status: VerificationStatus }) {
 }
 
 interface DamageReportPanelProps {
+  userRole: UserRole;
   wards: string[];
   selectedWard: string;
   selectedMeshcode: string | null;
@@ -169,6 +172,7 @@ interface DamageReportPanelProps {
 }
 
 export function DamageReportPanel({
+  userRole,
   wards,
   selectedWard,
   selectedMeshcode,
@@ -192,6 +196,7 @@ export function DamageReportPanel({
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
   const [catFilter, setCatFilter] = useState<ReportCategory | "all">("all");
   const [verFilter, setVerFilter] = useState<VerificationStatus | "all">("all");
+  const [onlyMine, setOnlyMine] = useState(false);
   const [searchKw, setSearchKw] = useState("");
 
   // Create form state
@@ -268,6 +273,7 @@ export function DamageReportPanel({
     if (selectedWard !== "all" && r.ward_name !== selectedWard && r.ward_name !== "京都市全域") {
       return false;
     }
+    if (onlyMine && !r.is_mine) return false;
     if (catFilter !== "all" && r.category !== catFilter) return false;
     if (verFilter !== "all" && r.verification_status !== verFilter) return false;
     if (searchKw.trim()) {
@@ -362,12 +368,15 @@ export function DamageReportPanel({
   };
 
   const handleToggleResolve = async (report: DamageReport) => {
-    const code = localAuthMap[report.id] || window.prompt("更新用の暗証番号を入力してください");
+    const canBypassPasscode = userRole === "government" || Boolean(report.is_mine);
+    const code = canBypassPasscode
+      ? undefined
+      : localAuthMap[report.id] || window.prompt("更新用の暗証番号を入力してください");
     if (code === null) return;
     setBusyId(report.id);
     try {
       await updateDamageReport(report.id, {
-        passcode: code,
+        passcode: code || undefined,
         resolved: !report.resolved,
       });
       onReportsChanged();
@@ -381,12 +390,37 @@ export function DamageReportPanel({
     }
   };
 
+  const handleVerifyStatus = async (reportId: string, nextStatus: VerificationStatus) => {
+    if (userRole !== "government") return;
+    setBusyId(reportId);
+    try {
+      await updateDamageReport(reportId, {
+        verification_status: nextStatus,
+      });
+      onReportsChanged();
+      setFeedback({
+        type: "success",
+        text: `報告 ${reportId} のステータスを「${VERIFICATION_META[nextStatus].label}」に更新しました。`,
+      });
+    } catch (err) {
+      setFeedback({
+        type: "error",
+        text: err instanceof Error ? err.message : "検証ステータス更新に失敗しました。",
+      });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const handleDelete = async (report: DamageReport) => {
-    const code = localAuthMap[report.id] || window.prompt("削除用の暗証番号を入力してください");
+    const canBypassPasscode = userRole === "government" || Boolean(report.is_mine);
+    const code = canBypassPasscode
+      ? undefined
+      : localAuthMap[report.id] || window.prompt("削除用の暗証番号を入力してください");
     if (code === null) return;
     setBusyId(report.id);
     try {
-      await deleteDamageReport(report.id, code);
+      await deleteDamageReport(report.id, code || undefined);
       if (lastCreatedReport?.id === report.id) {
         setLastCreatedReport(null);
       }
@@ -523,23 +557,53 @@ export function DamageReportPanel({
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/70 pt-2">
-              <div className="flex items-center gap-1.5">
-                <a
-                  href={csvUrl}
-                  download
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-sky-300 hover:border-sky-500/60"
-                >
-                  <Download className="h-3 w-3" />
-                  CSV
-                </a>
-                <a
-                  href={xlsxUrl}
-                  download
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 hover:border-emerald-500/60"
-                >
-                  <FileSpreadsheet className="h-3 w-3" />
-                  Excel
-                </a>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {userRole === "government" ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void downloadAuthenticatedFile(csvUrl, "quakelens_kyoto_reports.csv").catch(
+                          (err) =>
+                            setFeedback({
+                              type: "error",
+                              text: err instanceof Error ? err.message : "CSV出力失敗",
+                            })
+                        );
+                      }}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-sky-300 hover:border-sky-500/60"
+                    >
+                      <Download className="h-3 w-3" />
+                      CSV
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void downloadAuthenticatedFile(xlsxUrl, "quakelens_kyoto_summary.xlsx").catch(
+                          (err) =>
+                            setFeedback({
+                              type: "error",
+                              text: err instanceof Error ? err.message : "Excel出力失敗",
+                            })
+                        );
+                      }}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 hover:border-emerald-500/60"
+                    >
+                      <FileSpreadsheet className="h-3 w-3" />
+                      Excel
+                    </button>
+                  </>
+                ) : (
+                  <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700/80 bg-slate-900 px-2.5 py-1 text-[11px] text-slate-200">
+                    <input
+                      type="checkbox"
+                      checked={onlyMine}
+                      onChange={(e) => setOnlyMine(e.target.checked)}
+                      className="h-3.5 w-3.5 accent-sky-400"
+                    />
+                    自分の投稿のみ表示
+                  </label>
+                )}
               </div>
               {onOpenRouteSimulator && (
                 <button
@@ -548,10 +612,16 @@ export function DamageReportPanel({
                   className="inline-flex items-center gap-1 rounded-lg border border-purple-500/40 bg-purple-500/15 px-2.5 py-1 text-[11px] font-semibold text-purple-200 hover:bg-purple-500/25"
                 >
                   <Route className="h-3 w-3" />
-                  避難・救援ルート案内へ
+                  {userRole === "government" ? "避難・救援ルート案内へ" : "避難・迂回ルート案内へ"}
                 </button>
               )}
             </div>
+
+            {userRole !== "government" && (
+              <div className="rounded-lg border border-slate-800 bg-slate-900/75 px-2.5 py-1.5 text-[10px] leading-relaxed text-slate-400">
+                ※ 建物被害・道路通行止め・避難所状況など共通公開区分のみ表示しています。他者の個別救助通報や詳細本文・投稿者情報はプライバシー保護のため政府関連機関のみ閲覧できます。
+              </div>
+            )}
           </div>
 
           {/* Filter Bar */}
@@ -568,7 +638,15 @@ export function DamageReportPanel({
               >
                 全種別
               </button>
-              {(Object.keys(REPORT_CATEGORY_META) as ReportCategory[]).map((catKey) => {
+              {(Object.keys(REPORT_CATEGORY_META) as ReportCategory[])
+                .filter((catKey) =>
+                  userRole === "government" ||
+                  onlyMine ||
+                  catKey === "building_damage" ||
+                  catKey === "road_blocked" ||
+                  catKey === "shelter_status"
+                )
+                .map((catKey) => {
                 const meta = REPORT_CATEGORY_META[catKey];
                 const active = catFilter === catKey;
                 return (
@@ -621,8 +699,13 @@ export function DamageReportPanel({
               {filteredReports.map((rep) => {
                 const catMeta = REPORT_CATEGORY_META[rep.category];
                 const sevMeta = REPORT_SEVERITY_META[rep.severity];
-                const canManage = !rep.is_sample && Boolean(localAuthMap[rep.id] || rep.has_passcode);
+                const canManage =
+                  !rep.is_sample &&
+                  (userRole === "government" ||
+                    Boolean(rep.is_mine) ||
+                    Boolean(localAuthMap[rep.id] || rep.has_passcode));
                 const canDispatch =
+                  userRole === "government" &&
                   onDispatchRescue &&
                   !rep.resolved &&
                   rep.lat != null &&
@@ -671,6 +754,16 @@ export function DamageReportPanel({
                     <p className="text-xs leading-relaxed text-slate-300">{rep.description}</p>
 
                     <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                      {rep.is_mine && (
+                        <span className="rounded border border-sky-500/40 bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-sky-200">
+                          自分の投稿
+                        </span>
+                      )}
+                      {rep.details_redacted && (
+                        <span className="rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-[10px] text-slate-400">
+                          詳細本文・投稿者秘匿
+                        </span>
+                      )}
                       {rep.building_id && (
                         <span className="rounded bg-orange-500/15 px-1.5 py-0.5 font-mono text-orange-300">
                           建物: {rep.building_id}
@@ -679,6 +772,28 @@ export function DamageReportPanel({
                       {rep.location_label && <span>場所: {rep.location_label}</span>}
                       <span>確認 +{rep.corroborations}件</span>
                     </div>
+
+                    {userRole === "government" && !rep.is_sample && (
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[10px]">
+                        <span className="text-slate-400">行政検証:</span>
+                        <button
+                          type="button"
+                          disabled={busyId === rep.id || rep.verification_status === "verified"}
+                          onClick={() => void handleVerifyStatus(rep.id, "verified")}
+                          className="rounded border border-cyan-500/40 bg-cyan-500/15 px-2 py-0.5 font-semibold text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-45"
+                        >
+                          確認済にする
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busyId === rep.id || rep.verification_status === "official"}
+                          onClick={() => void handleVerifyStatus(rep.id, "official")}
+                          className="rounded border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 font-semibold text-emerald-200 hover:bg-emerald-500/25 disabled:opacity-45"
+                        >
+                          公式発表に昇格
+                        </button>
+                      </div>
+                    )}
 
                     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/80 pt-2">
                       <div className="flex flex-wrap items-center gap-1.5">

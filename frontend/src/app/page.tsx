@@ -1,22 +1,40 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Ban,
   Building2,
   Compass,
+  Loader2,
   Map as MapIcon,
   MessageSquareHeart,
   ShieldAlert,
   Tent,
   X,
 } from "lucide-react";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+} from "firebase/firestore";
+import { useAuth } from "@/contexts/AuthContext";
+import { getFirebaseDb } from "@/lib/firebase";
 import { AiAssistantPanel } from "@/components/AiAssistantPanel";
 import { DraggableMochimamoBot } from "@/components/DraggableMochimamoBot";
 import { DamageReportPanel } from "@/components/DamageReportPanel";
 import { DisasterBoard } from "@/components/DisasterBoard";
 import DisasterUpdatesPanel from "@/components/DisasterUpdatesPanel";
+import EnterpriseAssetsPanel from "@/components/EnterpriseAssetsPanel";
 import { FloatingHeader, WorkspacePanel } from "@/components/FloatingHeader";
 import { LocationSearchBar } from "@/components/LocationSearchBar";
 import { MapDisplayPopover } from "@/components/MapDisplayPopover";
@@ -72,6 +90,9 @@ import {
   DisasterUpdatesPeriod,
   DisasterUpdatesResponse,
   EarthquakeEvent,
+  EnterpriseAsset,
+  EnterpriseAssetType,
+  EnterpriseConfidentiality,
   HazardTier,
   KyotoEarthquakeArchiveItem,
   LocationSearchResult,
@@ -102,6 +123,17 @@ const DEFAULT_AGES: AgeCategory[] = ["pre_1981", "1982_2000", "post_2001", "unkn
 const DEFAULT_HAZARDS: HazardTier[] = ["very_high", "elevated", "moderate", "low"];
 
 export default function HomePage() {
+  const router = useRouter();
+  const {
+    firebaseReady,
+    firebaseUser,
+    profile,
+    authLoading,
+    needsRegistration,
+    logout,
+  } = useAuth();
+  const isAuthenticated = Boolean(firebaseUser && profile && !authLoading);
+
   const [metadata, setMetadata] = useState<MetadataResponse | null>(null);
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [meshesGeoJson, setMeshesGeoJson] = useState<GeoJSON.FeatureCollection | null>(null);
@@ -128,6 +160,10 @@ export default function HomePage() {
 
   // Map Layers & Filters
   const [selectedWard, setSelectedWard] = useState<string>("all");
+  const [favoriteWard, setFavoriteWard] = useState<string | null>(null);
+  const [savingFavoriteWard, setSavingFavoriteWard] = useState(false);
+  const manualWardChangedRef = useRef(false);
+  const loadedPrefsUidRef = useRef<string | null>(null);
   const [ageCategories, setAgeCategories] = useState<AgeCategory[]>(DEFAULT_AGES);
   const [hazardTiers, setHazardTiers] = useState<HazardTier[]>(DEFAULT_HAZARDS);
   const [usageGroup, setUsageGroup] = useState<UsageGroup>("all");
@@ -170,7 +206,12 @@ export default function HomePage() {
   const [updatesRefreshMsg, setUpdatesRefreshMsg] = useState<string | null>(null);
 
   // Active Selections & Map Pickers
-  const [statsTab, setStatsTab] = useState<"risk" | "bcp">("risk");
+  const [statsTab, setStatsTab] = useState<"risk" | "bcp" | "shared_assets">("risk");
+  const [enterpriseAssets, setEnterpriseAssets] = useState<EnterpriseAsset[]>([]);
+  const [pickedEnterpriseCoords, setPickedEnterpriseCoords] = useState<{
+    lat: number;
+    lon: number;
+  } | null>(null);
   const [selectedBuilding, setSelectedBuilding] = useState<BuildingDetail | null>(null);
   const [selectedMesh, setSelectedMesh] = useState<MeshDetail | null>(null);
   const [selectedBcpSite, setSelectedBcpSite] = useState<BcpSiteCandidate | null>(null);
@@ -227,8 +268,122 @@ export default function HomePage() {
   const [paintErrorText, setPaintErrorText] = useState<string | null>(null);
   const [currentMapZoom, setCurrentMapZoom] = useState(12.6);
 
-  // Initial load: health, metadata, meshes, earthquakes
+  // Auth Guard Redirect: never reveal map before Firebase Auth + Profile registration
   useEffect(() => {
+    if (authLoading) return;
+    if (!firebaseReady || !firebaseUser) {
+      router.replace("/login");
+    } else if (needsRegistration || !profile) {
+      router.replace("/register");
+    }
+  }, [authLoading, firebaseReady, firebaseUser, profile, needsRegistration, router]);
+
+  // Firestore listener for confidential enterprise assets (enterprise owner OR gov emergency shared ONLY)
+  useEffect(() => {
+    if (!isAuthenticated || !profile || profile.role === "citizen") {
+      queueMicrotask(() => setEnterpriseAssets([]));
+      return;
+    }
+    const db = getFirebaseDb();
+    if (!db) return;
+
+    const col = collection(db, "enterprise_assets");
+    const q =
+      profile.role === "government"
+        ? query(
+            col,
+            where("confidentialityLevel", "==", "gov_emergency_share"),
+            orderBy("createdAt", "desc"),
+            limit(50)
+          )
+        : query(
+            col,
+            where("ownerUid", "==", profile.uid),
+            orderBy("createdAt", "desc"),
+            limit(50)
+          );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list: EnterpriseAsset[] = snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            ownerUid: String(data.ownerUid || ""),
+            organizationName: String(data.organizationName || ""),
+            name: String(data.name || ""),
+            assetType: (data.assetType as EnterpriseAssetType) || "server_room",
+            confidentialityLevel:
+              (data.confidentialityLevel as EnterpriseConfidentiality) ||
+              "enterprise_only",
+            wardName: String(data.wardName || "京都市"),
+            lat: Number(data.lat || 0),
+            lon: Number(data.lon || 0),
+            floorInfo: typeof data.floorInfo === "string" ? data.floorInfo : "",
+            backupHours:
+              typeof data.backupHours === "number" ? data.backupHours : null,
+            notes: typeof data.notes === "string" ? data.notes : "",
+          };
+        });
+        setEnterpriseAssets(list);
+      },
+      (err) => {
+        console.warn("Confidential assets subscription skipped:", err);
+      }
+    );
+    return () => unsub();
+  }, [isAuthenticated, profile]);
+
+  // Firestore one-shot load of user personal favorite ward preference (max 1 read per session)
+  useEffect(() => {
+    if (!isAuthenticated || !profile) {
+      loadedPrefsUidRef.current = null;
+      manualWardChangedRef.current = false;
+      queueMicrotask(() => setFavoriteWard(null));
+      return;
+    }
+    if (loadedPrefsUidRef.current === profile.uid) {
+      return;
+    }
+    const db = getFirebaseDb();
+    if (!db) return;
+
+    loadedPrefsUidRef.current = profile.uid;
+    let cancelled = false;
+    getDoc(doc(db, "user_preferences", profile.uid))
+      .then((snap) => {
+        if (cancelled || !snap.exists()) return;
+        const data = snap.data();
+        const saved =
+          typeof data?.favoriteWard === "string" ? data.favoriteWard : null;
+        if (!saved) return;
+        setFavoriteWard(saved);
+        if (
+          !manualWardChangedRef.current &&
+          (saved === "all" || Boolean(WARD_CENTERS[saved]))
+        ) {
+          setSelectedWard(saved);
+          if (saved !== "all") {
+            const center = WARD_CENTERS[saved];
+            if (center) {
+              setFlyToTarget({ ...center, ts: Date.now() });
+            }
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn("User preferences read skipped:", err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, profile]);
+
+  // Initial load: health, metadata, meshes, earthquakes (strictly post-auth)
+  useEffect(() => {
+    if (!isAuthenticated) return;
     let cancelled = false;
     Promise.all([
       getHealth(),
@@ -258,10 +413,11 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAuthenticated]);
 
-  // Load / refresh Board Summary, Damage Reports & Road Network Status
+  // Load / refresh Board Summary, Damage Reports & Road Network Status (strictly post-auth)
   useEffect(() => {
+    if (!isAuthenticated) return;
     let cancelled = false;
     Promise.all([
       getBoardSummary({ ward: selectedWard, includeSamples }),
@@ -291,10 +447,11 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedWard, includeSamples, disasterNonce]);
+  }, [isAuthenticated, selectedWard, includeSamples, disasterNonce]);
 
-  // Refresh building/hazard stats whenever filters change
+  // Refresh building/hazard stats whenever filters change (strictly post-auth)
   useEffect(() => {
+    if (!isAuthenticated) return;
     let cancelled = false;
     getStats({
       ward: selectedWard,
@@ -312,10 +469,11 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedWard, ageCategories, hazardTiers, usageGroup, selectedMeshcode]);
+  }, [isAuthenticated, selectedWard, ageCategories, hazardTiers, usageGroup, selectedMeshcode]);
 
-  // Refresh priority areas
+  // Refresh priority areas (strictly post-auth)
   useEffect(() => {
+    if (!isAuthenticated) return;
     let cancelled = false;
     getPriorityAreas({
       ward: selectedWard,
@@ -333,7 +491,7 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedWard, hazardTiers, usageGroup, sortBy]);
+  }, [isAuthenticated, selectedWard, hazardTiers, usageGroup, sortBy]);
 
   const handleRefreshHealth = useCallback(async () => {
     try {
@@ -447,7 +605,7 @@ export default function HomePage() {
   );
 
   useEffect(() => {
-    if (activePanel !== "shelter") return;
+    if (!isAuthenticated || activePanel !== "shelter") return;
     let cancelled = false;
     recommendShelters({
       lat: shelterOrigin.lat,
@@ -474,6 +632,7 @@ export default function HomePage() {
       cancelled = true;
     };
   }, [
+    isAuthenticated,
     activePanel,
     shelterOrigin.lat,
     shelterOrigin.lon,
@@ -507,7 +666,7 @@ export default function HomePage() {
     async (shelter: OfficialShelter) => {
       try {
         const res = await simulateNavigation({
-          mode: "custom",
+          mode: "evacuate",
           startLat: shelterOrigin.lat,
           startLon: shelterOrigin.lon,
           targetLat: shelter.lat,
@@ -563,7 +722,7 @@ export default function HomePage() {
   }, [runShelterRecommendation]);
 
   useEffect(() => {
-    if (activePanel !== "updates") return;
+    if (!isAuthenticated || activePanel !== "updates") return;
     let cancelled = false;
     getDisasterUpdates({ period: updatesPeriod, kind: "all" })
       .then((res) => {
@@ -582,7 +741,7 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [activePanel, updatesPeriod]);
+  }, [isAuthenticated, activePanel, updatesPeriod]);
 
   const handleRefreshUpdatesLive = useCallback(async () => {
     setUpdatesRefreshing(true);
@@ -628,12 +787,42 @@ export default function HomePage() {
   }, []);
 
   const handleSelectWard = useCallback((ward: string) => {
+    manualWardChangedRef.current = true;
     setSelectedWard(ward);
     setSelectedMeshcode(null);
     setSelectedMesh(null);
     const center = WARD_CENTERS[ward] || WARD_CENTERS.all;
     setFlyToTarget({ ...center, ts: Date.now() });
   }, []);
+
+  const handleToggleSaveFavoriteWard = useCallback(async () => {
+    if (!profile || !firebaseUser) return;
+    const db = getFirebaseDb();
+    if (!db) return;
+    setSavingFavoriteWard(true);
+    try {
+      const prefRef = doc(db, "user_preferences", profile.uid);
+      if (favoriteWard === selectedWard) {
+        await deleteDoc(prefRef);
+        setFavoriteWard(null);
+      } else {
+        await setDoc(
+          prefRef,
+          {
+            uid: profile.uid,
+            favoriteWard: selectedWard,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+        setFavoriteWard(selectedWard);
+      }
+    } catch (err) {
+      console.warn("User preferences write skipped:", err);
+    } finally {
+      setSavingFavoriteWard(false);
+    }
+  }, [profile, firebaseUser, favoriteWard, selectedWard]);
 
   const handleToggleAgeCategory = useCallback((cat: AgeCategory) => {
     setAgeCategories((prev) => {
@@ -1013,17 +1202,23 @@ export default function HomePage() {
   const handleResolveBlockedRoadFromMap = useCallback(
     async (reportId: string) => {
       const authMap = readLocalReportAuth();
-      const code = authMap[reportId] || window.prompt("通行止めを解除するための暗証番号を入力してください");
+      const canBypass = profile?.role === "government";
+      const code = canBypass
+        ? undefined
+        : authMap[reportId] || window.prompt("通行止めを解除するための暗証番号を入力してください");
       if (code === null) return;
       try {
-        await updateDamageReport(reportId, { passcode: code, resolved: true });
+        await updateDamageReport(reportId, {
+          passcode: code || undefined,
+          resolved: true,
+        });
         clearSelections();
         await handleRoadClosuresChanged();
       } catch (err) {
         window.alert(err instanceof Error ? err.message : "通行止めの解除に失敗しました。");
       }
     },
-    [clearSelections, handleRoadClosuresChanged]
+    [profile?.role, clearSelections, handleRoadClosuresChanged]
   );
 
   const openRoadPaintMode = useCallback(
@@ -1418,6 +1613,13 @@ export default function HomePage() {
         } catch {
           setActivePanel("nav");
         }
+        return;
+      }
+
+      if (mapPickMode === "enterprise_asset") {
+        setMapPickMode("none");
+        setPickedEnterpriseCoords({ lat: target.lat, lon: target.lon });
+        setActivePanel("assets");
       }
     },
     [mapPickMode, includeSamples, clearSelections, runShelterRecommendation]
@@ -1569,6 +1771,19 @@ export default function HomePage() {
   const wards = metadata?.wards ?? Object.keys(WARD_CENTERS).filter((k) => k !== "all");
   const blockedCount = networkStatus?.blocked_count ?? 0;
 
+  if (authLoading || !isAuthenticated || !profile) {
+    return (
+      <div className="flex h-[100dvh] w-screen items-center justify-center bg-slate-950 text-slate-200">
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/90 px-6 py-4 shadow-xl">
+          <Loader2 className="h-5 w-5 animate-spin text-sky-400" />
+          <span className="text-sm font-medium">
+            認証確認中...（未ログインの場合はログイン画面へ移動します）
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="relative h-[100dvh] w-screen overflow-hidden bg-slate-950">
       {/* Full-Viewport Interactive Kyoto Map Canvas */}
@@ -1597,6 +1812,16 @@ export default function HomePage() {
         recommendedShelters={
           activePanel === "shelter" ? shelterRecommendation?.recommendations ?? [] : []
         }
+        enterpriseAssets={enterpriseAssets}
+        onSelectEnterpriseAsset={(asset) => {
+          setFlyToTarget({ lon: asset.lon, lat: asset.lat, zoom: 16.5, ts: Date.now() });
+          if (profile.role === "enterprise") {
+            setActivePanel("assets");
+          } else if (profile.role === "government") {
+            setStatsTab("shared_assets");
+            setActivePanel("stats");
+          }
+        }}
         map3DMode={map3DMode}
         onChangeMap3DMode={setMap3DMode}
         onPitch3DChange={setIsPitch3D}
@@ -1692,6 +1917,9 @@ export default function HomePage() {
         wards={wards}
         selectedWard={selectedWard}
         onSelectWard={handleSelectWard}
+        favoriteWard={favoriteWard}
+        onToggleSaveFavoriteWard={() => void handleToggleSaveFavoriteWard()}
+        savingFavoriteWard={savingFavoriteWard}
         displayOpen={displayOpen}
         onToggleDisplay={() => setDisplayOpen((o) => !o)}
         onOpenSources={() => setSourcesOpen(true)}
@@ -1700,6 +1928,11 @@ export default function HomePage() {
         blockedRoadCount={blockedCount}
         hasActiveRoute={Boolean(routeResult)}
         geminiConfigured={geminiConfigured}
+        userRole={profile.role}
+        userDisplayName={profile.display_name}
+        organizationName={profile.organization_name}
+        enterpriseAssetCount={enterpriseAssets.length}
+        onLogout={() => void logout()}
       />
 
       {/* Google-Maps-Style Address & Place Search Bar */}
@@ -1789,12 +2022,18 @@ export default function HomePage() {
                     : activePanel === "updates"
                       ? "気象庁・自治体 防災情報アップデート"
                       : activePanel === "nav"
-                        ? "避難・救援ルート案内"
-                        : activePanel === "ai"
-                          ? "Gemini AI 状況分析"
-                          : statsTab === "bcp"
-                            ? "企業BCP・重要施設 安全立地候補"
-                            : "災害統計・建物リスク分析"}
+                        ? profile.role === "government"
+                          ? "避難・救援ルート案内"
+                          : "避難・迂回ルート案内"
+                        : activePanel === "assets"
+                          ? "企業・非公開重要施設保護（サーバー室・DC）"
+                          : activePanel === "ai"
+                            ? "Gemini AI 状況分析"
+                            : statsTab === "bcp" && profile.role === "enterprise"
+                              ? "企業BCP・重要施設 安全立地候補"
+                              : statsTab === "shared_assets" && profile.role === "government"
+                                ? "政府連携共有・企業重要拠点"
+                                : "災害統計・建物リスク分析"}
             </span>
             <button
               type="button"
@@ -1811,6 +2050,7 @@ export default function HomePage() {
             {activePanel === "report" && (
               <DamageReportPanel
                 key={`rep-${reportCreateTrigger}`}
+                userRole={profile.role}
                 wards={wards}
                 selectedWard={selectedWard}
                 selectedMeshcode={selectedMeshcode}
@@ -1828,7 +2068,11 @@ export default function HomePage() {
                 onClearPickedLocation={() => setPickedReportTarget(null)}
                 onFocusReport={handleFocusReport}
                 onReportCreated={handleReportCreated}
-                onDispatchRescue={(rep) => void handleDispatchRescueToReport(rep)}
+                onDispatchRescue={
+                  profile.role === "government"
+                    ? (rep) => void handleDispatchRescueToReport(rep)
+                    : undefined
+                }
                 onReportsChanged={() => void handleRoadClosuresChanged()}
                 onOpenRouteSimulator={() => setActivePanel("nav")}
                 startInCreateMode={reportCreateTrigger > 0}
@@ -1837,6 +2081,7 @@ export default function HomePage() {
 
             {activePanel === "safety" && (
               <DisasterBoard
+                userRole={profile.role}
                 embedded
                 wards={wards}
                 defaultWard={selectedWard}
@@ -1904,6 +2149,7 @@ export default function HomePage() {
 
             {activePanel === "nav" && (
               <NavigationPanel
+                userRole={profile.role}
                 reports={reports}
                 networkStatus={networkStatus}
                 routeResult={routeResult}
@@ -1948,8 +2194,31 @@ export default function HomePage() {
               />
             )}
 
+            {activePanel === "assets" && profile.role === "enterprise" && (
+              <div className="p-3.5">
+                <EnterpriseAssetsPanel
+                  userUid={profile.uid}
+                  userRole={profile.role}
+                  organizationName={profile.organization_name}
+                  pickedCoords={pickedEnterpriseCoords}
+                  pickActive={mapPickMode === "enterprise_asset"}
+                  onRequestMapPick={() => setMapPickMode("enterprise_asset")}
+                  onCancelMapPick={() => setMapPickMode("none")}
+                  onFocusAsset={(asset) => {
+                    setFlyToTarget({
+                      lon: asset.lon,
+                      lat: asset.lat,
+                      zoom: 16.5,
+                      ts: Date.now(),
+                    });
+                  }}
+                />
+              </div>
+            )}
+
             {activePanel === "ai" && (
               <AiAssistantPanel
+                userRole={profile.role}
                 geminiConfigured={geminiConfigured}
                 aiProtection={aiProtection}
                 totalBuildings={metadata?.counts.total_buildings ?? stats?.total_buildings}
@@ -1969,6 +2238,9 @@ export default function HomePage() {
 
             {activePanel === "stats" && (
               <RiskStatsDrawer
+                userRole={profile.role}
+                userUid={profile.uid}
+                organizationName={profile.organization_name}
                 selectedWard={selectedWard}
                 selectedMeshcode={selectedMeshcode}
                 includeSamples={includeSamples}
@@ -1988,6 +2260,14 @@ export default function HomePage() {
                 statsTab={statsTab}
                 onChangeStatsTab={setStatsTab}
                 onSelectBcpSite={(site) => void handleSelectBcpSite(site)}
+                onSelectEnterpriseAsset={(asset) => {
+                  setFlyToTarget({
+                    lon: asset.lon,
+                    lat: asset.lat,
+                    zoom: 16.5,
+                    ts: Date.now(),
+                  });
+                }}
                 onSelectWardFilter={handleSelectWard}
                 onOpenSafety={() => setActivePanel("safety")}
                 onOpenReports={() => setActivePanel("report")}
@@ -2086,25 +2366,27 @@ export default function HomePage() {
               >
                 ＋ 被害を報告
               </button>
-              <button
-                type="button"
-                data-testid="summary-enterprise-bcp-btn"
-                onClick={() => {
-                  setStatsTab("bcp");
-                  setActivePanel("stats");
-                }}
-                className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/20 px-2.5 py-1 text-[11px] font-bold text-emerald-100 hover:bg-emerald-500/35"
-              >
-                <Building2 className="h-3 w-3 text-emerald-300" />
-                企業BCP適地
-              </button>
+              {profile.role === "enterprise" && (
+                <button
+                  type="button"
+                  data-testid="summary-enterprise-bcp-btn"
+                  onClick={() => {
+                    setStatsTab("bcp");
+                    setActivePanel("stats");
+                  }}
+                  className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/20 px-2.5 py-1 text-[11px] font-bold text-emerald-100 hover:bg-emerald-500/35"
+                >
+                  <Building2 className="h-3 w-3 text-emerald-300" />
+                  企業BCP適地
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setActivePanel("nav")}
                 className="inline-flex items-center gap-1 rounded-lg bg-emerald-500 px-2.5 py-1 text-[11px] font-bold text-slate-950 hover:bg-emerald-400"
               >
                 <Compass className="h-3 w-3" />
-                避難・救援ナビ
+                {profile.role === "government" ? "避難・救援ナビ" : "避難ナビ"}
               </button>
             </div>
           </div>
@@ -2113,6 +2395,7 @@ export default function HomePage() {
 
       {/* Selected Building / Report / Blocked Road / Shelter Hub / Search Place / Active Route HUD */}
       <SelectedFeatureCard
+        userRole={profile.role}
         selectedBuilding={selectedBuilding}
         selectedMesh={selectedMesh}
         selectedReport={selectedReport}

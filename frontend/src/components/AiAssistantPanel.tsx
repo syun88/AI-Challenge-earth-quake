@@ -21,7 +21,7 @@ import {
   FileSpreadsheet,
   Volume2,
 } from "lucide-react";
-import { API_BASE, sendChatMessage, streamChatMessage } from "@/lib/api";
+import { downloadAuthenticatedFile, sendChatMessage, streamChatMessage } from "@/lib/api";
 import { useMochimamoVoice } from "@/lib/useMochimamoVoice";
 import { MarkdownLite } from "@/components/MarkdownLite";
 import { MochimamoChatStage } from "@/components/MochimamoChatStage";
@@ -36,6 +36,7 @@ import {
   MeshDetail,
   ToolCallTrace,
   UsageGroup,
+  UserRole,
 } from "@/types/quakelens";
 
 interface ChatTurn {
@@ -55,6 +56,7 @@ interface ChatTurn {
 }
 
 interface AiAssistantPanelProps {
+  userRole?: UserRole;
   geminiConfigured: boolean;
   aiProtection?: AiProtectionStatus | null;
   totalBuildings?: number | null;
@@ -71,15 +73,28 @@ interface AiAssistantPanelProps {
   onExecuteMapAction: (action: MapAction) => void;
 }
 
-const DEMO_PROMPTS = [
-  "中京区の安全な指定緊急避難場所を教えて",
-  "伏見区の現在の被害報告と建物リスクをまとめて",
-  "道路損壊・通行止めが報告されている地域は？",
-  "支援が必要という報告を地域別に整理して",
-  "現在の地域の災害状況をCSVにまとめて",
-  "伏見区と東山区で地震ハザードや古い建物の分布を比較して",
-  "1981年以前の建物が多い優先確認エリアを教えて",
-];
+const ROLE_PROMPTS: Record<UserRole, string[]> = {
+  citizen: [
+    "中京区の安全な指定緊急避難場所を教えて",
+    "道路損壊・通行止めが報告されている地域は？",
+    "伏見区と東山区で地震ハザードや古い建物の分布を比較して",
+    "1981年以前の建物が多い優先確認エリアを教えて",
+    "現在の地域の耐震診断や補助制度について教えて",
+  ],
+  enterprise: [
+    "京都市内でサーバー室・データセンターに適した低リスク候補地は？",
+    "BCP代替拠点を置く際に避けるべき高リスクエリアを教えて",
+    "道路損壊・通行止めが報告されている主要幹線周辺は？",
+    "R8市有耐震リストの区ごとの耐震化状況と周辺建物リスクを教えて",
+  ],
+  government: [
+    "伏見区の現在の被害報告（救助要請含む）と建物リスクをまとめて",
+    "道路損壊・通行止めが報告されている地域は？",
+    "支援が必要という報告を地域別に整理して",
+    "現在の地域の災害状況をCSVにまとめて",
+    "1981年以前の建物が多い優先確認エリアを教えて",
+  ],
+};
 
 function buildWelcomeText(totalBuildings?: number | null): string {
   const countLabel =
@@ -162,6 +177,7 @@ const INITIAL_MESSAGE: ChatTurn = {
 type AiModelId = "gemini-3.5-flash-lite" | "gemini-4-hydrogen" | "gemini-4-argon";
 
 export function AiAssistantPanel({
+  userRole = "citizen",
   geminiConfigured,
   aiProtection,
   totalBuildings,
@@ -177,6 +193,7 @@ export function AiAssistantPanel({
   onConsumeQueuedPrompt,
   onExecuteMapAction,
 }: AiAssistantPanelProps) {
+  const demoPrompts = ROLE_PROMPTS[userRole] || ROLE_PROMPTS.citizen;
   const [messages, setMessages] = useState<ChatTurn[]>([INITIAL_MESSAGE]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -946,10 +963,17 @@ export function AiAssistantPanel({
                       <div className="flex flex-wrap gap-1.5">
                         {m.mapActions.map((act) =>
                           act.type === "download_export" && act.url ? (
-                            <a
+                            <button
                               key={act.key}
-                              href={`${API_BASE}${act.url}`}
-                              download
+                              type="button"
+                              onClick={() => {
+                                void downloadAuthenticatedFile(
+                                  act.url!,
+                                  act.format === "xlsx"
+                                    ? "quakelens_kyoto_summary.xlsx"
+                                    : "quakelens_kyoto_overview.csv"
+                                ).catch(() => {});
+                              }}
                               className="inline-flex items-center gap-1 rounded-md border border-emerald-500/50 bg-emerald-500/15 px-2 py-1 text-[10px] font-semibold text-emerald-200 transition hover:bg-emerald-500/25"
                             >
                               {act.format === "xlsx" ? (
@@ -958,7 +982,7 @@ export function AiAssistantPanel({
                                 <Download className="h-3 w-3 shrink-0" />
                               )}
                               <span>{act.label}</span>
-                            </a>
+                            </button>
                           ) : (
                             <button
                               key={act.key}
@@ -1052,7 +1076,7 @@ export function AiAssistantPanel({
               )}
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {DEMO_PROMPTS.map((p) => (
+              {demoPrompts.map((p) => (
                 <button
                   key={p}
                   type="button"

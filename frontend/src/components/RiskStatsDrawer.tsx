@@ -28,11 +28,13 @@ import {
 import {
   buildDisasterCsvUrl,
   buildDisasterXlsxUrl,
+  downloadAuthenticatedFile,
   getEnterpriseSafeSites,
   getR8SeismicList,
   locateR8Record,
   locateR8Unlisted,
 } from "@/lib/api";
+import EnterpriseAssetsPanel from "@/components/EnterpriseAssetsPanel";
 import {
   AGE_COLORS,
   AGE_LABELS,
@@ -46,18 +48,23 @@ import {
   BcpSiteResponse,
   BoardSummaryResponse,
   DamageReportSummaryResponse,
+  EnterpriseAsset,
   HazardTier,
   PriorityArea,
   R8LocateResponse,
   R8SeismicListResponse,
   R8UnlistedLocateResponse,
   StatsResponse,
+  UserRole,
 } from "@/types/quakelens";
 
 const ALL_AGE_CATS: AgeCategory[] = ["pre_1981", "1982_2000", "post_2001", "unknown"];
 const ALL_HAZARD_TIERS: HazardTier[] = ["very_high", "elevated", "moderate", "low"];
 
 interface RiskStatsDrawerProps {
+  userRole: UserRole;
+  userUid: string;
+  organizationName?: string;
   selectedWard: string;
   selectedMeshcode: string | null;
   includeSamples: boolean;
@@ -74,15 +81,19 @@ interface RiskStatsDrawerProps {
   onSelectPriorityArea: (area: PriorityArea) => void;
   onSelectR8Record?: (loc: R8LocateResponse) => void;
   onSelectR8Unlisted?: (loc: R8UnlistedLocateResponse) => void;
-  statsTab?: "risk" | "bcp";
-  onChangeStatsTab?: (tab: "risk" | "bcp") => void;
+  statsTab?: "risk" | "bcp" | "shared_assets";
+  onChangeStatsTab?: (tab: "risk" | "bcp" | "shared_assets") => void;
   onSelectBcpSite?: (site: BcpSiteCandidate) => void;
+  onSelectEnterpriseAsset?: (asset: EnterpriseAsset) => void;
   onSelectWardFilter?: (ward: string) => void;
   onOpenSafety: () => void;
   onOpenReports: () => void;
 }
 
 export function RiskStatsDrawer({
+  userRole,
+  userUid,
+  organizationName = "",
   selectedWard,
   selectedMeshcode,
   includeSamples,
@@ -102,16 +113,24 @@ export function RiskStatsDrawer({
   statsTab: controlledStatsTab,
   onChangeStatsTab,
   onSelectBcpSite,
+  onSelectEnterpriseAsset,
   onSelectWardFilter,
   onOpenSafety,
   onOpenReports,
 }: RiskStatsDrawerProps) {
-  const [internalTab, setInternalTab] = useState<"risk" | "bcp">("risk");
-  const activeTab = controlledStatsTab ?? internalTab;
-  const setActiveTab = (next: "risk" | "bcp") => {
+  const [internalTab, setInternalTab] = useState<"risk" | "bcp" | "shared_assets">("risk");
+  const rawTab = controlledStatsTab ?? internalTab;
+  const activeTab: "risk" | "bcp" | "shared_assets" =
+    rawTab === "bcp" && userRole !== "enterprise"
+      ? "risk"
+      : rawTab === "shared_assets" && userRole !== "government"
+        ? "risk"
+        : rawTab;
+  const setActiveTab = (next: "risk" | "bcp" | "shared_assets") => {
     setInternalTab(next);
     onChangeStatsTab?.(next);
   };
+  const [exportErr, setExportErr] = useState<string | null>(null);
 
   const [r8Query, setR8Query] = useState("");
   const [r8Data, setR8Data] = useState<R8SeismicListResponse | null>(null);
@@ -123,7 +142,7 @@ export function RiskStatsDrawer({
   const [bcpLoading, setBcpLoading] = useState(false);
 
   useEffect(() => {
-    if (activeTab !== "bcp") return;
+    if (activeTab !== "bcp" || userRole !== "enterprise") return;
     let cancelled = false;
     getEnterpriseSafeSites({
       ward: selectedWard,
@@ -143,7 +162,7 @@ export function RiskStatsDrawer({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, selectedWard, bcpPurpose, bcpAvoidMountain]);
+  }, [activeTab, userRole, selectedWard, bcpPurpose, bcpAvoidMountain]);
 
   useEffect(() => {
     let cancelled = false;
@@ -181,71 +200,150 @@ export function RiskStatsDrawer({
 
   return (
     <div className="space-y-4 p-4 text-sm text-slate-200">
-      {/* Header + Export */}
+      {/* Header + Authenticated Role-Scoped Export */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 font-bold text-white">
           <BarChart3 className="h-5 w-5 text-sky-400" />
           <span>災害統計・建物リスク分析</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <a
-            href={buildDisasterCsvUrl({
-              scope: "overview",
-              ward: selectedWard,
-              includeSamples,
-            })}
-            download
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-sky-300 hover:border-sky-500/60"
-          >
-            <Download className="h-3.5 w-3.5" /> CSV
-          </a>
-          <a
-            href={buildDisasterXlsxUrl({
-              ward: selectedWard,
-              includeSamples,
-            })}
-            download
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-emerald-300 hover:border-emerald-500/60"
-          >
-            <FileSpreadsheet className="h-3.5 w-3.5" /> Excel
-          </a>
+          {userRole === "government" && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setExportErr(null);
+                  void downloadAuthenticatedFile(
+                    buildDisasterCsvUrl({
+                      scope: "overview",
+                      ward: selectedWard,
+                      includeSamples,
+                    }),
+                    "quakelens_kyoto_overview.csv"
+                  ).catch((err) =>
+                    setExportErr(err instanceof Error ? err.message : "CSV出力失敗")
+                  );
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-sky-300 hover:border-sky-500/60"
+              >
+                <Download className="h-3.5 w-3.5" /> CSV
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setExportErr(null);
+                  void downloadAuthenticatedFile(
+                    buildDisasterXlsxUrl({
+                      ward: selectedWard,
+                      includeSamples,
+                    }),
+                    "quakelens_kyoto_summary.xlsx"
+                  ).catch((err) =>
+                    setExportErr(err instanceof Error ? err.message : "Excel出力失敗")
+                  );
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-emerald-300 hover:border-emerald-500/60"
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5" /> Excel
+              </button>
+            </>
+          )}
+          {userRole === "enterprise" && (
+            <button
+              type="button"
+              onClick={() => {
+                setExportErr(null);
+                void downloadAuthenticatedFile(
+                  buildDisasterCsvUrl({
+                    scope: "wards",
+                    ward: selectedWard,
+                    includeSamples,
+                  }),
+                  "quakelens_kyoto_wards.csv"
+                ).catch((err) =>
+                  setExportErr(err instanceof Error ? err.message : "CSV出力失敗")
+                );
+              }}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-sky-300 hover:border-sky-500/60"
+            >
+              <Download className="h-3.5 w-3.5" /> 区別集計CSV
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Mode Switcher: Risk+R8 Unlisted vs Enterprise BCP Safe Site Selection */}
-      <div className="grid grid-cols-2 gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1 text-[11px]">
-        <button
-          type="button"
-          data-testid="stats-tab-risk"
-          onClick={() => setActiveTab("risk")}
-          className={`inline-flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
-            activeTab === "risk"
-              ? "bg-slate-800 text-sky-200 shadow"
-              : "text-slate-400 hover:text-slate-200"
-          }`}
-        >
-          <BarChart3 className="h-3.5 w-3.5" />
-          <span>建物リスク・R8未掲載</span>
-        </button>
-        <button
-          type="button"
-          data-testid="stats-tab-bcp"
-          onClick={() => {
-            setBcpLoading(true);
-            setActiveTab("bcp");
-          }}
-          className={`inline-flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
-            activeTab === "bcp"
-              ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 shadow"
-              : "text-slate-400 hover:text-slate-200"
-          }`}
-        >
-          <Server className="h-3.5 w-3.5" />
-          <span>企業BCP安全立地</span>
-        </button>
-      </div>
+      {exportErr && (
+        <div className="rounded-lg border border-rose-500/40 bg-rose-950/40 px-2.5 py-1.5 text-[11px] text-rose-200">
+          {exportErr}
+        </div>
+      )}
 
-      {activeTab === "bcp" && (
+      {/* Role-scoped Sub-Tab Switcher */}
+      {(userRole === "enterprise" || userRole === "government") && (
+        <div className="grid grid-cols-2 gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1 text-[11px]">
+          <button
+            type="button"
+            data-testid="stats-tab-risk"
+            onClick={() => setActiveTab("risk")}
+            className={`inline-flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
+              activeTab === "risk"
+                ? "bg-slate-800 text-sky-200 shadow"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            <span>建物リスク・R8比較</span>
+          </button>
+          {userRole === "enterprise" && (
+            <button
+              type="button"
+              data-testid="stats-tab-bcp"
+              onClick={() => {
+                setBcpLoading(true);
+                setActiveTab("bcp");
+              }}
+              className={`inline-flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
+                activeTab === "bcp"
+                  ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 shadow"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <Server className="h-3.5 w-3.5" />
+              <span>企業BCP安全立地</span>
+            </button>
+          )}
+          {userRole === "government" && (
+            <button
+              type="button"
+              data-testid="stats-tab-shared-assets"
+              onClick={() => setActiveTab("shared_assets")}
+              className={`inline-flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
+                activeTab === "shared_assets"
+                  ? "bg-amber-500/20 text-amber-200 border border-amber-500/40 shadow"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <Building2 className="h-3.5 w-3.5" />
+              <span>連携許可・企業拠点</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {userRole === "government" && activeTab === "shared_assets" && (
+        <EnterpriseAssetsPanel
+          userUid={userUid}
+          userRole="government"
+          organizationName={organizationName}
+          pickedCoords={null}
+          pickActive={false}
+          onRequestMapPick={() => {}}
+          onCancelMapPick={() => {}}
+          onFocusAsset={(asset) => onSelectEnterpriseAsset?.(asset)}
+        />
+      )}
+
+      {userRole === "enterprise" && activeTab === "bcp" && (
         <div className="space-y-3" data-testid="enterprise-bcp-panel">
           <div className="rounded-xl border border-emerald-500/40 bg-emerald-950/25 p-3 text-xs space-y-2">
             <div className="flex items-start justify-between gap-2">

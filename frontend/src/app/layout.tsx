@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Noto_Sans_JP, JetBrains_Mono } from "next/font/google";
+import { AuthProvider } from "@/contexts/AuthContext";
 import "./globals.css";
 
 const notoSansJp = Noto_Sans_JP({
@@ -30,7 +31,7 @@ export default function RootLayout({
       className={`${notoSansJp.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
       <body className="h-full overflow-hidden bg-slate-950 text-slate-100 font-sans">
-        {children}
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );

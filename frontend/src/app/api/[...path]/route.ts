@@ -17,6 +17,8 @@ async function forwardProxyRequest(
   if (contentTypeIn) {
     forwardHeaders["Content-Type"] = contentTypeIn;
   }
+  const authHeader = req.headers.get("authorization");
+  if (authHeader) forwardHeaders["Authorization"] = authHeader;
   const geminiKey = req.headers.get("x-gemini-api-key");
   if (geminiKey) forwardHeaders["X-Gemini-Api-Key"] = geminiKey;
   const accessCode = req.headers.get("x-ai-access-code");

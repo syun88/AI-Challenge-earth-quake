@@ -39,11 +39,13 @@ import {
   RouteSimulationResponse,
   ShelterHub,
   SnappedRoadInfo,
+  UserRole,
 } from "@/types/quakelens";
 
 export type NavMode = "evacuate" | "rescue" | "custom";
 
 interface NavigationPanelProps {
+  userRole: UserRole;
   reports: DamageReport[];
   networkStatus: NetworkStatusResponse | null;
   routeResult: RouteSimulationResponse | null;
@@ -71,6 +73,7 @@ interface NavigationPanelProps {
 }
 
 export function NavigationPanel({
+  userRole,
   reports,
   networkStatus,
   routeResult,
@@ -93,13 +96,22 @@ export function NavigationPanel({
   onRoadClosuresChanged,
   onFocusMap,
 }: NavigationPanelProps) {
-  const [navMode, setNavMode] = useState<NavMode>(
-    routeResult?.mode === "rescue"
+  const canRescue = userRole === "government";
+  const canCustom = userRole === "government" || userRole === "enterprise";
+  const [selectedNavMode, setSelectedNavMode] = useState<NavMode>(
+    routeResult?.mode === "rescue" && canRescue
       ? "rescue"
-      : routeResult?.mode === "custom"
+      : routeResult?.mode === "custom" && canCustom
         ? "custom"
         : "evacuate"
   );
+  const navMode: NavMode =
+    selectedNavMode === "rescue" && !canRescue
+      ? "evacuate"
+      : selectedNavMode === "custom" && !canCustom
+        ? "evacuate"
+        : selectedNavMode;
+  const setNavMode = setSelectedNavMode;
   const [nodes, setNodes] = useState<RouteNode[]>([]);
   const [originId, setOriginId] = useState("takeda_st");
   const [destinationId, setDestinationId] = useState("chushojima");
@@ -516,8 +528,16 @@ export function NavigationPanel({
         )}
       </div>
 
-      {/* Mode Selector Tabs */}
-      <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-slate-800 bg-slate-950/80 p-1">
+      {/* Mode Selector Tabs (role-filtered) */}
+      <div
+        className={`grid gap-1.5 rounded-xl border border-slate-800 bg-slate-950/80 p-1 ${
+          canRescue && canCustom
+            ? "grid-cols-3"
+            : canCustom
+              ? "grid-cols-2"
+              : "grid-cols-1"
+        }`}
+      >
         <button
           type="button"
           data-testid="nav-mode-evacuate"
@@ -531,32 +551,36 @@ export function NavigationPanel({
           <Tent className="h-3.5 w-3.5" />
           <span>避難所へ</span>
         </button>
-        <button
-          type="button"
-          data-testid="nav-mode-rescue"
-          onClick={() => setNavMode("rescue")}
-          className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition ${
-            navMode === "rescue"
-              ? "bg-emerald-500 text-slate-950 shadow-sm"
-              : "text-slate-300 hover:bg-slate-800/80"
-          }`}
-        >
-          <Ambulance className="h-3.5 w-3.5" />
-          <span>救援出動</span>
-        </button>
-        <button
-          type="button"
-          data-testid="nav-mode-custom"
-          onClick={() => setNavMode("custom")}
-          className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition ${
-            navMode === "custom"
-              ? "bg-purple-500 text-white shadow-sm"
-              : "text-slate-300 hover:bg-slate-800/80"
-          }`}
-        >
-          <RouteIcon className="h-3.5 w-3.5" />
-          <span>2拠点比較</span>
-        </button>
+        {canRescue && (
+          <button
+            type="button"
+            data-testid="nav-mode-rescue"
+            onClick={() => setNavMode("rescue")}
+            className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition ${
+              navMode === "rescue"
+                ? "bg-emerald-500 text-slate-950 shadow-sm"
+                : "text-slate-300 hover:bg-slate-800/80"
+            }`}
+          >
+            <Ambulance className="h-3.5 w-3.5" />
+            <span>救援出動</span>
+          </button>
+        )}
+        {canCustom && (
+          <button
+            type="button"
+            data-testid="nav-mode-custom"
+            onClick={() => setNavMode("custom")}
+            className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition ${
+              navMode === "custom"
+                ? "bg-purple-500 text-white shadow-sm"
+                : "text-slate-300 hover:bg-slate-800/80"
+            }`}
+          >
+            <RouteIcon className="h-3.5 w-3.5" />
+            <span>2拠点比較</span>
+          </button>
+        )}
       </div>
 
       {/* Global Avoidance Toggle */}
@@ -640,8 +664,8 @@ export function NavigationPanel({
         </div>
       )}
 
-      {/* Mode 2: Shelter-to-Incident Rescue Dispatch */}
-      {navMode === "rescue" && (
+      {/* Mode 2: Shelter-to-Incident Rescue Dispatch (Government Only) */}
+      {canRescue && navMode === "rescue" && (
         <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3.5">
           <div className="text-xs font-semibold text-emerald-300">
             避難・支援拠点 → 要救助・倒壊現場への救援ルート
@@ -737,8 +761,8 @@ export function NavigationPanel({
         </div>
       )}
 
-      {/* Mode 3: Custom Origin-Destination Comparison */}
-      {navMode === "custom" && (
+      {/* Mode 3: Custom Origin-Destination Comparison (Government & Enterprise) */}
+      {canCustom && navMode === "custom" && (
         <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3.5">
           <div className="flex flex-wrap gap-1.5">
             <button

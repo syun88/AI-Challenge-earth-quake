@@ -12,6 +12,8 @@ frontend/out/
 # Environment / secrets
 .env
 *.env.local
+*firebase-service-account*.json
+backend/secrets/
 
 # Raw/cached large downloads (reproducible via script)
 backend/data/raw/

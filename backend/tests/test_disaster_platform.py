@@ -19,6 +19,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from app import main as main_mod  # noqa: E402
 from app.ai_assistant import ask_quakelens_ai  # noqa: E402
+from app.auth import AuthProfileStore  # noqa: E402
 from app.board_store import DisasterBoardStore  # noqa: E402
 from app.data_store import QuakeLensDataStore  # noqa: E402
 from app.grounding import verify_grounded_response  # noqa: E402
@@ -166,14 +167,57 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     }
     s_store.loaded = True
 
+    a_store = AuthProfileStore(db_path=db_file)
+    a_store.ensure_initialized()
+    monkeypatch.setenv("GOV_REGISTRATION_CODE", "kyoto-gov-2026-test")
     monkeypatch.setattr(main_mod, "store", s_store)
     monkeypatch.setattr(main_mod, "board_store", b_store)
     monkeypatch.setattr(main_mod, "reports_store", r_store)
-    return TestClient(main_mod.app), s_store, b_store, r_store
+    monkeypatch.setattr(main_mod, "auth_profile_store", a_store)
+    monkeypatch.setattr("app.auth.auth_profile_store", a_store)
+
+    a_store.register_or_update_profile(
+        uid="uid-gov",
+        email="gov@example.go.jp",
+        display_name="政府機関担当",
+        role="government",
+        organization_name="京都市防災室",
+        gov_code="kyoto-gov-2026-test",
+    )
+    a_store.register_or_update_profile(
+        uid="uid-cit",
+        email="cit@example.com",
+        display_name="一般市民テスト",
+        role="citizen",
+    )
+    a_store.register_or_update_profile(
+        uid="uid-ent",
+        email="ent@example.co.jp",
+        display_name="企業担当テスト",
+        role="enterprise",
+        organization_name="京都BCP株式会社",
+    )
+
+    def _fake_verify(token: str) -> dict[str, object]:
+        mapping = {
+            "tok-gov": {"sub": "uid-gov", "email": "gov@example.go.jp", "email_verified": True},
+            "tok-cit": {"sub": "uid-cit", "email": "cit@example.com", "email_verified": True},
+            "tok-ent": {"sub": "uid-ent", "email": "ent@example.co.jp", "email_verified": True},
+        }
+        if token in mapping:
+            return mapping[token]
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=401, detail="invalid test token")
+
+    monkeypatch.setattr("app.auth.verify_firebase_id_token", _fake_verify)
+    client = TestClient(main_mod.app, headers={"Authorization": "Bearer tok-gov"})
+    return client, s_store, b_store, r_store
 
 
 def test_board_update_privacy_consent_and_aggregation(isolated_env) -> None:
     client, _, _, _ = isolated_env
+    client.headers.update({"Authorization": "Bearer tok-cit"})
 
     # Create without location consent -> meshcode must be stripped and not stored
     r_no_consent = client.post(
@@ -238,6 +282,7 @@ def test_board_update_privacy_consent_and_aggregation(isolated_env) -> None:
 
 def test_damage_reports_validation_duplicates_corroboration_and_lifecycle(isolated_env) -> None:
     client, _, _, _ = isolated_env
+    client.headers.update({"Authorization": "Bearer tok-cit"})
 
     # Coordinates without explicit consent must be rejected (400)
     r_no_consent = client.post(
@@ -913,6 +958,7 @@ def test_r8_seismic_list_and_unlisted_priority(isolated_env) -> None:
 def test_enterprise_bcp_safe_sites_and_r8_integration(isolated_env) -> None:
     """Enterprise BCP safe-site recommendation ranks Kyoto wards and 250m meshes using J-SHIS + R8 list."""
     client, s_store, _, _ = isolated_env
+    client.headers.update({"Authorization": "Bearer tok-ent"})
     r = client.get("/api/enterprise/safe-sites?purpose=datacenter_server&avoid_mountain=true&limit=5")
     assert r.status_code == 200
     data = r.json()
@@ -947,6 +993,7 @@ def test_enterprise_bcp_safe_sites_and_r8_integration(isolated_env) -> None:
         s_store,
         "recommend_enterprise_bcp_sites",
         {"ward": "all", "purpose": "datacenter_server", "avoid_mountain": True, "limit": 3},
+        user_role="enterprise",
     )
     assert len(t_bcp["recommendations"]) >= 1
     actions = ai_assistant._extract_map_actions("recommend_enterprise_bcp_sites", t_bcp)

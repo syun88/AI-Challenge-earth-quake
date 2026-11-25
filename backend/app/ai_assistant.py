@@ -25,6 +25,66 @@ from app.route_sim import ARTERIAL_NODES, simulate_alternative_route
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 ALLOWED_MODELS = {"gemini-3.5-flash-lite", "gemini-4-hydrogen", "gemini-4-argon"}
 
+COMMON_TOOL_NAMES: frozenset[str] = frozenset({
+    "get_area_statistics",
+    "compare_wards",
+    "get_priority_confirmation_areas",
+    "get_mesh_details",
+    "get_building_details",
+    "get_recent_earthquakes_summary",
+    "get_data_methodology_and_programs",
+    "get_disaster_board_summary",
+    "get_damage_reports_summary",
+    "recommend_evacuation_shelters",
+    "get_kyoto_disaster_updates_and_history",
+})
+
+ROLE_ALLOWED_TOOLS: dict[str, frozenset[str]] = {
+    "citizen": COMMON_TOOL_NAMES,
+    "enterprise": COMMON_TOOL_NAMES
+    | frozenset({
+        "recommend_enterprise_bcp_sites",
+        "simulate_alternative_route",
+        "get_r8_seismic_unlisted_priority",
+    }),
+    "government": COMMON_TOOL_NAMES
+    | frozenset({
+        "prepare_disaster_export",
+        "simulate_alternative_route",
+        "get_r8_seismic_unlisted_priority",
+    }),
+}
+
+
+def get_allowed_tool_names(user_role: str) -> frozenset[str]:
+    return ROLE_ALLOWED_TOOLS.get(user_role, COMMON_TOOL_NAMES)
+
+
+def get_tools_for_role(user_role: str) -> list[dict[str, Any]]:
+    allowed = get_allowed_tool_names(user_role)
+    return [t for t in TOOLS if t.get("name") in allowed]
+
+
+def _build_system_instruction(user_role: str) -> str:
+    if user_role == "government":
+        role_note = (
+            "【現在の利用者区分：政府関連機関】\n"
+            "あなたは自治体・消防・防災対策本部の担当者を支援しています。市民・企業からの全通報（救助要請詳細含む）、R8市有建築物耐震リスト、CSV/Excel一括出力ツールを活用して状況分析を行ってください。"
+        )
+    elif user_role == "enterprise":
+        role_note = (
+            "【現在の利用者区分：企業（BCP・施設防災担当）】\n"
+            "あなたは企業利用者を支援しています。共通の被害建物・通行止め道路・地震ハザード・避難情報に加え、企業BCP安全立地診断や2拠点迂回経路を利用できます。"
+            "ただし、他者の個別救助通報や一般市民の非公開通報詳細、他社の非公開拠点情報は一切参照・回答できません。"
+        )
+    else:
+        role_note = (
+            "【現在の利用者区分：一般市民】\n"
+            "あなたは一般市民の避難・安全確保を支援しています。指定緊急避難場所、避難ルート、公開されている被害建物・通行止め道路・地震ハザード・安否集計について案内してください。"
+            "他人の通報詳細・救助要請の個人情報や、企業向けのサーバー室・データセンター等のBCP立地情報はセキュリティ上非公開であり案内しません。"
+        )
+    return f"{SYSTEM_INSTRUCTION}\n\n{role_note}"
+
 SYSTEM_INSTRUCTION = """あなたは「QuakeLens Japan」の統合防災・災害状況分析AIアシスタントです。
 対象地域は京都市全域（Project PLATEAU 2025年度版 + J-SHIS 2024年版地震ハザード・表層地盤V4 + 災害用伝言板 + 被害状況報告）です。
 
@@ -595,8 +655,14 @@ def _execute_tool(
     earthquakes_cache: list[dict[str, Any]] | None = None,
     board_store: DisasterBoardStore | None = None,
     reports_store: DamageReportStore | None = None,
+    user_role: str = "government",
+    user_uid: str | None = None,
 ) -> Any:
     args = args or {}
+    if name not in get_allowed_tool_names(user_role):
+        return {
+            "error": f"現在のアカウント区分（{user_role}）ではツール '{name}' を利用する権限がありません。"
+        }
     if name == "get_area_statistics":
         ward = args.get("ward") or "all"
         usage_group = args.get("usage_group") or "all"
@@ -700,14 +766,22 @@ def _execute_tool(
             include_samples=include_samples,
             store=store,
         )
-        entries = b_store.list_entries(
-            ward=ward,
-            include_samples=include_samples,
-            limit=limit,
-        )
+        if user_role == "government":
+            entries = b_store.list_entries(
+                ward=ward,
+                include_samples=include_samples,
+                limit=limit,
+                viewer_role=user_role,
+                viewer_uid=user_uid,
+            )
+            return {
+                **summary,
+                "recent_entries": entries,
+            }
         return {
             **summary,
-            "recent_entries": entries,
+            "recent_entries": [],
+            "privacy_note": "個人別の安否伝言詳細はプライバシー保護のため非公開（集計値のみ返却）。",
         }
 
     if name == "get_damage_reports_summary":
@@ -722,6 +796,8 @@ def _execute_tool(
             category=category,
             include_samples=include_samples,
             store=store,
+            viewer_role=user_role,
+            viewer_uid=user_uid,
         )
         reports = r_store.list_reports(
             ward=ward,
@@ -730,11 +806,18 @@ def _execute_tool(
             include_samples=include_samples,
             include_resolved=False,
             limit=limit,
+            viewer_role=user_role,
+            viewer_uid=user_uid,
         )
-        return {
+        out_reports = {
             **summary,
             "reports": reports,
         }
+        if user_role != "government":
+            out_reports["visibility_note"] = (
+                "建物被害・道路通行止め・避難所状況など共通公開区分のみを表示し、他者の個別救助要請詳細や投稿者情報は秘匿化しています。"
+            )
+        return out_reports
 
     if name == "prepare_disaster_export":
         b_store = _resolve_board_store(board_store)
@@ -751,7 +834,14 @@ def _execute_tool(
             "category": category,
             "include_samples": "true" if include_samples else "false",
         })
-        r_sum = r_store.summarize_reports(ward=ward, category=category, include_samples=include_samples, store=store)
+        r_sum = r_store.summarize_reports(
+            ward=ward,
+            category=category,
+            include_samples=include_samples,
+            store=store,
+            viewer_role=user_role,
+            viewer_uid=user_uid,
+        )
         b_sum = b_store.summarize_entries(ward=ward, include_samples=include_samples, store=store)
         return {
             "scope": scope,
@@ -800,6 +890,8 @@ def _execute_tool(
             include_samples=True,
             include_resolved=False,
             limit=300,
+            viewer_role=user_role,
+            viewer_uid=user_uid,
         )
         res = recommend_shelters(
             lat=float(lat) if lat is not None else None,
@@ -942,6 +1034,8 @@ def _build_unconfigured_fallback(
     context: dict[str, Any] | None,
     board_store: DisasterBoardStore | None = None,
     reports_store: DamageReportStore | None = None,
+    user_role: str = "government",
+    user_uid: str | None = None,
 ) -> dict[str, Any]:
     """Return real backend tool results + transparent setup notice when no Gemini API key is configured."""
     ctx = context or {}
@@ -964,7 +1058,7 @@ def _build_unconfigured_fallback(
 
     if building_id:
         b_args = {"building_id": building_id}
-        b = _execute_tool(store, "get_building_details", b_args, board_store=board_store, reports_store=reports_store)
+        b = _execute_tool(store, "get_building_details", b_args, board_store=board_store, reports_store=reports_store, user_role=user_role, user_uid=user_uid)
         tool_records.append({"name": "get_building_details", "arguments": b_args, "result": b})
         tool_trace.append({
             "name": "get_building_details",
@@ -982,7 +1076,7 @@ def _build_unconfigured_fallback(
             )
     elif meshcode:
         m_args = {"meshcode": meshcode}
-        m = _execute_tool(store, "get_mesh_details", m_args, board_store=board_store, reports_store=reports_store)
+        m = _execute_tool(store, "get_mesh_details", m_args, board_store=board_store, reports_store=reports_store, user_role=user_role, user_uid=user_uid)
         tool_records.append({"name": "get_mesh_details", "arguments": m_args, "result": m})
         tool_trace.append({
             "name": "get_mesh_details",
@@ -1007,7 +1101,7 @@ def _build_unconfigured_fallback(
     if hazard_tiers and len(hazard_tiers) < 5:
         stats_args["hazard_tiers"] = hazard_tiers
 
-    stats = _execute_tool(store, "get_area_statistics", stats_args, board_store=board_store, reports_store=reports_store)
+    stats = _execute_tool(store, "get_area_statistics", stats_args, board_store=board_store, reports_store=reports_store, user_role=user_role, user_uid=user_uid)
     tool_records.append({"name": "get_area_statistics", "arguments": stats_args, "result": stats})
     tool_trace.append({
         "name": "get_area_statistics",
@@ -1044,6 +1138,8 @@ def _build_unconfigured_fallback(
             rep_args,
             board_store=board_store,
             reports_store=reports_store,
+            user_role=user_role,
+            user_uid=user_uid,
         )
         tool_records.append({"name": "get_damage_reports_summary", "arguments": rep_args, "result": rep_res})
         tool_trace.append({
@@ -1070,6 +1166,8 @@ def _build_unconfigured_fallback(
             b_args,
             board_store=board_store,
             reports_store=reports_store,
+            user_role=user_role,
+            user_uid=user_uid,
         )
         tool_records.append({"name": "get_disaster_board_summary", "arguments": b_args, "result": b_res})
         tool_trace.append({
@@ -1085,7 +1183,7 @@ def _build_unconfigured_fallback(
             f"- 区分別: 無事 {sc.get('safe', 0)}件 / 避難所 {sc.get('shelter', 0)}件 / 自宅 {sc.get('home', 0)}件 / 軽傷・支援要 {sc.get('minor_injury', 0)}件 / 連絡待ち {sc.get('waiting', 0)}件"
         )
 
-    if any(k in message for k in ["CSV", "csv", "Excel", "excel", "xlsx", "ダウンロード", "出力"]):
+    if user_role == "government" and any(k in message for k in ["CSV", "csv", "Excel", "excel", "xlsx", "ダウンロード", "出力"]):
         ex_args = {"ward": ward, "scope": "overview"}
         ex_res = _execute_tool(
             store,
@@ -1093,6 +1191,8 @@ def _build_unconfigured_fallback(
             ex_args,
             board_store=board_store,
             reports_store=reports_store,
+            user_role=user_role,
+            user_uid=user_uid,
         )
         tool_records.append({"name": "prepare_disaster_export", "arguments": ex_args, "result": ex_res})
         tool_trace.append({
@@ -1108,7 +1208,7 @@ def _build_unconfigured_fallback(
 
     if any(k in message for k in ["優先", "多い", "エリア", "メッシュ", "ハザード", "どこ"]):
         p_args = {"ward": ward, "limit": 3}
-        p_res = _execute_tool(store, "get_priority_confirmation_areas", p_args, board_store=board_store, reports_store=reports_store)
+        p_res = _execute_tool(store, "get_priority_confirmation_areas", p_args, board_store=board_store, reports_store=reports_store, user_role=user_role, user_uid=user_uid)
         tool_records.append({"name": "get_priority_confirmation_areas", "arguments": p_args, "result": p_res})
         tool_trace.append({
             "name": "get_priority_confirmation_areas",
@@ -1118,7 +1218,7 @@ def _build_unconfigured_fallback(
         actions.extend(_extract_map_actions("get_priority_confirmation_areas", p_res))
 
     if any(k in message for k in ["補助", "診断", "制度"]):
-        prog = _execute_tool(store, "get_data_methodology_and_programs", {}, board_store=board_store, reports_store=reports_store)
+        prog = _execute_tool(store, "get_data_methodology_and_programs", {}, board_store=board_store, reports_store=reports_store, user_role=user_role, user_uid=user_uid)
         tool_records.append({"name": "get_data_methodology_and_programs", "arguments": {}, "result": prog})
         tool_trace.append({
             "name": "get_data_methodology_and_programs",
@@ -1170,6 +1270,8 @@ def ask_quakelens_ai(
     earthquakes_cache: list[dict[str, Any]] | None = None,
     board_store: DisasterBoardStore | None = None,
     reports_store: DamageReportStore | None = None,
+    user_role: str = "government",
+    user_uid: str | None = None,
 ) -> dict[str, Any]:
     """Run Gemini Interactions API with Function Calling against real Kyoto City data."""
     api_key = _resolve_api_key(api_key_override)
@@ -1180,10 +1282,14 @@ def ask_quakelens_ai(
             context,
             board_store=board_store,
             reports_store=reports_store,
+            user_role=user_role,
+            user_uid=user_uid,
         )
 
     chosen_model = _resolve_model(model)
     prompt = _build_contextual_prompt(message, context)
+    role_instruction = _build_system_instruction(user_role)
+    role_tools = get_tools_for_role(user_role)
     client = genai.Client(api_key=api_key, http_options={"timeout": 120000})
     tool_trace: list[dict[str, Any]] = []
     tool_records: list[dict[str, Any]] = []
@@ -1198,8 +1304,8 @@ def ask_quakelens_ai(
         kwargs: dict[str, Any] = {
             "model": chosen_model,
             "input": current_input,
-            "system_instruction": SYSTEM_INSTRUCTION,
-            "tools": TOOLS,
+            "system_instruction": role_instruction,
+            "tools": role_tools,
             "generation_config": gen_cfg,
         }
         if prev_id:
@@ -1227,6 +1333,8 @@ def ask_quakelens_ai(
                     earthquakes_cache=earthquakes_cache,
                     board_store=board_store,
                     reports_store=reports_store,
+                    user_role=user_role,
+                    user_uid=user_uid,
                 )
                 tool_records.append({"name": fn_name, "arguments": fn_args, "result": result_data})
                 summary = _summarize_tool_call(fn_name, fn_args, result_data)
@@ -1279,6 +1387,8 @@ def stream_quakelens_ai(
     earthquakes_cache: list[dict[str, Any]] | None = None,
     board_store: DisasterBoardStore | None = None,
     reports_store: DamageReportStore | None = None,
+    user_role: str = "government",
+    user_uid: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield structured SSE events while streaming Gemini Function Calling and text deltas."""
     api_key = _resolve_api_key(api_key_override)
@@ -1289,6 +1399,8 @@ def stream_quakelens_ai(
             context,
             board_store=board_store,
             reports_store=reports_store,
+            user_role=user_role,
+            user_uid=user_uid,
         )
         for tc in fallback["tool_calls"]:
             yield {"type": "tool_result", **tc}
@@ -1297,6 +1409,8 @@ def stream_quakelens_ai(
 
     chosen_model = _resolve_model(model)
     prompt = _build_contextual_prompt(message, context)
+    role_instruction = _build_system_instruction(user_role)
+    role_tools = get_tools_for_role(user_role)
     client = genai.Client(api_key=api_key, http_options={"timeout": 120000})
 
     tool_trace: list[dict[str, Any]] = []
@@ -1315,8 +1429,8 @@ def stream_quakelens_ai(
         kwargs: dict[str, Any] = {
             "model": chosen_model,
             "input": current_input,
-            "system_instruction": SYSTEM_INSTRUCTION,
-            "tools": TOOLS,
+            "system_instruction": role_instruction,
+            "tools": role_tools,
             "generation_config": gen_cfg,
             "stream": True,
         }
@@ -1473,6 +1587,8 @@ def stream_quakelens_ai(
                 earthquakes_cache=earthquakes_cache,
                 board_store=board_store,
                 reports_store=reports_store,
+                user_role=user_role,
+                user_uid=user_uid,
             )
             tool_records.append({"name": fn_name, "arguments": fn_args, "result": result_data})
             summary = _summarize_tool_call(fn_name, fn_args, result_data)

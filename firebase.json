@@ -1,0 +1,33 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json",
+    "location": "asia-northeast2"
+  },
+  "auth": {
+    "providers": {
+      "emailPassword": true,
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "QuakeLens Japan",
+        "supportEmail": "godpoint880510@gmail.com",
+        "authorizedRedirectUris": [
+          "https://quakelens-kyoto-880510.firebaseapp.com/__/auth/handler",
+          "http://localhost:3000/__/auth/handler"
+        ]
+      }
+    }
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4000
+    },
+    "singleProjectMode": true
+  }
+}

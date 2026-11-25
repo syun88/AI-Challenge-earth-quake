@@ -340,3 +340,92 @@ def recommend_safe_enterprise_sites(
             "比較スクリーニングです。最終的な重要施設（サーバー室・金庫等）の建設時は、敷地ごとのボーリング地質調査・水害/土砂ハザードマップ確認を行ってください。"
         ),
     }
+
+
+def assess_enterprise_assets(
+    store: Any,
+    *,
+    assets: list[dict[str, Any]],
+    public_reports: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Evaluate seismic hazard, nearby road closures/damage, and nearest shelter for confidential corporate assets in-memory (never persisted on server)."""
+    from app.shelter_rec import _lookup_mesh_hazard
+
+    shelter_store.ensure_loaded()
+    shelters = shelter_store.list_shelters()
+    results: list[dict[str, Any]] = []
+
+    for asset in assets[:30]:
+        lat = float(asset["lat"])
+        lon = float(asset["lon"])
+        asset_type = str(asset.get("asset_type") or "server_room")
+        purpose = (
+            "datacenter_server"
+            if asset_type in {"server_room", "datacenter", "vault"}
+            else "bcp_hq"
+            if asset_type == "bcp_hq"
+            else "logistics_storage"
+        )
+
+        hazard = _lookup_mesh_hazard(lat, lon, store)
+        safety_score: float | None = None
+        if hazard and hazard.get("t30_i55_ps") is not None and hazard.get("arv") is not None:
+            tot_b = int(hazard.get("pre_1981_count") or 0)
+            pre81_share = float(hazard.get("pre_1981_share_known") or 0.0)
+            safety_score = _compute_mesh_safety_score(
+                t30_i55=float(hazard["t30_i55_ps"]),
+                arv=float(hazard["arv"]),
+                avs=None,
+                pre81_share=pre81_share,
+                wooden_pre81=min(tot_b, 40),
+                jname=str(hazard.get("jname") or "不明"),
+                r8_ward_safe_rate=0.85,
+                purpose=purpose,
+            )
+
+        nearby_blocked = 0
+        nearby_building_damage = 0
+        for rep in public_reports:
+            if rep.get("resolved") or rep.get("lat") is None or rep.get("lon") is None:
+                continue
+            d_km = _dist_km(lon, lat, float(rep["lon"]), float(rep["lat"]))
+            if d_km <= 0.6:
+                if rep.get("category") == "road_blocked":
+                    nearby_blocked += 1
+                elif rep.get("category") == "building_damage":
+                    nearby_building_damage += 1
+
+        nearest_sh: dict[str, Any] | None = None
+        best_d = 999.0
+        for s in shelters:
+            d = _dist_km(lon, lat, float(s["lon"]), float(s["lat"]))
+            if d < best_d:
+                best_d = d
+                nearest_sh = {
+                    "id": s["id"],
+                    "name": s["name"],
+                    "ward": s["ward"],
+                    "distance_km": round(d, 2),
+                    "is_wide_area": s["is_wide_area"],
+                }
+
+        alerts: list[str] = []
+        if nearby_blocked > 0:
+            alerts.append(f"半径600m以内に通行止め報告 {nearby_blocked}件（アクセス・保守車両迂回注意）")
+        if nearby_building_damage > 0:
+            alerts.append(f"半径600m以内に建物損傷報告 {nearby_building_damage}件（周辺延焼・倒壊注意）")
+        if hazard and hazard.get("hazard_tier") in {"very_high", "elevated"}:
+            alerts.append(f"30年震度6弱+確率が高い区分（{hazard.get('hazard_label')}）のため免震・非常電源強化推奨")
+
+        results.append({
+            "id": str(asset.get("id") or ""),
+            "safety_score": safety_score,
+            "hazard": hazard,
+            "nearby_road_closures_600m": nearby_blocked,
+            "nearby_building_damage_600m": nearby_building_damage,
+            "nearest_official_shelter": nearest_sh,
+            "alerts": alerts,
+        })
+
+    return results
+

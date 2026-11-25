@@ -1177,6 +1177,28 @@ def simulate_navigation(
         start_clear = _ROAD_NET.snap_point(o_lat, o_lon, blocked_ids, prefer_clear=True)
         start_base = _ROAD_NET.snap_point(o_lat, o_lon, None, prefer_clear=False)
 
+        if target_lat is not None and target_lon is not None:
+            t_lat, t_lon = float(target_lat), float(target_lon)
+            g_clear = _ROAD_NET.snap_point(t_lat, t_lon, blocked_ids, prefer_clear=True)
+            g_base = _ROAD_NET.snap_point(t_lat, t_lon, None, prefer_clear=False)
+            baseline = _ROAD_NET.route_between(start_base, g_base, set())
+            alternative = _ROAD_NET.route_between(start_clear, g_clear, blocked_ids)
+            dest_meta = {
+                "id": "official_shelter_target",
+                "name": "指定避難場所（個別経路）",
+                "ward": "京都市",
+                "lon": t_lon,
+                "lat": t_lat,
+            }
+            return _build_nav_response(
+                mode="evacuate",
+                origin_meta=origin_meta,
+                dest_meta=dest_meta,
+                baseline=baseline,
+                alternative=alternative,
+                evaluated_net=ev,
+            )
+
         candidate_hubs = [h for h in ev["hubs"] if h["hub_status"] != "restricted"] or ev["hubs"]
         # Evaluate top 4 closest hubs by crow-fly first, running A* on all 4 to pick true road shortest
         ranked_hubs = sorted(

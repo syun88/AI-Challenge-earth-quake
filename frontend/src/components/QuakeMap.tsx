@@ -9,12 +9,13 @@ import {
   REPORT_CATEGORY_META,
   VERIFICATION_META,
 } from "@/lib/colors";
-import { API_BASE, getBuildingsCountInBbox, getRoadsInBbox } from "@/lib/api";
+import { API_BASE, getBuildingsCountInBbox, getRoadsInBbox, getSyncAuthToken } from "@/lib/api";
 import {
   AgeCategory,
   BoardSummaryResponse,
   DamageReport,
   EarthquakeEvent,
+  EnterpriseAsset,
   HazardTier,
   LocationSearchResult,
   Map3DMode,
@@ -35,7 +36,8 @@ export type MapPickMode =
   | "evacuate"
   | "rescue"
   | "road_block"
-  | "shelter_origin";
+  | "shelter_origin"
+  | "enterprise_asset";
 export type VisualPreset = "crisis" | "risk";
 
 export interface PickedMapTarget {
@@ -104,6 +106,8 @@ interface QuakeMapProps {
   showOfficialShelters: boolean;
   officialShelters: OfficialShelter[];
   recommendedShelters: ShelterRecommendationItem[];
+  enterpriseAssets?: EnterpriseAsset[];
+  onSelectEnterpriseAsset?: (asset: EnterpriseAsset) => void;
   map3DMode: Map3DMode;
   onChangeMap3DMode?: (mode: Map3DMode) => void;
   onPitch3DChange?: (active: boolean) => void;
@@ -191,6 +195,8 @@ export function QuakeMap({
   showOfficialShelters,
   officialShelters,
   recommendedShelters,
+  enterpriseAssets = [],
+  onSelectEnterpriseAsset,
   map3DMode,
   onChangeMap3DMode,
   onPitch3DChange,
@@ -392,6 +398,7 @@ export function QuakeMap({
   const pickMarkerRef = useRef<maplibregl.Marker | null>(null);
   const highlightMarkerRef = useRef<maplibregl.Marker | null>(null);
   const corridorStartMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const enterpriseAssetMarkersRef = useRef<maplibregl.Marker[]>([]);
 
   const syncBuilding3DLayers = useCallback((map: maplibregl.Map) => {
     if (!map.getLayer("buildings-fill") || !map.getLayer("buildings-3d")) return;
@@ -507,6 +514,18 @@ export function QuakeMap({
         minZoom: 4.5,
         maxZoom: 19,
         maxPitch: 65,
+        transformRequest: (url) => {
+          if (url.includes("/api/")) {
+            const token = getSyncAuthToken();
+            if (token) {
+              return {
+                url,
+                headers: { Authorization: `Bearer ${token}` },
+              };
+            }
+          }
+          return { url };
+        },
       });
     } catch (err) {
       const msg =
@@ -2116,6 +2135,46 @@ export function QuakeMap({
     };
   }, [boardSummary, showSafetyLayer, selectedWard, mapReady]);
 
+  // Confidential Enterprise Assets Markers (rendered ONLY for owning Enterprise or Gov shared)
+  useEffect(() => {
+    const map = mapRef.current;
+    enterpriseAssetMarkersRef.current.forEach((m) => m.remove());
+    enterpriseAssetMarkersRef.current = [];
+    if (!map || !mapReady || !enterpriseAssets || enterpriseAssets.length === 0) return;
+
+    for (const asset of enterpriseAssets) {
+      if (!Number.isFinite(asset.lat) || !Number.isFinite(asset.lon)) continue;
+      if (selectedWard !== "all" && asset.wardName && asset.wardName !== selectedWard) continue;
+
+      const isGovShared = asset.confidentialityLevel === "gov_emergency_share";
+      const el = document.createElement("button");
+      el.type = "button";
+      el.title = `[${isGovShared ? "政府連携共有" : "自社完全秘匿"}] ${asset.name}`;
+      el.className = `flex items-center gap-1 rounded-lg border-2 px-2 py-0.5 text-[10px] font-bold shadow-xl transition hover:scale-105 cursor-pointer ${
+        isGovShared
+          ? "border-amber-300 bg-amber-950/95 text-amber-100"
+          : "border-emerald-300 bg-emerald-950/95 text-emerald-100"
+      }`;
+      el.innerHTML = `<span class="inline-block h-2 w-2 rounded-full ${
+        isGovShared ? "bg-amber-400" : "bg-emerald-400"
+      }"></span><span>${asset.name}</span>`;
+      el.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        onSelectEnterpriseAsset?.(asset);
+      });
+
+      const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })
+        .setLngLat([asset.lon, asset.lat])
+        .addTo(map);
+      enterpriseAssetMarkersRef.current.push(marker);
+    }
+
+    return () => {
+      enterpriseAssetMarkersRef.current.forEach((m) => m.remove());
+      enterpriseAssetMarkersRef.current = [];
+    };
+  }, [enterpriseAssets, selectedWard, mapReady, onSelectEnterpriseAsset]);
+
   // Highlighted Selected Building / Facility Beacon (pulsing radar ring + floating callout)
   useEffect(() => {
     const map = mapRef.current;
@@ -2528,7 +2587,9 @@ export function QuakeMap({
             ? "地図上の現在地（出発地点）をクリックすると最寄り避難所へのルートを表示します"
             : mapPickMode === "rescue"
               ? "地図上の救助・支援先をクリックすると最寄り拠点からの救援ルートを表示します"
-              : null;
+              : mapPickMode === "enterprise_asset"
+                ? "地図上の企業重要拠点（サーバー室・DC等）の位置をクリックして座標を取得してください"
+                : null;
 
   return (
     <div className="relative h-full w-full bg-slate-950">

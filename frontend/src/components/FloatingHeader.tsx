@@ -9,12 +9,17 @@ import {
   Compass,
   Database,
   Layers,
+  LogOut,
   Map as MapIcon,
   MessageSquareHeart,
+  Server,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Star,
 } from "lucide-react";
+import { ROLE_META } from "@/lib/firebase";
+import { UserRole } from "@/types/quakelens";
 
 export type WorkspacePanel =
   | "none"
@@ -24,7 +29,8 @@ export type WorkspacePanel =
   | "updates"
   | "nav"
   | "ai"
-  | "stats";
+  | "stats"
+  | "assets";
 
 interface FloatingHeaderProps {
   activePanel: WorkspacePanel;
@@ -32,6 +38,9 @@ interface FloatingHeaderProps {
   wards: string[];
   selectedWard: string;
   onSelectWard: (ward: string) => void;
+  favoriteWard?: string | null;
+  onToggleSaveFavoriteWard?: () => void;
+  savingFavoriteWard?: boolean;
   displayOpen: boolean;
   onToggleDisplay: () => void;
   onOpenSources: () => void;
@@ -40,6 +49,11 @@ interface FloatingHeaderProps {
   blockedRoadCount: number;
   hasActiveRoute: boolean;
   geminiConfigured: boolean;
+  userRole: UserRole;
+  userDisplayName: string;
+  organizationName?: string;
+  enterpriseAssetCount?: number;
+  onLogout: () => void;
 }
 
 export function FloatingHeader({
@@ -48,6 +62,9 @@ export function FloatingHeader({
   wards,
   selectedWard,
   onSelectWard,
+  favoriteWard = null,
+  onToggleSaveFavoriteWard,
+  savingFavoriteWard = false,
   displayOpen,
   onToggleDisplay,
   onOpenSources,
@@ -56,10 +73,28 @@ export function FloatingHeader({
   blockedRoadCount,
   hasActiveRoute,
   geminiConfigured,
+  userRole,
+  userDisplayName,
+  organizationName,
+  enterpriseAssetCount = 0,
+  onLogout,
 }: FloatingHeaderProps) {
   const toggle = (panel: WorkspacePanel) => {
     onTogglePanel(activePanel === panel ? "none" : panel);
   };
+  const roleMeta = ROLE_META[userRole];
+  const navLabel =
+    userRole === "government"
+      ? "避難・救援ナビ"
+      : userRole === "enterprise"
+        ? "避難・BCP迂回"
+        : "避難ナビ";
+  const statsLabel =
+    userRole === "government"
+      ? "被害統計・管理"
+      : userRole === "enterprise"
+        ? "BCP・統計"
+        : "ハザード統計";
 
   return (
     <>
@@ -102,6 +137,35 @@ export function FloatingHeader({
               </option>
             ))}
           </select>
+
+          {onToggleSaveFavoriteWard && (
+            <button
+              type="button"
+              data-testid="favorite-ward-button"
+              disabled={savingFavoriteWard}
+              onClick={onToggleSaveFavoriteWard}
+              title={
+                favoriteWard === selectedWard
+                  ? "保存済みのお気に入り地域（クリックで解除）"
+                  : "現在選択中の地域を初期表示として保存"
+              }
+              aria-label="お気に入り地域を保存"
+              className={`flex items-center gap-1 rounded-xl border px-2 py-1.5 text-[11px] font-semibold transition disabled:opacity-50 ${
+                favoriteWard === selectedWard
+                  ? "border-amber-400/60 bg-amber-500/20 text-amber-200"
+                  : "border-slate-700/80 bg-slate-950/80 text-slate-300 hover:border-slate-500 hover:text-white"
+              }`}
+            >
+              <Star
+                className={`h-3.5 w-3.5 ${
+                  favoriteWard === selectedWard ? "fill-amber-400 text-amber-400" : ""
+                }`}
+              />
+              <span className="hidden xl:inline">
+                {favoriteWard === selectedWard ? "保存済" : "地域保存"}
+              </span>
+            </button>
+          )}
         </div>
 
         {/* Center Desktop Nav Pills */}
@@ -140,7 +204,7 @@ export function FloatingHeader({
             active={activePanel === "nav"}
             onClick={() => toggle("nav")}
             icon={<Compass className="h-3.5 w-3.5 text-emerald-400" />}
-            label="避難・救援ナビ"
+            label={navLabel}
             badge={
               hasActiveRoute
                 ? "案内中"
@@ -150,6 +214,17 @@ export function FloatingHeader({
             }
             activeClass="bg-emerald-500/20 text-emerald-100 border-emerald-400/70"
           />
+          {userRole === "enterprise" && (
+            <NavPill
+              testId="nav-tab-assets"
+              active={activePanel === "assets"}
+              onClick={() => toggle("assets")}
+              icon={<Server className="h-3.5 w-3.5 text-emerald-300" />}
+              label="非公開拠点"
+              badge={enterpriseAssetCount > 0 ? String(enterpriseAssetCount) : undefined}
+              activeClass="bg-emerald-500/20 text-emerald-100 border-emerald-400/70"
+            />
+          )}
           <NavPill
             testId="nav-tab-ai"
             active={activePanel === "ai"}
@@ -164,7 +239,7 @@ export function FloatingHeader({
             active={activePanel === "stats"}
             onClick={() => toggle("stats")}
             icon={<BarChart3 className="h-3.5 w-3.5 text-indigo-300" />}
-            label="統計・リスク"
+            label={statsLabel}
             activeClass="bg-indigo-500/20 text-indigo-100 border-indigo-400/70"
           />
           <NavPill
@@ -177,8 +252,23 @@ export function FloatingHeader({
           />
         </nav>
 
-        {/* Right: Display Settings + Standalone Board + Sources */}
+        {/* Right: Role Badge + Display Settings + Standalone Board + Sources + Logout */}
         <div className="pointer-events-auto flex items-center gap-1.5 rounded-2xl border border-slate-700/80 bg-slate-900/90 p-1 shadow-xl backdrop-blur-xl">
+          <div
+            data-testid="active-role-badge"
+            title={
+              organizationName
+                ? `${roleMeta.label}: ${organizationName} (${userDisplayName})`
+                : `${roleMeta.label}: ${userDisplayName}`
+            }
+            className={`hidden items-center gap-1.5 rounded-xl border px-2.5 py-1 text-[11px] font-bold sm:inline-flex ${roleMeta.badgeClass}`}
+          >
+            <span>{roleMeta.shortLabel}</span>
+            <span className="max-w-[90px] truncate text-[10px] font-normal opacity-90">
+              {organizationName || userDisplayName}
+            </span>
+          </div>
+
           <button
             type="button"
             data-testid="toggle-display-popover"
@@ -190,7 +280,7 @@ export function FloatingHeader({
             }`}
           >
             <Layers className="h-3.5 w-3.5 text-sky-400" />
-            <span>表示設定</span>
+            <span className="hidden md:inline">表示設定</span>
           </button>
 
           <Link
@@ -206,10 +296,22 @@ export function FloatingHeader({
             onClick={onOpenSources}
             title="出典・データライセンス"
             aria-label="出典・データライセンス"
-            className="inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs text-slate-300 transition hover:bg-slate-800 hover:text-white"
+            className="inline-flex items-center gap-1 rounded-xl px-2 py-1.5 text-xs text-slate-300 transition hover:bg-slate-800 hover:text-white"
           >
             <Database className="h-3.5 w-3.5 text-slate-400" />
-            <span className="hidden sm:inline">出典</span>
+            <span className="hidden 2xl:inline">出典</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="logout-btn"
+            onClick={onLogout}
+            title="ログアウト"
+            aria-label="ログアウト"
+            className="inline-flex items-center gap-1 rounded-xl border border-slate-700/80 bg-slate-950/70 px-2.5 py-1.5 text-xs font-medium text-slate-300 transition hover:border-rose-500/50 hover:text-rose-200"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">ログアウト</span>
           </button>
         </div>
       </header>
@@ -217,7 +319,9 @@ export function FloatingHeader({
       {/* Mobile Bottom Dock (< lg) */}
       <nav
         aria-label="モバイルナビゲーション"
-        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-8 border-t border-slate-800 bg-slate-950/95 px-1 py-1.5 backdrop-blur-xl lg:hidden"
+        className={`fixed inset-x-0 bottom-0 z-30 grid ${
+          userRole === "enterprise" ? "grid-cols-9" : "grid-cols-8"
+        } border-t border-slate-800 bg-slate-950/95 px-1 py-1.5 backdrop-blur-xl lg:hidden`}
       >
         <MobileDockBtn
           active={activePanel === "none"}
@@ -253,6 +357,15 @@ export function FloatingHeader({
           icon={<Compass className="h-4 w-4 text-emerald-400" />}
           label="ナビ"
         />
+        {userRole === "enterprise" && (
+          <MobileDockBtn
+            testId="mobile-tab-assets"
+            active={activePanel === "assets"}
+            onClick={() => toggle("assets")}
+            icon={<Server className="h-4 w-4 text-emerald-300" />}
+            label="拠点"
+          />
+        )}
         <MobileDockBtn
           testId="mobile-tab-ai"
           active={activePanel === "ai"}

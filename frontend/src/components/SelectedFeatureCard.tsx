@@ -33,9 +33,11 @@ import {
   ReverseGeocodeResponse,
   RouteSimulationResponse,
   ShelterHub,
+  UserRole,
 } from "@/types/quakelens";
 
 interface SelectedFeatureCardProps {
+  userRole: UserRole;
   selectedBuilding: BuildingDetail | null;
   selectedMesh: MeshDetail | null;
   selectedReport: DamageReport | null;
@@ -70,6 +72,7 @@ interface SelectedFeatureCardProps {
 }
 
 export function SelectedFeatureCard({
+  userRole,
   selectedBuilding,
   selectedMesh,
   selectedReport,
@@ -233,10 +236,16 @@ export function SelectedFeatureCard({
             <p className="mt-1.5 line-clamp-3 leading-relaxed text-slate-300">
               {selectedReport.description}
             </p>
+            {selectedReport.details_redacted && (
+              <p className="mt-1 text-[10px] text-slate-400">
+                ※ 個人情報・詳細メッセージは政府関連機関のみ閲覧可
+              </p>
+            )}
           </div>
 
           <div className="flex flex-wrap gap-1.5 pt-0.5">
-            {!selectedReport.resolved &&
+            {userRole === "government" &&
+              !selectedReport.resolved &&
               selectedReport.lat != null &&
               selectedReport.lon != null &&
               selectedReport.category !== "road_blocked" && (
@@ -758,7 +767,7 @@ export function SelectedFeatureCard({
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-1.5">
+          <div className={userRole === "government" ? "grid grid-cols-2 gap-1.5" : "grid grid-cols-1 gap-1.5"}>
             <button
               type="button"
               data-testid="selected-building-report-btn"
@@ -768,14 +777,16 @@ export function SelectedFeatureCard({
               <AlertTriangle className="h-3.5 w-3.5" />
               この建物の被害を報告
             </button>
-            <button
-              type="button"
-              onClick={() => onDispatchToBuilding(selectedBuilding)}
-              className="inline-flex items-center justify-center gap-1 rounded-xl bg-emerald-500 px-2.5 py-2 text-[11px] font-bold text-slate-950 hover:bg-emerald-400"
-            >
-              <Ambulance className="h-3.5 w-3.5" />
-              ここへ救援ルート
-            </button>
+            {userRole === "government" && (
+              <button
+                type="button"
+                onClick={() => onDispatchToBuilding(selectedBuilding)}
+                className="inline-flex items-center justify-center gap-1 rounded-xl bg-emerald-500 px-2.5 py-2 text-[11px] font-bold text-slate-950 hover:bg-emerald-400"
+              >
+                <Ambulance className="h-3.5 w-3.5" />
+                ここへ救援ルート
+              </button>
+            )}
           </div>
 
           <button

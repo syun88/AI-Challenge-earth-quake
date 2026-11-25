@@ -316,6 +316,7 @@ export interface BoardEntry {
   message: string;
   has_passcode: boolean;
   is_sample: boolean;
+  is_mine?: boolean;
   created_at: string;
   updated_at?: string;
 }
@@ -396,6 +397,9 @@ export interface DamageReport {
   is_sample: boolean;
   resolved: boolean;
   has_passcode: boolean;
+  is_mine?: boolean;
+  details_redacted?: boolean;
+  owner_role?: string;
   reported_at: string;
   created_at: string;
   updated_at: string;
@@ -995,4 +999,132 @@ export interface BcpSiteResponse {
   ward_ranking: BcpWardRankItem[];
   recommendations: BcpSiteCandidate[];
   disclaimer: string;
+}
+
+export type UserRole = "government" | "citizen" | "enterprise";
+
+export interface UserPermissions {
+  view_all_reports: boolean;
+  view_private_report_details: boolean;
+  verify_reports: boolean;
+  manage_any_report: boolean;
+  use_rescue_routing: boolean;
+  use_custom_routing: boolean;
+  use_evacuate_routing: boolean;
+  access_enterprise_bcp: boolean;
+  manage_enterprise_assets: boolean;
+  view_gov_shared_assets: boolean;
+  export_full_reports: boolean;
+  export_summary_stats: boolean;
+  view_r8_admin: boolean;
+}
+
+export interface UserProfile {
+  uid: string;
+  email: string;
+  display_name: string;
+  role: UserRole;
+  role_label: string;
+  organization_name: string;
+  department: string;
+  verified_agency: boolean;
+  email_verified?: boolean;
+  auth_provider?: string;
+  permissions: UserPermissions;
+}
+
+export interface AuthPolicyResponse {
+  roles: Array<{
+    id: UserRole;
+    label: string;
+    permissions: UserPermissions;
+  }>;
+  gov_code_required: boolean;
+}
+
+export interface AuthMeResponse {
+  registered: boolean;
+  uid: string;
+  email: string;
+  user: UserProfile | null;
+  claims_synced?: boolean;
+}
+
+export type EnterpriseAssetType =
+  | "server_room"
+  | "datacenter"
+  | "bcp_hq"
+  | "vault"
+  | "warehouse";
+
+export type EnterpriseConfidentiality =
+  | "enterprise_only"
+  | "gov_emergency_share";
+
+export interface EnterpriseAsset {
+  id: string;
+  ownerUid: string;
+  organizationName: string;
+  name: string;
+  assetType: EnterpriseAssetType;
+  confidentialityLevel: EnterpriseConfidentiality;
+  wardName: string;
+  lat: number;
+  lon: number;
+  floorInfo?: string;
+  backupHours?: number | null;
+  notes?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface EnterpriseAssetAssessment {
+  id: string;
+  safety_score: number | null;
+  hazard: {
+    meshcode: string;
+    ward_name: string;
+    t30_i55_ps: number | null;
+    hazard_tier: HazardTier;
+    hazard_label: string;
+    arv: number | null;
+    jname: string;
+    pre_1981_share_known?: number | null;
+  } | null;
+  nearby_road_closures_600m: number;
+  nearby_building_damage_600m: number;
+  nearest_official_shelter: {
+    id: string;
+    name: string;
+    ward: string;
+    distance_km: number;
+    is_wide_area: boolean;
+  } | null;
+  alerts: string[];
+}
+
+export interface EnterpriseAssetsAssessResponse {
+  count: number;
+  assessments: EnterpriseAssetAssessment[];
+}
+
+export type BoardChatChannel = "public" | "enterprise_liaison" | "government";
+
+export interface BoardChatMessage {
+  id: string;
+  channel: BoardChatChannel;
+  tenantUid: string;
+  senderUid: string;
+  senderName: string;
+  senderRole: UserRole;
+  senderOrg: string;
+  wardName: string;
+  text: string;
+  createdAtMs: number | null;
+}
+
+export interface UserPreferences {
+  uid: string;
+  favoriteWard: string;
+  updatedAtMs?: number | null;
 }

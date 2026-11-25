@@ -1,5 +1,8 @@
 "use client";
 
+import { MessageCircle as ChatTabIcon } from "lucide-react";
+import { BoardChatPanel } from "@/components/BoardChatPanel";
+
 import React, { useEffect, useState, useCallback } from "react";
 import {
   ChevronLeft,
@@ -26,9 +29,9 @@ import {
   updateBoardEntry,
 } from "@/lib/api";
 import { BOARD_STATUS_META } from "@/lib/colors";
-import { BoardEntry, BoardStatus, BoardSummaryResponse } from "@/types/quakelens";
+import { BoardEntry, BoardStatus, BoardSummaryResponse, UserRole } from "@/types/quakelens";
 
-type BoardView = "check" | "register" | "history" | "web";
+type BoardView = "check" | "chat" | "register" | "history" | "web";
 
 interface LocalHistoryItem {
   id: string;
@@ -117,6 +120,7 @@ function writeStoredHistory(items: LocalHistoryItem[]) {
 }
 
 export interface DisasterBoardProps {
+  userRole?: UserRole;
   onBack?: () => void;
   embedded?: boolean;
   wards?: string[];
@@ -131,6 +135,7 @@ export interface DisasterBoardProps {
 }
 
 export function DisasterBoard({
+  userRole = "citizen",
   onBack,
   embedded = false,
   wards = DEFAULT_WARDS,
@@ -467,7 +472,7 @@ export function DisasterBoard({
       )}
 
       {/* Sub-navigation tabs */}
-      <div className="grid shrink-0 grid-cols-4 gap-1 border-b border-slate-800 bg-slate-950/60 p-1.5 text-[11px]">
+      <div className="grid shrink-0 grid-cols-5 gap-1 border-b border-slate-800 bg-slate-950/60 p-1.5 text-[10.5px]">
         <button
           type="button"
           onClick={() => handleSwitchView("check")}
@@ -477,8 +482,21 @@ export function DisasterBoard({
               : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"
           }`}
         >
-          <Search className="h-3 w-3" />
+          <Search className="h-3 w-3 shrink-0" />
           確認・集計
+        </button>
+        <button
+          type="button"
+          data-testid="board-tab-chat"
+          onClick={() => handleSwitchView("chat")}
+          className={`flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
+            view === "chat"
+              ? "bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/50"
+              : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"
+          }`}
+        >
+          <ChatTabIcon className="h-3 w-3 shrink-0" />
+          チャット
         </button>
         <button
           type="button"
@@ -489,8 +507,8 @@ export function DisasterBoard({
               : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"
           }`}
         >
-          <ClipboardEdit className="h-3 w-3" />
-          安否を登録
+          <ClipboardEdit className="h-3 w-3 shrink-0" />
+          安否登録
         </button>
         <button
           type="button"
@@ -501,8 +519,8 @@ export function DisasterBoard({
               : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"
           }`}
         >
-          <Pencil className="h-3 w-3" />
-          管理 ({historyItems.length})
+          <Pencil className="h-3 w-3 shrink-0" />
+          管理({historyItems.length})
         </button>
         <button
           type="button"
@@ -513,7 +531,7 @@ export function DisasterBoard({
               : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"
           }`}
         >
-          <Phone className="h-3 w-3" />
+          <Phone className="h-3 w-3 shrink-0" />
           web171
         </button>
       </div>
@@ -603,6 +621,11 @@ export function DisasterBoard({
               }}
               className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3"
             >
+              {userRole !== "government" && (
+                <div className="rounded-lg border border-slate-800 bg-slate-900/80 px-2.5 py-1.5 text-[10px] leading-relaxed text-slate-400">
+                  ※ 個人情報保護のため、他の方の安否伝言を確認する際は「電話番号検索」または「ご自身の登録履歴」をご利用ください（政府関連機関のみ区単位の要支援一覧照会が可能）。
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <input
                   type="text"
@@ -1108,6 +1131,10 @@ export function DisasterBoard({
               <ExternalLink className="h-4 w-4 shrink-0 text-emerald-400" />
             </a>
           </div>
+        )}
+
+        {view === "chat" && (
+          <BoardChatPanel defaultWard={searchWard} />
         )}
       </div>
     </div>

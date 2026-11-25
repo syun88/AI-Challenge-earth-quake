@@ -1,5 +1,7 @@
 import {
   AiProtectionStatus,
+  AuthMeResponse,
+  AuthPolicyResponse,
   BcpPurpose,
   BcpSiteResponse,
   BoardEntry,
@@ -16,6 +18,7 @@ import {
   DisasterUpdatesPeriod,
   DisasterUpdatesResponse,
   EarthquakeEvent,
+  EnterpriseAssetsAssessResponse,
   InteractiveRoadsGeoJSON,
   LocationSearchResponse,
   MeshDetail,
@@ -36,11 +39,39 @@ import {
   ShelterScenario,
   SnappedRoadInfo,
   StatsResponse,
+  UserRole,
   VerificationStatus,
 } from "@/types/quakelens";
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
+
+type TokenProvider = () => Promise<string | null>;
+
+let apiTokenProvider: TokenProvider | null = null;
+let syncAuthToken: string | null = null;
+
+export function setApiTokenProvider(provider: TokenProvider | null) {
+  apiTokenProvider = provider;
+}
+
+export function setSyncAuthToken(token: string | null) {
+  syncAuthToken = token;
+}
+
+export function getSyncAuthToken(): string | null {
+  return syncAuthToken;
+}
+
+export async function getAuthHeaders(tokenOverride?: string | null): Promise<Record<string, string>> {
+  const token =
+    tokenOverride ??
+    (apiTokenProvider ? await apiTokenProvider().catch(() => syncAuthToken) : syncAuthToken);
+  if (token && token.trim()) {
+    return { Authorization: `Bearer ${token.trim()}` };
+  }
+  return {};
+}
 
 function formatApiError(status: number, rawText: string, statusText: string): string {
   if (rawText) {
@@ -56,12 +87,18 @@ function formatApiError(status: number, rawText: string, statusText: string): st
   return `API Error ${status}: ${rawText || statusText}`;
 }
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+async function fetchJson<T>(
+  path: string,
+  init?: RequestInit & { tokenOverride?: string | null }
+): Promise<T> {
+  const { tokenOverride, ...fetchInit } = init || {};
+  const authHeaders = await getAuthHeaders(tokenOverride);
   const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
+    ...fetchInit,
     headers: {
       "Content-Type": "application/json",
-      ...(init?.headers || {}),
+      ...authHeaders,
+      ...(fetchInit.headers || {}),
     },
   });
   if (!res.ok) {
@@ -69,6 +106,80 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(formatApiError(res.status, text, res.statusText));
   }
   return res.json() as Promise<T>;
+}
+
+export async function downloadAuthenticatedFile(
+  pathOrUrl: string,
+  fallbackFilename: string
+): Promise<void> {
+  const target = pathOrUrl.startsWith("http")
+    ? pathOrUrl
+    : `${API_BASE}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+  const authHeaders = await getAuthHeaders();
+  const res = await fetch(target, {
+    method: "GET",
+    headers: authHeaders,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(formatApiError(res.status, text, res.statusText));
+  }
+  const cd = res.headers.get("content-disposition") || "";
+  const match = cd.match(/filename="?([^";]+)"?/i);
+  const filename = match?.[1] || fallbackFilename;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
+export function getAuthPolicy() {
+  return fetchJson<AuthPolicyResponse>("/api/auth/policy");
+}
+
+export function getAuthMe(tokenOverride?: string) {
+  return fetchJson<AuthMeResponse>("/api/auth/me", { tokenOverride });
+}
+
+export function registerAuthProfile(
+  body: {
+    role: UserRole;
+    display_name: string;
+    organization_name?: string;
+    department?: string;
+    gov_code?: string;
+  },
+  tokenOverride?: string
+) {
+  return fetchJson<{
+    registered: boolean;
+    claims_synced?: boolean;
+    user: NonNullable<AuthMeResponse["user"]>;
+  }>("/api/auth/register-profile", {
+    method: "POST",
+    body: JSON.stringify(body),
+    tokenOverride,
+  });
+}
+
+export function verifyLoginRole(body: { role: UserRole }, tokenOverride?: string) {
+  return fetchJson<{
+    verified: boolean;
+    claims_synced?: boolean;
+    user: NonNullable<AuthMeResponse["user"]>;
+  }>("/api/auth/verify-login-role", {
+    method: "POST",
+    body: JSON.stringify(body),
+    tokenOverride,
+  });
 }
 
 export function getHealth() {
@@ -250,8 +361,10 @@ export async function streamChatMessage(
   signal?: AbortSignal,
   accessCode?: string
 ) {
+  const authHeaders = await getAuthHeaders();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...authHeaders,
   };
   if (apiKeyOverride?.trim()) {
     headers["X-Gemini-Api-Key"] = apiKeyOverride.trim();
@@ -319,8 +432,10 @@ export async function synthesizeChatSpeech(
   signal?: AbortSignal,
   accessCode?: string
 ): Promise<ArrayBuffer> {
+  const authHeaders = await getAuthHeaders();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...authHeaders,
   };
   if (apiKeyOverride?.trim()) {
     headers["X-Gemini-Api-Key"] = apiKeyOverride.trim();
@@ -422,6 +537,7 @@ export function getDamageReports(params?: {
   q?: string;
   includeSamples?: boolean;
   includeResolved?: boolean;
+  onlyMine?: boolean;
   limit?: number;
 }) {
   const sp = new URLSearchParams();
@@ -435,6 +551,7 @@ export function getDamageReports(params?: {
   if (params?.q?.trim()) sp.set("q", params.q.trim());
   if (params?.includeSamples === false) sp.set("include_samples", "false");
   if (params?.includeResolved === false) sp.set("include_resolved", "false");
+  if (params?.onlyMine === true) sp.set("only_mine", "true");
   if (params?.limit) sp.set("limit", String(params.limit));
   const qs = sp.toString();
   return fetchJson<DamageReportListResponse>(`/api/reports${qs ? `?${qs}` : ""}`);
@@ -487,6 +604,7 @@ export function createDamageReport(body: {
   passcode?: string;
   reported_at?: string;
   force_duplicate?: boolean;
+  verification_status?: VerificationStatus;
 }) {
   return fetchJson<{ report: DamageReport; similar_reports: DamageReport[] }>("/api/reports", {
     method: "POST",
@@ -510,6 +628,7 @@ export function updateDamageReport(
     description?: string;
     resolved?: boolean;
     ward_name?: string;
+    verification_status?: VerificationStatus;
   }
 ) {
   return fetchJson<{ report: DamageReport }>(`/api/reports/${encodeURIComponent(reportId)}`, {
@@ -798,4 +917,13 @@ export function getEnterpriseSafeSites(params?: {
     limit: String(params?.limit ?? 6),
   });
   return fetchJson<BcpSiteResponse>(`/api/enterprise/safe-sites?${sp.toString()}`);
+}
+
+export function assessEnterpriseAssets(
+  assets: Array<{ id: string; asset_type: string; lat: number; lon: number }>
+) {
+  return fetchJson<EnterpriseAssetsAssessResponse>("/api/enterprise/assess-assets", {
+    method: "POST",
+    body: JSON.stringify({ assets }),
+  });
 }

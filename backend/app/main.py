@@ -14,13 +14,24 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.ai_assistant import _resolve_api_key, ask_quakelens_ai, stream_quakelens_ai
-from app.bcp_site import recommend_safe_enterprise_sites
+from app.auth import (
+    ROLE_LABELS,
+    ROLE_PERMISSIONS,
+    VALID_ROLES,
+    AuthenticatedUser,
+    auth_profile_store,
+    get_current_user,
+    get_firebase_claims,
+    get_gov_registration_code,
+    require_roles,
+)
+from app.bcp_site import assess_enterprise_assets, recommend_safe_enterprise_sites
 from app.tts import (
     ALLOWED_TTS_MODELS,
     ALLOWED_TTS_VOICES,
@@ -39,6 +50,11 @@ from app.constants import (
 from app.data_store import QuakeLensDataStore
 from app.disaster_updates import updates_store
 from app.export_utils import generate_disaster_csv, generate_disaster_xlsx
+from app.firebase_backend import (
+    get_firebase_admin_status,
+    is_firestore_persistence_enabled,
+    sync_user_role_to_firebase,
+)
 from app.geocoding import reverse_geocode, search_locations
 from app.r8_seismic import r8_seismic_store
 from app.reports_store import DamageReportStore
@@ -77,6 +93,7 @@ _quake_cache: dict[str, Any] = {"fetched_at": 0.0, "data": []}
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    auth_profile_store.ensure_initialized()
     board_store.ensure_initialized()
     reports_store.ensure_initialized()
     shelter_store.ensure_loaded()
@@ -99,7 +116,7 @@ app.add_middleware(
     allow_origins=get_cors_allow_origins(),
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Gemini-Api-Key", "X-Ai-Access-Code"],
+    allow_headers=["Content-Type", "Authorization", "X-Gemini-Api-Key", "X-Ai-Access-Code"],
 )
 
 
@@ -165,11 +182,158 @@ def health() -> dict[str, Any]:
         "mesh_count": int(len(store.meshes)) if store.loaded else 0,
         "gemini_configured": server_key_usable,
         "ai_protection": ai_guard.get_protection_status(),
+        "firebase_backend": get_firebase_admin_status(),
+    }
+
+
+class AuthRegisterRequest(BaseModel):
+    role: str
+    display_name: str
+    organization_name: str = ""
+    department: str = ""
+    gov_code: str = ""
+
+
+class AuthLoginRoleVerifyRequest(BaseModel):
+    role: str
+
+
+@app.get("/api/auth/policy")
+def get_auth_policy() -> dict[str, Any]:
+    return {
+        "roles": [
+            {
+                "id": r,
+                "label": ROLE_LABELS[r],
+                "permissions": ROLE_PERMISSIONS[r],
+            }
+            for r in VALID_ROLES
+        ],
+        "gov_code_required": bool(get_gov_registration_code()),
+    }
+
+
+@app.get("/api/auth/me")
+def get_auth_me(claims: dict[str, Any] = Depends(get_firebase_claims)) -> dict[str, Any]:
+    uid = str(claims.get("sub") or claims.get("user_id") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="トークンにUIDが含まれていません。")
+    email = str(claims.get("email") or "").strip()
+    profile = auth_profile_store.get_profile(uid)
+    if profile is None:
+        return {
+            "registered": False,
+            "uid": uid,
+            "email": email,
+            "user": None,
+        }
+    role = profile["role"]
+    if role == "government" and not profile.get("verified_agency"):
+        raise HTTPException(status_code=403, detail="政府関連機関の認証状態が無効です。")
+    firebase_meta = claims.get("firebase")
+    provider = "password"
+    if isinstance(firebase_meta, dict) and firebase_meta.get("sign_in_provider"):
+        provider = str(firebase_meta["sign_in_provider"])
+    auth_user = AuthenticatedUser(
+        uid=uid,
+        email=email or profile.get("email") or "",
+        display_name=profile["display_name"],
+        role=role,  # type: ignore[arg-type]
+        organization_name=profile["organization_name"],
+        department=profile["department"],
+        verified_agency=bool(profile["verified_agency"]),
+        email_verified=bool(claims.get("email_verified", False)),
+        auth_provider=provider,
+    )
+    claims_synced = False
+    if is_firestore_persistence_enabled():
+        needs_claim_sync = claims.get("role") != role or (
+            role == "government" and not claims.get("verifiedAgency")
+        )
+        if needs_claim_sync:
+            claims_synced = sync_user_role_to_firebase(
+                uid=uid,
+                email=auth_user.email,
+                display_name=auth_user.display_name,
+                role=role,
+                organization_name=auth_user.organization_name,
+                department=auth_user.department,
+                verified_agency=auth_user.verified_agency,
+            )
+    return {
+        "registered": True,
+        "uid": uid,
+        "email": auth_user.email,
+        "claims_synced": claims_synced,
+        "user": auth_user.to_dict(),
+    }
+
+
+@app.post("/api/auth/register-profile")
+def register_auth_profile(
+    req: AuthRegisterRequest,
+    claims: dict[str, Any] = Depends(get_firebase_claims),
+) -> dict[str, Any]:
+    uid = str(claims.get("sub") or claims.get("user_id") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="トークンにUIDが含まれていません。")
+    email = str(claims.get("email") or "").strip()
+    profile = auth_profile_store.register_or_update_profile(
+        uid=uid,
+        email=email,
+        display_name=req.display_name,
+        role=req.role,
+        organization_name=req.organization_name,
+        department=req.department,
+        gov_code=req.gov_code,
+    )
+    firebase_meta = claims.get("firebase")
+    provider = "password"
+    if isinstance(firebase_meta, dict) and firebase_meta.get("sign_in_provider"):
+        provider = str(firebase_meta["sign_in_provider"])
+    auth_user = AuthenticatedUser(
+        uid=uid,
+        email=email or profile.get("email") or "",
+        display_name=profile["display_name"],
+        role=profile["role"],  # type: ignore[arg-type]
+        organization_name=profile["organization_name"],
+        department=profile["department"],
+        verified_agency=bool(profile["verified_agency"]),
+        email_verified=bool(claims.get("email_verified", False)),
+        auth_provider=provider,
+    )
+    return {
+        "registered": True,
+        "claims_synced": auth_profile_store._use_firestore(),
+        "user": auth_user.to_dict(),
+    }
+
+
+@app.post("/api/auth/verify-login-role")
+def verify_auth_login_role(
+    req: AuthLoginRoleVerifyRequest,
+    claims: dict[str, Any] = Depends(get_firebase_claims),
+) -> dict[str, Any]:
+    uid = str(claims.get("sub") or claims.get("user_id") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="トークンにUIDが含まれていません。")
+    profile = auth_profile_store.verify_login_role(uid=uid, expected_role=req.role)
+    role = profile["role"]
+    claims_synced = bool(profile.pop("claims_synced", False))
+    return {
+        "verified": True,
+        "claims_synced": claims_synced,
+        "user": {
+            **profile,
+            "email": str(claims.get("email") or profile.get("email") or ""),
+            "email_verified": bool(claims.get("email_verified", False)),
+            "permissions": dict(ROLE_PERMISSIONS.get(role, ROLE_PERMISSIONS["citizen"])),
+        },
     }
 
 
 @app.get("/api/metadata")
-def get_metadata() -> dict[str, Any]:
+def get_metadata(_user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
     return _require_store().get_metadata()
 
 
@@ -180,6 +344,7 @@ def get_stats(
     hazard_tiers: str | None = Query(default=None),
     usage_group: str | None = Query(default=None),
     meshcode: str | None = Query(default=None),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     return _require_store().get_stats(
         ward=ward,
@@ -191,12 +356,18 @@ def get_stats(
 
 
 @app.get("/api/meshes")
-def get_meshes(ward: str | None = Query(default=None)) -> dict[str, Any]:
+def get_meshes(
+    ward: str | None = Query(default=None),
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     return _require_store().get_meshes_geojson(ward=ward)
 
 
 @app.get("/api/meshes/{meshcode}")
-def get_mesh_detail(meshcode: str) -> dict[str, Any]:
+def get_mesh_detail(
+    meshcode: str,
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     detail = _require_store().get_mesh_detail(meshcode)
     if not detail:
         raise HTTPException(status_code=404, detail=f"Mesh {meshcode} not found")
@@ -212,6 +383,7 @@ def get_priority_areas(
     min_buildings: int = Query(default=20, ge=1),
     sort_by: str = Query(default="pre_1981_high_hazard"),
     limit: int = Query(default=20, ge=1, le=100),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     areas = _require_store().get_priority_areas(
         ward=ward,
@@ -234,6 +406,7 @@ def get_buildings(
     usage_group: str | None = Query(default=None),
     meshcode: str | None = Query(default=None),
     limit: int = Query(default=20000, ge=1, le=100000),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     parsed_bbox: tuple[float, float, float, float] | None = None
     if bbox:
@@ -264,6 +437,7 @@ def count_buildings(
     hazard_tiers: str | None = Query(default=None),
     usage_group: str | None = Query(default=None),
     meshcode: str | None = Query(default=None),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     parsed_bbox: tuple[float, float, float, float] | None = None
     if bbox:
@@ -291,6 +465,7 @@ def get_buildings_tile(
     x: int,
     y: int,
     request: Request,
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> Response:
     if z < 0 or z > 20:
         raise HTTPException(status_code=400, detail="Invalid zoom level")
@@ -299,8 +474,8 @@ def get_buildings_tile(
     wants_gzip = "gzip" in accept_enc.lower()
     payload = s.get_building_tile_mvt(z=z, x=x, y=y, gzipped=wants_gzip)
     headers = {
-        "Cache-Control": "public, max-age=3600",
-        "Vary": "Accept-Encoding",
+        "Cache-Control": "private, max-age=3600",
+        "Vary": "Accept-Encoding, Authorization",
     }
     if wants_gzip and payload:
         headers["Content-Encoding"] = "gzip"
@@ -308,7 +483,10 @@ def get_buildings_tile(
 
 
 @app.get("/api/buildings/{building_id}")
-def get_building_detail(building_id: str) -> dict[str, Any]:
+def get_building_detail(
+    building_id: str,
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     detail = _require_store().get_building_detail(building_id)
     if not detail:
         raise HTTPException(status_code=404, detail=f"Building {building_id} not found")
@@ -316,12 +494,15 @@ def get_building_detail(building_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/official-programs")
-def get_official_programs() -> dict[str, Any]:
+def get_official_programs(_user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
     return {"municipality": "京都市", "programs": OFFICIAL_RETROFIT_PROGRAMS}
 
 
 @app.get("/api/earthquakes")
-async def get_recent_earthquakes(limit: int = Query(default=40, ge=1, le=100)) -> dict[str, Any]:
+async def get_recent_earthquakes(
+    limit: int = Query(default=40, ge=1, le=100),
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     """Fetch Kyoto-epicenter earthquakes from JMA Bosai JSON API (5-min cache) + Kyoto archive."""
     now = time.time()
     if now - _quake_cache["fetched_at"] > 300 or not _quake_cache["data"]:
@@ -419,6 +600,7 @@ def list_board_entries(
     include_samples: bool = Query(default=True),
     ids: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     entries = board_store.list_entries(
         phone=phone,
@@ -429,6 +611,8 @@ def list_board_entries(
         include_samples=include_samples,
         ids=_split_csv(ids),
         limit=limit,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
     )
     return {
         "count": len(entries),
@@ -441,6 +625,7 @@ def list_board_entries(
 def summarize_board_entries(
     ward: str | None = Query(default=None),
     include_samples: bool = Query(default=True),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     return board_store.summarize_entries(
         ward=ward,
@@ -450,7 +635,10 @@ def summarize_board_entries(
 
 
 @app.post("/api/board")
-def create_board_entry(req: BoardEntryCreateRequest) -> dict[str, Any]:
+def create_board_entry(
+    req: BoardEntryCreateRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     entry = board_store.create_entry(
         phone=req.phone,
         name=req.name,
@@ -460,12 +648,17 @@ def create_board_entry(req: BoardEntryCreateRequest) -> dict[str, Any]:
         meshcode=req.meshcode,
         passcode=req.passcode,
         location_consent=req.location_consent,
+        owner_uid=user.uid,
     )
     return {"entry": entry}
 
 
 @app.patch("/api/board/{entry_id}")
-def update_board_entry(entry_id: str, req: BoardEntryUpdateRequest) -> dict[str, Any]:
+def update_board_entry(
+    entry_id: str,
+    req: BoardEntryUpdateRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     entry = board_store.update_entry(
         entry_id=entry_id,
         passcode=req.passcode,
@@ -474,6 +667,8 @@ def update_board_entry(entry_id: str, req: BoardEntryUpdateRequest) -> dict[str,
         ward_name=req.ward_name,
         meshcode=req.meshcode,
         location_consent=req.location_consent,
+        actor_uid=user.uid,
+        actor_role=user.role,
     )
     return {"entry": entry}
 
@@ -482,8 +677,14 @@ def update_board_entry(entry_id: str, req: BoardEntryUpdateRequest) -> dict[str,
 def delete_board_entry(
     entry_id: str,
     passcode: str | None = Query(default=None),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    return board_store.delete_entry(entry_id=entry_id, passcode=passcode)
+    return board_store.delete_entry(
+        entry_id=entry_id,
+        passcode=passcode,
+        actor_uid=user.uid,
+        actor_role=user.role,
+    )
 
 
 class DamageReportCreateRequest(BaseModel):
@@ -503,6 +704,7 @@ class DamageReportCreateRequest(BaseModel):
     passcode: str | None = None
     reported_at: str | None = None
     force_duplicate: bool = False
+    verification_status: str | None = None
 
 
 class DamageReportUpdateRequest(BaseModel):
@@ -512,6 +714,7 @@ class DamageReportUpdateRequest(BaseModel):
     description: str | None = None
     resolved: bool | None = None
     ward_name: str | None = None
+    verification_status: str | None = None
 
 
 class DamageReportSimilarRequest(BaseModel):
@@ -534,7 +737,9 @@ def list_damage_reports(
     q: str | None = Query(default=None),
     include_samples: bool = Query(default=True),
     include_resolved: bool = Query(default=True),
+    only_mine: bool = Query(default=False),
     limit: int = Query(default=100, ge=1, le=300),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     reports = reports_store.list_reports(
         ward=ward,
@@ -546,6 +751,9 @@ def list_damage_reports(
         include_samples=include_samples,
         include_resolved=include_resolved,
         limit=limit,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
+        only_mine=only_mine,
     )
     return {
         "count": len(reports),
@@ -562,6 +770,7 @@ def summarize_damage_reports(
     category: str | None = Query(default=None),
     include_samples: bool = Query(default=True),
     include_resolved: bool = Query(default=False),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     return reports_store.summarize_reports(
         ward=ward,
@@ -569,11 +778,16 @@ def summarize_damage_reports(
         include_samples=include_samples,
         include_resolved=include_resolved,
         store=store if store.loaded else None,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
     )
 
 
 @app.post("/api/reports/similar")
-def find_similar_damage_reports(req: DamageReportSimilarRequest) -> dict[str, Any]:
+def find_similar_damage_reports(
+    req: DamageReportSimilarRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     matches = reports_store.find_similar_reports(
         ward_name=req.ward_name,
         category=req.category,
@@ -583,12 +797,17 @@ def find_similar_damage_reports(req: DamageReportSimilarRequest) -> dict[str, An
         lat=req.lat,
         lon=req.lon,
         include_samples=False,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
     )
     return {"count": len(matches), "similar_reports": matches}
 
 
 @app.post("/api/reports")
-def create_damage_report(req: DamageReportCreateRequest) -> dict[str, Any]:
+def create_damage_report(
+    req: DamageReportCreateRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     return reports_store.create_report(
         category=req.category,
         severity=req.severity,
@@ -606,17 +825,31 @@ def create_damage_report(req: DamageReportCreateRequest) -> dict[str, Any]:
         passcode=req.passcode,
         reported_at=req.reported_at,
         force_duplicate=req.force_duplicate,
+        owner_uid=user.uid,
+        owner_role=user.role,
+        requested_verification_status=req.verification_status if user.role == "government" else None,
     )
 
 
 @app.post("/api/reports/{report_id}/confirm")
-def confirm_damage_report(report_id: str) -> dict[str, Any]:
-    report = reports_store.confirm_report(report_id)
+def confirm_damage_report(
+    report_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    report = reports_store.confirm_report(
+        report_id,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
+    )
     return {"report": report}
 
 
 @app.patch("/api/reports/{report_id}")
-def update_damage_report(report_id: str, req: DamageReportUpdateRequest) -> dict[str, Any]:
+def update_damage_report(
+    report_id: str,
+    req: DamageReportUpdateRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     report = reports_store.update_report(
         report_id,
         passcode=req.passcode,
@@ -625,6 +858,9 @@ def update_damage_report(report_id: str, req: DamageReportUpdateRequest) -> dict
         description=req.description,
         resolved=req.resolved,
         ward_name=req.ward_name,
+        verification_status=req.verification_status,
+        actor_uid=user.uid,
+        actor_role=user.role,
     )
     return {"report": report}
 
@@ -633,14 +869,21 @@ def update_damage_report(report_id: str, req: DamageReportUpdateRequest) -> dict
 def delete_damage_report(
     report_id: str,
     passcode: str | None = Query(default=None),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    return reports_store.delete_report(report_id=report_id, passcode=passcode)
+    return reports_store.delete_report(
+        report_id=report_id,
+        passcode=passcode,
+        actor_uid=user.uid,
+        actor_role=user.role,
+    )
 
 
 @app.get("/api/disaster-overview")
 def get_disaster_overview(
     ward: str | None = Query(default=None),
     include_samples: bool = Query(default=True),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     board_sum = board_store.summarize_entries(
         ward=ward,
@@ -652,6 +895,8 @@ def get_disaster_overview(
         include_samples=include_samples,
         include_resolved=False,
         store=store if store.loaded else None,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
     )
     return {
         "ward": ward or "all",
@@ -667,25 +912,45 @@ def _gather_export_inputs(
     category: str | None,
     verification_status: str | None,
     include_samples: bool,
+    viewer_role: str = "government",
+    viewer_uid: str | None = None,
 ) -> dict[str, Any]:
     s = _require_store()
     stats = s.get_stats(ward=ward)
     board_sum = board_store.summarize_entries(ward=ward, include_samples=include_samples, store=s)
-    board_entries = board_store.list_entries(ward=ward, include_samples=include_samples, limit=200)
+    board_entries = (
+        board_store.list_entries(
+            ward=ward,
+            include_samples=include_samples,
+            limit=200,
+            viewer_role=viewer_role,
+            viewer_uid=viewer_uid,
+        )
+        if viewer_role == "government"
+        else []
+    )
     rep_sum = reports_store.summarize_reports(
         ward=ward,
         category=category,
         include_samples=include_samples,
         include_resolved=False,
         store=s,
+        viewer_role=viewer_role,
+        viewer_uid=viewer_uid,
     )
-    reports = reports_store.list_reports(
-        ward=ward,
-        category=category,
-        verification_status=verification_status,
-        include_samples=include_samples,
-        include_resolved=True,
-        limit=300,
+    reports = (
+        reports_store.list_reports(
+            ward=ward,
+            category=category,
+            verification_status=verification_status,
+            include_samples=include_samples,
+            include_resolved=True,
+            limit=300,
+            viewer_role=viewer_role,
+            viewer_uid=viewer_uid,
+        )
+        if viewer_role == "government"
+        else []
     )
     return {
         "stats": stats,
@@ -704,14 +969,22 @@ def export_disaster_csv(
     category: str | None = Query(default=None),
     verification_status: str | None = Query(default=None),
     include_samples: bool = Query(default=True),
+    user: AuthenticatedUser = Depends(require_roles("government", "enterprise")),
 ) -> Response:
     if scope not in {"overview", "wards", "reports", "board"}:
         raise HTTPException(status_code=400, detail="Invalid export scope")
+    if user.role != "government" and scope != "wards":
+        raise HTTPException(
+            status_code=403,
+            detail="個別報告・安否明細・総合サマリーの一括出力は「政府関連機関」アカウント専用です（企業アカウントは区別集計 CSV: scope=wards のみ出力可能）。",
+        )
     inputs = _gather_export_inputs(
         ward=ward,
         category=category,
         verification_status=verification_status,
         include_samples=include_samples,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
     )
     payload = generate_disaster_csv(scope=scope, **inputs)
     filename = f"quakelens_kyoto_{scope}.csv"
@@ -728,12 +1001,15 @@ def export_disaster_xlsx(
     category: str | None = Query(default=None),
     verification_status: str | None = Query(default=None),
     include_samples: bool = Query(default=True),
+    user: AuthenticatedUser = Depends(require_roles("government")),
 ) -> Response:
     inputs = _gather_export_inputs(
         ward=ward,
         category=category,
         verification_status=verification_status,
         include_samples=include_samples,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
     )
     payload = generate_disaster_xlsx(**inputs)
     return Response(
@@ -744,7 +1020,7 @@ def export_disaster_xlsx(
 
 
 @app.get("/api/routes/nodes")
-def get_route_nodes() -> dict[str, Any]:
+def get_route_nodes(_user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
     return {"is_simulation": True, "nodes": list_route_nodes()}
 
 
@@ -752,6 +1028,7 @@ def get_route_nodes() -> dict[str, Any]:
 def snap_road_endpoint(
     lat: float = Query(..., ge=34.78, le=35.33),
     lon: float = Query(..., ge=135.42, le=135.95),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     return snap_road_info(lat=lat, lon=lon, store=store if store.loaded else None)
 
@@ -778,6 +1055,7 @@ def read_roads_in_bbox(
     include_samples: bool = Query(default=True),
     avoid_unverified: bool = Query(default=True),
     block_radius_m: float = Query(default=48.0, ge=20.0, le=500.0),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     parts = [p.strip() for p in bbox.split(",")]
     if len(parts) != 4:
@@ -793,6 +1071,8 @@ def read_roads_in_bbox(
         include_samples=include_samples,
         include_resolved=False,
         limit=300,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
     )
     ev = _evaluate_network(
         reports=reports,
@@ -811,7 +1091,10 @@ def read_roads_in_bbox(
 
 
 @app.post("/api/network/corridor")
-def resolve_corridor_endpoint(req: RoadCorridorRequest) -> dict[str, Any]:
+def resolve_corridor_endpoint(
+    req: RoadCorridorRequest,
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     return resolve_road_corridor(
         start_lat=req.start_lat,
         start_lon=req.start_lon,
@@ -822,7 +1105,10 @@ def resolve_corridor_endpoint(req: RoadCorridorRequest) -> dict[str, Any]:
 
 
 @app.post("/api/network/stroke")
-def resolve_stroke_endpoint(req: RoadStrokeRequest) -> dict[str, Any]:
+def resolve_stroke_endpoint(
+    req: RoadStrokeRequest,
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     if len(req.points) > 1500:
         raise HTTPException(status_code=400, detail="stroke points count must be <= 1500")
     return resolve_road_stroke(
@@ -836,11 +1122,15 @@ def read_network_status(
     include_samples: bool = Query(default=True),
     avoid_unverified: bool = Query(default=True),
     block_radius_m: float = Query(default=420.0, ge=100.0, le=1500.0),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     reports = reports_store.list_reports(
+        category="road_blocked",
         include_samples=include_samples,
         include_resolved=False,
         limit=300,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
     )
     return get_network_status(
         reports=reports,
@@ -858,12 +1148,15 @@ def get_route_simulation(
     include_samples: bool = Query(default=True),
     avoid_unverified: bool = Query(default=True),
     block_radius_m: float = Query(default=420.0, ge=100.0, le=1500.0),
+    user: AuthenticatedUser = Depends(require_roles("government", "enterprise")),
 ) -> dict[str, Any]:
     reports = reports_store.list_reports(
         category="road_blocked",
         include_samples=include_samples,
         include_resolved=False,
         limit=200,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
     )
     return simulate_alternative_route(
         origin_id=origin_id,
@@ -889,11 +1182,35 @@ def get_navigation_simulation(
     include_samples: bool = Query(default=True),
     avoid_unverified: bool = Query(default=True),
     block_radius_m: float = Query(default=420.0, ge=100.0, le=1500.0),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
+    if mode == "rescue" and user.role != "government":
+        raise HTTPException(
+            status_code=403,
+            detail="救助出動ルート探索は「政府関連機関」アカウント専用です。",
+        )
+    if mode == "custom" and user.role not in {"government", "enterprise"}:
+        raise HTTPException(
+            status_code=403,
+            detail="任意2拠点BCP迂回ルート探索は「政府関連機関・企業」アカウント専用です。",
+        )
+    if target_report_id:
+        target = reports_store.get_report(
+            target_report_id,
+            viewer_role=user.role,
+            viewer_uid=user.uid,
+        )
+        if target is None:
+            raise HTTPException(
+                status_code=403,
+                detail="指定された通報を閲覧する権限がないか、存在しません。",
+            )
     reports = reports_store.list_reports(
         include_samples=include_samples,
         include_resolved=False,
         limit=300,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
     )
     return simulate_navigation(
         mode=mode,
@@ -917,6 +1234,7 @@ def list_official_shelters(
     ward: str | None = Query(default=None),
     disaster_type: str | None = Query(default=None),
     wide_area_only: bool = Query(default=False),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     shelters = shelter_store.list_shelters(
         ward=ward,
@@ -942,11 +1260,14 @@ def get_shelter_recommendations(
     avoid_unverified: bool = Query(default=True),
     block_radius_m: float = Query(default=420.0, ge=100.0, le=1500.0),
     limit: int = Query(default=5, ge=1, le=10),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     reports = reports_store.list_reports(
         include_samples=include_samples,
         include_resolved=False,
         limit=300,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
     )
     return recommend_shelters(
         lat=lat,
@@ -972,13 +1293,14 @@ def get_disaster_updates(
         default="all",
         pattern="^(all|earthquakes|municipality)$",
     ),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Return JMA/Yahoo Kyoto earthquake history (2025-2026 + older) and Kyoto City Bousai updates."""
     return updates_store.query_updates(period=period, kind=kind)
 
 
 @app.post("/api/updates/disaster/refresh")
-async def refresh_disaster_updates() -> dict[str, Any]:
+async def refresh_disaster_updates(_user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
     """Live-fetch updates from Yahoo Kyoto Earthquake list (?e=511), JMA JSON, and Kyoto City Bousai Portal."""
     return await updates_store.refresh_live(persist=True)
 
@@ -989,6 +1311,7 @@ def get_r8_seismic_list(
     grade: str = Query(default="all"),
     q: str = Query(default=""),
     limit: int = Query(default=100, ge=1, le=1000),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Return Kyoto City R8 Municipal Building Seismic List (R8_list.pdf) and guidance for unlisted buildings."""
     return r8_seismic_store.get_summary_and_list(ward=ward, grade=grade, q=q, limit=limit)
@@ -998,6 +1321,7 @@ def get_r8_seismic_list(
 async def locate_r8_unlisted(
     q: str = Query(default=""),
     ward: str = Query(default="all"),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Locate an unlisted building/facility query on the map and return priority guidance."""
     return await r8_seismic_store.locate_unlisted_query(
@@ -1008,7 +1332,10 @@ async def locate_r8_unlisted(
 
 
 @app.get("/api/r8-seismic/{record_id}/locate")
-async def locate_r8_record(record_id: str) -> dict[str, Any]:
+async def locate_r8_record(
+    record_id: str,
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     """Locate an R8_list.pdf record on the Kyoto map with hazard context."""
     res = await r8_seismic_store.locate_record(
         record_id=record_id,
@@ -1028,6 +1355,7 @@ def get_enterprise_safe_sites(
     ),
     avoid_mountain: bool = Query(default=True),
     limit: int = Query(default=6, ge=1, le=20),
+    _user: AuthenticatedUser = Depends(require_roles("enterprise")),
 ) -> dict[str, Any]:
     """Recommend comparatively safer Kyoto locations for corporate critical facilities / BCP sites."""
     s = _require_store()
@@ -1040,11 +1368,48 @@ def get_enterprise_safe_sites(
     )
 
 
+class EnterpriseAssetAssessItem(BaseModel):
+    id: str = ""
+    asset_type: str = "server_room"
+    lat: float
+    lon: float
+
+
+class EnterpriseAssetsAssessRequest(BaseModel):
+    assets: list[EnterpriseAssetAssessItem]
+
+
+@app.post("/api/enterprise/assess-assets")
+def assess_enterprise_assets_endpoint(
+    req: EnterpriseAssetsAssessRequest,
+    user: AuthenticatedUser = Depends(require_roles("enterprise")),
+) -> dict[str, Any]:
+    """Evaluate seismic hazard, nearby closures, and shelter distance for confidential corporate assets strictly in-memory."""
+    s = _require_store()
+    public_reports = reports_store.list_reports(
+        include_samples=True,
+        include_resolved=False,
+        limit=300,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
+    )
+    assessments = assess_enterprise_assets(
+        s,
+        assets=[a.model_dump() for a in req.assets],
+        public_reports=public_reports,
+    )
+    return {
+        "count": len(assessments),
+        "assessments": assessments,
+    }
+
+
 @app.get("/api/geocode/search")
 async def geocode_search(
     q: str = Query(..., min_length=1, max_length=160),
     limit: int = Query(default=8, ge=1, le=20),
     use_external: bool = Query(default=True),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     return await search_locations(
         q=q,
@@ -1059,6 +1424,7 @@ async def geocode_reverse(
     lat: float = Query(..., ge=-90.0, le=90.0),
     lon: float = Query(..., ge=-180.0, le=180.0),
     use_external: bool = Query(default=True),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     return await reverse_geocode(
         lat=lat,
@@ -1087,6 +1453,7 @@ def chat_tts(
     request: Request,
     x_gemini_api_key: str | None = Header(default=None),
     x_ai_access_code: str | None = Header(default=None),
+    _user: AuthenticatedUser = Depends(get_current_user),
 ) -> Response:
     cleaned_text = req.text.strip()
     if not cleaned_text:
@@ -1145,6 +1512,7 @@ def chat(
     request: Request,
     x_gemini_api_key: str | None = Header(default=None),
     x_ai_access_code: str | None = Header(default=None),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     s = _require_store()
     cleaned_msg, cleaned_prev_id, cleaned_ctx = validate_chat_inputs(
@@ -1167,6 +1535,8 @@ def chat(
             earthquakes_cache=_quake_cache.get("data"),
             board_store=board_store,
             reports_store=reports_store,
+            user_role=user.role,
+            user_uid=user.uid,
         )
     except HTTPException:
         raise
@@ -1187,6 +1557,7 @@ def chat_stream(
     request: Request,
     x_gemini_api_key: str | None = Header(default=None),
     x_ai_access_code: str | None = Header(default=None),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> StreamingResponse:
     s = _require_store()
     cleaned_msg, cleaned_prev_id, cleaned_ctx = validate_chat_inputs(
@@ -1216,6 +1587,8 @@ def chat_stream(
                     earthquakes_cache=_quake_cache.get("data"),
                     board_store=board_store,
                     reports_store=reports_store,
+                    user_role=user.role,
+                    user_uid=user.uid,
                 ):
                     if stop_flag.is_set():
                         break
