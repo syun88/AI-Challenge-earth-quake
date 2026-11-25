@@ -37,6 +37,7 @@ COMMON_TOOL_NAMES: frozenset[str] = frozenset({
     "get_damage_reports_summary",
     "recommend_evacuation_shelters",
     "get_kyoto_disaster_updates_and_history",
+    "get_historic_and_residential_priorities",
 })
 
 ROLE_ALLOWED_TOOLS: dict[str, frozenset[str]] = {
@@ -424,6 +425,25 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "type": "function",
+        "name": "get_historic_and_residential_priorities",
+        "description": "歴史がある建物（1950年以前の京町家・伝統木造/土蔵/石造等）と住宅系建物（旧耐震住宅・1982〜2000年木造グレーゾーン・築年不明住宅）のP1〜P4優先順位、行政区別ランキング、優先対策250mメッシュ・代表建物、および京都市公式補助制度（無料耐震診断・まちの匠ぷらす・耐震シェルター等）を含む具体的な解決方法提案を取得する。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ward": {
+                    "type": "string",
+                    "description": "対象区名（例: '中京区', '東山区', '上京区'）または 'all'（京都市全域）",
+                },
+                "focus": {
+                    "type": "string",
+                    "description": "対象フォーカス: 'all'（歴史的建物＋住宅系）, 'historic'（歴史がある建物重視）, 'residential'（住宅系重視）",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -492,6 +512,9 @@ def _summarize_tool_call(name: str, args: dict[str, Any], result: Any) -> str:
             top = recs[0]
             return f"企業BCP安全立地診断（{result.get('purpose_label')}）: 1位 {top.get('ward_name')} {top.get('meshcode')}（安全度 {top.get('safety_score')} / ARV {top.get('arv')}）"
         return "企業BCP安全立地診断: 候補なし"
+    if name == "get_historic_and_residential_priorities" and isinstance(result, dict):
+        c = result.get("counts") or {}
+        return f"歴史・住宅優先対策（{result.get('ward', 'all')}）: P1最優先 {c.get('p1', 0):,}棟 / P2 {c.get('p2', 0):,}棟 / P3 {c.get('p3', 0):,}棟 / 歴史的建築(〜1950) {c.get('historic_pre1950', 0):,}棟"
     return f"{name} 実行完了"
 
 
@@ -615,6 +638,28 @@ def _extract_map_actions(name: str, result: Any) -> list[dict[str, Any]]:
                 "lon": item["centroid_lon"],
                 "lat": item["centroid_lat"],
                 "zoom": 15.6,
+            })
+    elif name == "get_historic_and_residential_priorities":
+        for m in (result.get("priority_meshes") or [])[:2]:
+            actions.append({
+                "type": "fly_to_mesh",
+                "key": f"hist_mesh:{m['meshcode']}",
+                "label": f"重点対策{m['rank']}位({m['dominant_priority']}): {m['ward_name']} {m['meshcode']}",
+                "meshcode": m["meshcode"],
+                "lon": m["centroid_lon"],
+                "lat": m["centroid_lat"],
+                "zoom": 15.8,
+            })
+        for b in (result.get("sample_buildings") or [])[:1]:
+            yr = f"{b['year_built']}年" if b.get("year_built") else "築年不明"
+            actions.append({
+                "type": "focus_building",
+                "key": f"hist_bldg:{b['building_id']}",
+                "label": f"[{b['priority_tier']}] {b['ward_name']} {yr} {b['usage_label']}",
+                "building_id": b["building_id"],
+                "lon": b["centroid_lon"],
+                "lat": b["centroid_lat"],
+                "zoom": 17.0,
             })
     return actions
 
@@ -978,6 +1023,20 @@ def _execute_tool(
             ward=ward,
             purpose=purpose,
             avoid_mountain=avoid_mountain,
+            limit=6,
+        )
+
+    if name == "get_historic_and_residential_priorities":
+        from app.heritage_residential import analyze_historic_and_residential_priorities
+
+        ward = str(args.get("ward") or "all")
+        focus = str(args.get("focus") or "all")
+        if focus not in ("all", "historic", "residential"):
+            focus = "all"
+        return analyze_historic_and_residential_priorities(
+            store,
+            ward=ward,
+            focus=focus,
             limit=6,
         )
 

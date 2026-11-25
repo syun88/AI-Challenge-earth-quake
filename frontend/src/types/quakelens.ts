@@ -183,6 +183,7 @@ export interface BuildingDetail {
   hazard_disclaimer: string;
   official_programs: OfficialProgram[];
   r8_seismic_assessment?: R8BuildingAssessment;
+  priority_solution?: BuildingPrioritySolution;
 }
 
 export interface MeshDetail {
@@ -1127,4 +1128,107 @@ export interface UserPreferences {
   uid: string;
   favoriteWard: string;
   updatedAtMs?: number | null;
+}
+
+export type HistoricResidentialFocus = "all" | "historic" | "residential";
+
+export interface BuildingPrioritySolution {
+  priority_tier: "P1" | "P2" | "P3" | "P4" | "OK";
+  category_tag: string;
+  is_historic_pre1950: boolean;
+  is_residential: boolean;
+  title: string;
+  recommended_actions: string[];
+  primary_program: OfficialProgram;
+}
+
+export interface HistoricResidentialTier {
+  tier: "P1" | "P2" | "P3" | "P4";
+  rank: number;
+  urgency_label: string;
+  title: string;
+  target_criteria: string;
+  building_count: number;
+  solutions: Array<{
+    kind: string;
+    action: string;
+    detail: string;
+  }>;
+  program_urls: string[];
+}
+
+export interface HistoricResidentialWardRank {
+  ward_name: string;
+  p1_count: number;
+  p2_count: number;
+  p3_count: number;
+  historic_pre1950_count: number;
+  pre_1981_residential_count: number;
+  priority_score: number;
+}
+
+export interface HistoricResidentialMeshCandidate {
+  rank: number;
+  meshcode: string;
+  ward_name: string;
+  centroid_lat: number;
+  centroid_lon: number;
+  jname: string;
+  hazard_tier: HazardTier;
+  hazard_label: string;
+  t30_i55_ps: number | null;
+  arv: number | null;
+  p1_count: number;
+  p2_count: number;
+  p3_count: number;
+  p4_count: number;
+  historic_pre1950_count: number;
+  pre_1981_residential_count: number;
+  dominant_priority: "P1" | "P2" | "P3";
+  priority_score: number;
+  recommended_action: string;
+}
+
+export interface HistoricResidentialSampleBuilding {
+  rank: number;
+  building_id: string;
+  ward_name: string;
+  meshcode: string;
+  year_built: number | null;
+  usage_label: string;
+  structure_label: string;
+  storeys_above: number | null;
+  t30_i55_ps: number | null;
+  arv: number | null;
+  centroid_lat: number;
+  centroid_lon: number;
+  priority_tier: "P1" | "P2" | "P3" | "P4" | "OK";
+  category_tag: string;
+  title: string;
+  recommended_actions: string[];
+}
+
+export interface HistoricResidentialResponse {
+  focus: HistoricResidentialFocus;
+  focus_label: string;
+  ward: string;
+  counts: {
+    total_in_scope: number;
+    historic_pre1950: number;
+    residential_total: number;
+    wooden_pre1981_residential?: number;
+    p1: number;
+    p2: number;
+    p3: number;
+    p4: number;
+    unknown_all: number;
+  };
+  priority_tiers: HistoricResidentialTier[];
+  ward_ranking: HistoricResidentialWardRank[];
+  priority_meshes: HistoricResidentialMeshCandidate[];
+  sample_buildings: HistoricResidentialSampleBuilding[];
+  official_programs: OfficialProgram[];
+  r8_pdf_url: string;
+  r8_page_url: string;
+  disclaimer: string;
 }

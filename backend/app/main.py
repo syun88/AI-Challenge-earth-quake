@@ -32,6 +32,7 @@ from app.auth import (
     require_roles,
 )
 from app.bcp_site import assess_enterprise_assets, recommend_safe_enterprise_sites
+from app.heritage_residential import analyze_historic_and_residential_priorities
 from app.tts import (
     ALLOWED_TTS_MODELS,
     ALLOWED_TTS_VOICES,
@@ -1364,6 +1365,23 @@ def get_enterprise_safe_sites(
         ward=ward,
         purpose=purpose,
         avoid_mountain=avoid_mountain,
+        limit=limit,
+    )
+
+
+@app.get("/api/priority/historic-residential")
+def get_historic_residential_priorities(
+    ward: str = Query(default="all"),
+    focus: str = Query(default="all", pattern="^(all|historic|residential)$"),
+    limit: int = Query(default=6, ge=1, le=20),
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return P1-P4 prioritization and actionable retrofit/safety solutions for historic and residential buildings."""
+    s = _require_store()
+    return analyze_historic_and_residential_priorities(
+        s,
+        ward=ward,
+        focus=focus,
         limit=limit,
     )
 
