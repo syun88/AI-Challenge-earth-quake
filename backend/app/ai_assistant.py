@@ -77,16 +77,86 @@ def get_tools_for_role(user_role: str) -> list[dict[str, Any]]:
     return [t for t in TOOLS if t.get("name") in allowed]
 
 
-_CORP_BCP_RE = re.compile(r"(bcp|ＢＣＰ|代替拠点|サーバ|server|データセンター|datacenter|金庫|vault|社外秘|非公開拠点)", re.IGNORECASE)
-_CORP_TARGET_RE = re.compile(
-    r"(他社|別企業|他企業|xxx|ｘｘｘ|〇〇企業|○○企業|株式会社|有限会社|企業|会社).{0,24}(サーバ|server|データセンター|拠点|場所|住所|位置|金庫|機密|秘密)",
+_ASSET_TYPE_LABELS_JA: dict[str, str] = {
+    "server_room": "サーバー室 / マシンルーム",
+    "datacenter": "データセンター",
+    "bcp_hq": "BCP対策本部",
+    "vault": "重要機器・機密保管庫",
+    "warehouse": "防災備蓄・物流拠点",
+}
+
+_CORP_BCP_RE = re.compile(
+    r"(bcp|ＢＣＰ|代替拠点|サーバ|server|データセンター|datacenter|マシンルーム|金庫|vault|社外秘|非公開拠点)",
     re.IGNORECASE,
 )
-_SELF_CORP_RE = re.compile(r"(自社|当社|弊社|登録済|自分の企業|マイ拠点)")
+_EXPLICIT_THIRD_PARTY_CORP_RE = re.compile(
+    r"(他社|別企業|他企業|外部企業|競合他社|他人の企業|他人の会社|別の会社|よその会社|xxx|ｘｘｘ|〇〇企業|○○企業|〇〇会社|○○会社)",
+    re.IGNORECASE,
+)
+_CORP_TARGET_RE = re.compile(
+    r"(他社|別企業|他企業|外部企業|競合他社|他人の企業|他人の会社|xxx|ｘｘｘ|〇〇企業|○○企業|株式会社|有限会社|合同会社|企業|会社).{0,24}(サーバ|server|データセンター|datacenter|マシンルーム|秘密基地|拠点|場所|住所|位置|金庫|機密|秘密)",
+    re.IGNORECASE,
+)
+_SELF_CORP_RE = re.compile(
+    r"(自社|当社|弊社|わが社|我が社|自組織|自アカウント|自拠点|自施設|登録済|マイ拠点|マイ施設|マイ資産|"
+    r"(?:自分|うち|わたし|私)(?:の(?:会社|企業|組織|施設|拠点|資産|サーバ|server|データセンター|datacenter|マシンルーム|金庫|秘密)|が登録した))",
+    re.IGNORECASE,
+)
 _THIRD_PARTY_PII_RE = re.compile(
     r"(他人|誰|通報者|避難者|要救助者|個人).{0,20}(電話番号|住所|氏名|名前|連絡先|居場所|座標|詳細)",
     re.IGNORECASE,
 )
+
+
+def _filter_authorized_context_assets(
+    context: dict[str, Any] | None,
+    *,
+    user_role: str,
+    user_uid: str | None,
+) -> list[dict[str, Any]]:
+    """Verify strictly on the server that client-synced enterprise assets belong to the authenticated user/role."""
+    if user_role not in {"enterprise", "government"} or not user_uid:
+        return []
+    raw_assets = (context or {}).get("my_enterprise_assets")
+    if not isinstance(raw_assets, list):
+        return []
+    authorized: list[dict[str, Any]] = []
+    for item in raw_assets[:30]:
+        if not isinstance(item, dict):
+            continue
+        owner_uid = str(item.get("ownerUid") or item.get("owner_uid") or "").strip()
+        conf = str(item.get("confidentialityLevel") or item.get("confidentiality_level") or "enterprise_only").strip()
+        if user_role == "enterprise":
+            if owner_uid and owner_uid != user_uid:
+                continue
+        elif user_role == "government":
+            if conf != "gov_emergency_share":
+                continue
+        try:
+            lat_v = float(item["lat"])
+            lon_v = float(item["lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not in_kyoto_bounds(lon_v, lat_v):
+            continue
+        asset_type = str(item.get("assetType") or item.get("asset_type") or "server_room").strip()
+        backup_raw = item.get("backupHours") if "backupHours" in item else item.get("backup_hours")
+        backup_val = float(backup_raw) if isinstance(backup_raw, (int, float)) else None
+        authorized.append({
+            "id": str(item.get("id") or f"ctx-asset-{len(authorized) + 1}")[:64],
+            "ownerUid": owner_uid or user_uid,
+            "organizationName": str(item.get("organizationName") or item.get("organization_name") or "").strip()[:80],
+            "name": str(item.get("name") or "登録拠点").strip()[:80],
+            "assetType": asset_type,
+            "confidentialityLevel": conf,
+            "wardName": str(item.get("wardName") or item.get("ward_name") or "京都市").strip()[:32],
+            "lat": lat_v,
+            "lon": lon_v,
+            "floorInfo": str(item.get("floorInfo") or item.get("floor_info") or "").strip()[:48],
+            "backupHours": backup_val,
+            "notes": str(item.get("notes") or "").strip()[:160],
+        })
+    return authorized
 
 
 def evaluate_security_guardrail(
@@ -94,6 +164,7 @@ def evaluate_security_guardrail(
     user_role: str,
     *,
     board_channel: str | None = None,
+    own_asset_names: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Block unauthorized cross-role / cross-tenant / PII intelligence extraction before LLM or tool execution."""
     text = (message or "").strip()
@@ -102,7 +173,7 @@ def evaluate_security_guardrail(
 
     is_public_scope = (user_role == "citizen") or (board_channel == "public")
     if is_public_scope:
-        if _CORP_BCP_RE.search(text) or _CORP_TARGET_RE.search(text):
+        if _CORP_BCP_RE.search(text) or _CORP_TARGET_RE.search(text) or _EXPLICIT_THIRD_PARTY_CORP_RE.search(text):
             scope_label = "公開チャンネル" if board_channel == "public" else "一般市民アカウント"
             return {
                 "configured": True,
@@ -156,12 +227,20 @@ def evaluate_security_guardrail(
             }
 
     if user_role == "enterprise":
-        # Enterprises may analyze their own registered assets or general BCP high-risk areas,
-        # but NEVER another company's servers/confidential facilities.
-        if (
-            any(k in text.lower() for k in ("他社", "別企業", "他企業", "xxx", "ｘｘｘ", "〇〇企業", "○○企業"))
-            and any(t in text.lower() for t in ("サーバ", "server", "データセンター", "拠点", "金庫", "機密", "場所", "住所"))
-        ) or (_CORP_TARGET_RE.search(text) and not _SELF_CORP_RE.search(text)):
+        # Enterprises may query/diagnose THEIR OWN registered assets or general BCP high-risk areas,
+        # but NEVER another company's servers/confidential facilities (even if self-ownership wording is also injected).
+        low = text.lower()
+        has_explicit_third_party = bool(_EXPLICIT_THIRD_PARTY_CORP_RE.search(text))
+        has_corp_sensitive = bool(
+            _CORP_BCP_RE.search(text)
+            or any(t in low for t in ("拠点", "金庫", "機密", "秘密", "場所", "住所", "位置"))
+        )
+        matches_own_asset = any(
+            asset_name and len(asset_name) >= 2 and asset_name in text
+            for asset_name in (own_asset_names or [])
+        )
+        is_self_corp = bool(_SELF_CORP_RE.search(text) or (matches_own_asset and not has_explicit_third_party))
+        if (has_explicit_third_party and has_corp_sensitive) or (_CORP_TARGET_RE.search(text) and not is_self_corp):
             return {
                 "configured": True,
                 "security_blocked": True,
@@ -235,9 +314,11 @@ def _build_system_instruction(user_role: str, *, board_channel: str | None = Non
     elif user_role == "enterprise":
         role_note = (
             "【現在の利用者区分：企業（BCP・施設防災担当）】\n"
-            "あなたは企業利用者を支援する自律AIエージェントです。"
-            "自社の登録拠点リスク診断（`get_my_enterprise_assets_risk`）、BCP代替拠点の安全候補と**避けるべき高リスクエリア**分析（`recommend_enterprise_bcp_sites`）、迂回ルート、地図操作ツール（安全候補の緑ピン／高リスク回避の赤ピン設定・カメラ移動）を積極的に活用してください。"
-            "他社の非公開拠点・サーバー位置や一般市民の個別救助通報の個人情報は絶対に照会・回答できません。"
+            "あなたは企業利用者を支援する自律AIエージェントです。\n"
+            "- ユーザーが『自分の会社・自社・当社・登録済みの拠点（サーバー室、マシンルーム、データセンター、秘密基地、BCP対策本部等）』の場所・詳細・リスクを質問した場合は、"
+            "他社扱いせず必ず `get_my_enterprise_assets_risk` ツールを呼び出して本人の登録拠点情報とハザード評価・地図ピンを回答してください。\n"
+            "- BCP代替拠点の安全候補と**避けるべき高リスクエリア**分析には `recommend_enterprise_bcp_sites` と地図操作ツール（安全候補の緑ピン／高リスク回避の赤ピン設定・カメラ移動）を積極的に活用してください。\n"
+            "- 他社・外部企業の非公開拠点・サーバー位置や一般市民の個別救助通報の個人情報は絶対に照会・回答できません。"
         )
     else:
         role_note = (
@@ -721,13 +802,17 @@ TOOLS = [
     {
         "type": "function",
         "name": "get_my_enterprise_assets_risk",
-        "description": "【企業・認証済政府機関専用】現在ログイン中の企業アカウント自身が登録した機密拠点（または政府の場合は緊急時政府共有に設定された企業拠点のみ）について、最新の地震ハザード・周辺通行止め・最寄り避難所・アラートを取得します。一般市民や他社拠点は取得できません。",
+        "description": "【企業・認証済政府機関専用】現在ログイン中の企業アカウント自身が登録した拠点（サーバー室・マシンルーム・データセンター・BCP対策本部・秘密基地等、政府の場合は緊急時政府共有に設定された企業拠点のみ）について、登録名・所在地・種別・最新の地震ハザード・周辺通行止め・最寄り避難所・アラートを取得し地図にピン表示します。他社拠点や一般市民権限では取得できません。",
         "parameters": {
             "type": "object",
             "properties": {
                 "ward": {
                     "type": "string",
                     "description": "絞り込む区名（任意）",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "特定の自社拠点名・種別キーワード（例: '秘密基地', 'サーバー室', 'BCP'。省略時は全登録拠点を返却）",
                 },
             },
             "required": [],
@@ -843,7 +928,9 @@ def _summarize_tool_call(name: str, args: dict[str, Any], result: Any) -> str:
     if name == "operate_map_interface" and isinstance(result, dict):
         return f"地図操作実行: {result.get('summary', '表示を更新')}"
     if name == "get_my_enterprise_assets_risk" and isinstance(result, dict):
-        return f"企業拠点リスク診断: 閲覧可能拠点 {result.get('count', 0)}件を評価"
+        cnt = result.get("count", 0)
+        names = ", ".join(str(a.get("name") or "拠点") for a in (result.get("assessments") or [])[:3])
+        return f"企業拠点リスク診断: 閲覧可能拠点 {cnt}件を評価" + (f"（{names}）" if names else "")
     if name == "get_historic_and_residential_priorities" and isinstance(result, dict):
         c = result.get("counts") or {}
         return f"歴史・住宅優先対策（{result.get('ward', 'all')}）: P1最優先 {c.get('p1', 0):,}棟 / P2 {c.get('p2', 0):,}棟 / P3 {c.get('p3', 0):,}棟 / 歴史的建築(〜1950) {c.get('historic_pre1950', 0):,}棟"
@@ -1122,15 +1209,36 @@ def _extract_map_actions(name: str, result: Any) -> list[dict[str, Any]]:
         pins = []
         for a in assessments[:6]:
             if a.get("lat") is not None and a.get("lon") is not None:
+                alerts = a.get("alerts") or []
+                score = a.get("safety_score")
+                tone = (
+                    "rose"
+                    if (len(alerts) >= 2 or (isinstance(score, (int, float)) and score < 55))
+                    else ("amber" if alerts else "emerald")
+                )
+                type_label = a.get("asset_type_label") or "拠点"
+                floor_txt = f" ({a['floor_info']})" if a.get("floor_info") else ""
                 pins.append({
                     "id": f"asset:{a['id']}",
-                    "label": f"拠点: {a['name']}",
+                    "label": f"{type_label}: {a['name']}",
                     "lat": a["lat"],
                     "lon": a["lon"],
-                    "tone": "rose" if a.get("alerts") else "emerald",
-                    "description": f"安全度 {a.get('safety_score', '—')} / 警告 {len(a.get('alerts') or [])}件",
+                    "tone": tone,
+                    "description": (
+                        f"{a.get('ward_name', '京都市')}{floor_txt} / "
+                        f"安全度 {score if score is not None else '—'} / 警告 {len(alerts)}件"
+                    ),
                 })
         if pins:
+            first_pin = pins[0]
+            actions.append({
+                "type": "fly_to_location",
+                "key": f"asset_focus:{first_pin['id']}",
+                "label": f"{first_pin['label']} へ移動",
+                "lon": first_pin["lon"],
+                "lat": first_pin["lat"],
+                "zoom": 16.0,
+            })
             actions.append({
                 "type": "set_agent_pins",
                 "key": "my_enterprise_assets_pins",
@@ -1214,6 +1322,7 @@ def _execute_tool(
     reports_store: DamageReportStore | None = None,
     user_role: str = "government",
     user_uid: str | None = None,
+    context_assets: list[dict[str, Any]] | None = None,
 ) -> Any:
     args = args or {}
     if name not in get_allowed_tool_names(user_role):
@@ -1875,37 +1984,90 @@ def _execute_tool(
             else [("confidentialityLevel", "==", "gov_emergency_share")]
         )
         raw_docs = query_firestore_collection("enterprise_assets", filters=filters, limit_n=30)
-        if raw_docs is None:
-            return {
-                "count": 0,
-                "assessments": [],
-                "note": "サーバー側 Firestore Admin SDK 未接続のため、画面右上の「自社拠点・資産」パネルから登録拠点をご確認ください。",
-            }
+        combined_raw: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
 
-        ward_filter = str(args.get("ward") or "").strip()
-        valid_assets: list[dict[str, Any]] = []
-        for d in raw_docs:
-            # Defense-in-depth verification on top of Firestore query filter
-            if user_role == "enterprise" and str(d.get("ownerUid") or "") != user_uid:
-                continue
-            if user_role == "government" and str(d.get("confidentialityLevel") or "") != "gov_emergency_share":
-                continue
-            if ward_filter and ward_filter != "all" and str(d.get("wardName") or "") != ward_filter:
-                continue
+        def _append_authorized_asset(d: dict[str, Any]) -> None:
+            if not isinstance(d, dict):
+                return
+            owner = str(d.get("ownerUid") or d.get("owner_uid") or "").strip()
+            conf = str(d.get("confidentialityLevel") or d.get("confidentiality_level") or "enterprise_only").strip()
+            if user_role == "enterprise" and owner and owner != user_uid:
+                return
+            if user_role == "enterprise" and not owner:
+                return
+            if user_role == "government" and conf != "gov_emergency_share":
+                return
             try:
                 lat_v = float(d["lat"])
                 lon_v = float(d["lon"])
             except (KeyError, TypeError, ValueError):
-                continue
-            valid_assets.append({
-                "id": str(d.get("id") or ""),
-                "name": str(d.get("name") or "登録拠点"),
-                "asset_type": str(d.get("assetType") or "server_room"),
-                "ward_name": str(d.get("wardName") or "京都市"),
+                return
+            doc_id = str(d.get("id") or "").strip()
+            doc_name = str(d.get("name") or "登録拠点").strip()
+            dedup_key = doc_id or f"{doc_name}:{lat_v:.5f}:{lon_v:.5f}"
+            if dedup_key in seen_keys:
+                return
+            seen_keys.add(dedup_key)
+            atype = str(d.get("assetType") or d.get("asset_type") or "server_room").strip()
+            backup_raw = d.get("backupHours") if "backupHours" in d else d.get("backup_hours")
+            combined_raw.append({
+                "id": doc_id or f"asset-{len(combined_raw) + 1}",
+                "name": doc_name,
+                "organization_name": str(d.get("organizationName") or d.get("organization_name") or "").strip(),
+                "asset_type": atype,
+                "asset_type_label": _ASSET_TYPE_LABELS_JA.get(atype, atype),
+                "ward_name": str(d.get("wardName") or d.get("ward_name") or "京都市").strip(),
                 "lat": lat_v,
                 "lon": lon_v,
-                "confidentiality_level": str(d.get("confidentialityLevel") or "enterprise_only"),
+                "confidentiality_level": conf,
+                "floor_info": str(d.get("floorInfo") or d.get("floor_info") or "").strip(),
+                "backup_hours": float(backup_raw) if isinstance(backup_raw, (int, float)) else None,
+                "notes": str(d.get("notes") or "").strip(),
             })
+
+        for doc_item in raw_docs or []:
+            _append_authorized_asset(doc_item)
+        for ctx_item in context_assets or []:
+            _append_authorized_asset(ctx_item)
+
+        if raw_docs is None and not combined_raw:
+            return {
+                "count": 0,
+                "assessments": [],
+                "note": "登録済みの自社拠点が見つかりません（画面右上の「自社拠点・資産」パネルから拠点登録するとAIでも位置・リスク診断ができます）。",
+            }
+
+        ward_filter = str(args.get("ward") or "").strip()
+        query_filter = str(args.get("query") or "").strip().lower()
+        filtered_assets = [
+            a for a in combined_raw
+            if not (ward_filter and ward_filter != "all" and a["ward_name"] != ward_filter)
+        ]
+
+        query_matched = True
+        if query_filter and filtered_assets:
+            q_hits = [
+                a for a in filtered_assets
+                if query_filter in a["name"].lower()
+                or query_filter in a["asset_type_label"].lower()
+                or query_filter in a["ward_name"].lower()
+                or query_filter in a["notes"].lower()
+                or query_filter in a["organization_name"].lower()
+            ]
+            if q_hits:
+                filtered_assets = q_hits
+            else:
+                query_matched = False
+
+        if not filtered_assets:
+            return {
+                "count": 0,
+                "total_accessible_count": len(combined_raw),
+                "scope": "self_owned" if user_role == "enterprise" else "gov_emergency_share_only",
+                "assessments": [],
+                "note": "指定条件に一致する閲覧可能拠点がありません。画面右上の「自社拠点・資産」パネルで登録状況をご確認ください。",
+            }
 
         r_store = _resolve_reports_store(reports_store)
         pub_reports = r_store.list_reports(
@@ -1915,20 +2077,29 @@ def _execute_tool(
             viewer_role=user_role,
             viewer_uid=user_uid,
         )
-        assessed = assess_enterprise_assets(store, assets=valid_assets, public_reports=pub_reports)
-        by_id = {a["id"]: a for a in valid_assets}
+        assessed = assess_enterprise_assets(store, assets=filtered_assets, public_reports=pub_reports)
+        by_id = {a["id"]: a for a in filtered_assets}
         merged = [
             {
                 **item,
                 "name": by_id.get(item["id"], {}).get("name", "拠点"),
+                "organization_name": by_id.get(item["id"], {}).get("organization_name", ""),
+                "asset_type": by_id.get(item["id"], {}).get("asset_type", "server_room"),
+                "asset_type_label": by_id.get(item["id"], {}).get("asset_type_label", "サーバー室 / マシンルーム"),
+                "confidentiality_level": by_id.get(item["id"], {}).get("confidentiality_level", "enterprise_only"),
                 "ward_name": by_id.get(item["id"], {}).get("ward_name", ""),
                 "lat": by_id.get(item["id"], {}).get("lat"),
                 "lon": by_id.get(item["id"], {}).get("lon"),
+                "floor_info": by_id.get(item["id"], {}).get("floor_info", ""),
+                "backup_hours": by_id.get(item["id"], {}).get("backup_hours"),
+                "notes": by_id.get(item["id"], {}).get("notes", ""),
             }
             for item in assessed
         ]
         return {
             "count": len(merged),
+            "total_accessible_count": len(combined_raw),
+            "query_matched": query_matched,
             "scope": "self_owned" if user_role == "enterprise" else "gov_emergency_share_only",
             "assessments": merged,
         }
@@ -2074,24 +2245,36 @@ def _extract_location_hint_from_dialogue(
     return None, fallback_ward
 
 
-def _build_contextual_prompt(message: str, context: dict[str, Any] | None) -> str:
-    if not context:
-        return message
+def _build_contextual_prompt(
+    message: str,
+    context: dict[str, Any] | None,
+    *,
+    authorized_assets: list[dict[str, Any]] | None = None,
+) -> str:
     ctx_lines = []
-    if context.get("ward") and context["ward"] != "all":
-        ctx_lines.append(f"表示中の区: {context['ward']}")
-    if context.get("usage_group") and context["usage_group"] != "all":
-        ctx_lines.append(f"用途フィルター: {context['usage_group']}")
-    if context.get("age_categories") and len(context["age_categories"]) < 4:
-        ctx_lines.append(f"築年フィルター: {','.join(context['age_categories'])}")
-    if context.get("hazard_tiers") and len(context["hazard_tiers"]) < 4:
-        ctx_lines.append(f"ハザードフィルター: {','.join(context['hazard_tiers'])}")
-    if context.get("selected_meshcode"):
-        ctx_lines.append(f"選択中の250mメッシュ: {context['selected_meshcode']}")
-    if context.get("selected_building_id"):
-        ctx_lines.append(f"選択中の建物ID: {context['selected_building_id']}")
-    if context.get("is_3d"):
-        ctx_lines.append("地図表示モード: 3D立体表示")
+    if context:
+        if context.get("ward") and context["ward"] != "all":
+            ctx_lines.append(f"表示中の区: {context['ward']}")
+        if context.get("usage_group") and context["usage_group"] != "all":
+            ctx_lines.append(f"用途フィルター: {context['usage_group']}")
+        if context.get("age_categories") and len(context["age_categories"]) < 4:
+            ctx_lines.append(f"築年フィルター: {','.join(context['age_categories'])}")
+        if context.get("hazard_tiers") and len(context["hazard_tiers"]) < 4:
+            ctx_lines.append(f"ハザードフィルター: {','.join(context['hazard_tiers'])}")
+        if context.get("selected_meshcode"):
+            ctx_lines.append(f"選択中の250mメッシュ: {context['selected_meshcode']}")
+        if context.get("selected_building_id"):
+            ctx_lines.append(f"選択中の建物ID: {context['selected_building_id']}")
+        if context.get("is_3d"):
+            ctx_lines.append("地図表示モード: 3D立体表示")
+    if authorized_assets:
+        preview = "、".join(
+            f"{a['name']}({_ASSET_TYPE_LABELS_JA.get(a['assetType'], a['assetType'])} / {a['wardName']})"
+            for a in authorized_assets[:5]
+        )
+        ctx_lines.append(
+            f"閲覧可能な登録拠点({len(authorized_assets)}件: {preview}) — 座標・リスク詳細の照会には必ず get_my_enterprise_assets_risk を呼び出してください"
+        )
     if not ctx_lines:
         return message
     return f"[現在の画面コンテキスト: {' / '.join(ctx_lines)}]\n\n質問: {message}"
@@ -2318,7 +2501,76 @@ def _build_unconfigured_fallback(
         links = "\n".join(f"- [{p['title']}]({p['url']})" for p in prog["official_retrofit_programs"][:3])
         sections.append(f"### 京都市公式の耐震診断・補助制度\n{links}")
 
-    if user_role == "enterprise" and any(k in message.lower() for k in ["bcp", "代替拠点", "高リスク", "避けるべき", "サーバー", "データセンター"]):
+    if user_role in {"enterprise", "government"} and (
+        any(
+            k in message.lower()
+            for k in (
+                "自社",
+                "当社",
+                "弊社",
+                "自分の会社",
+                "自分の",
+                "登録拠点",
+                "資産",
+                "サーバー室",
+                "マシンルーム",
+                "秘密基地",
+                "緊急時共有",
+                "共有された企業",
+            )
+        )
+        or any(
+            a.get("name") and len(str(a["name"])) >= 2 and str(a["name"]) in message
+            for a in _filter_authorized_context_assets(ctx, user_role=user_role, user_uid=user_uid)
+        )
+    ):
+        auth_assets = _filter_authorized_context_assets(ctx, user_role=user_role, user_uid=user_uid)
+        matched_q = ""
+        for a in auth_assets:
+            if a.get("name") and a["name"] in message:
+                matched_q = a["name"]
+                break
+        asset_args: dict[str, Any] = {"ward": ward}
+        if matched_q:
+            asset_args["query"] = matched_q
+        asset_res = _execute_tool(
+            store,
+            "get_my_enterprise_assets_risk",
+            asset_args,
+            board_store=board_store,
+            reports_store=reports_store,
+            user_role=user_role,
+            user_uid=user_uid,
+            context_assets=auth_assets,
+        )
+        tool_records.append({"name": "get_my_enterprise_assets_risk", "arguments": asset_args, "result": asset_res})
+        tool_trace.append({
+            "name": "get_my_enterprise_assets_risk",
+            "arguments": asset_args,
+            "summary": _summarize_tool_call("get_my_enterprise_assets_risk", asset_args, asset_res),
+        })
+        actions.extend(_extract_map_actions("get_my_enterprise_assets_risk", asset_res))
+        assessed_items = asset_res.get("assessments") or []
+        if assessed_items:
+            a_lines = []
+            for item in assessed_items[:5]:
+                sh = item.get("nearest_official_shelter") or {}
+                sh_txt = f"最寄り避難所: {sh.get('name')}（約{sh.get('distance_km')}km）" if sh.get("name") else ""
+                floor_txt = f" / フロア: {item['floor_info']}" if item.get("floor_info") else ""
+                bak_txt = f" / 非常電源: {item['backup_hours']:g}時間" if item.get("backup_hours") is not None else ""
+                alert_txt = f" / ⚠️ {'; '.join(item.get('alerts') or [])}" if item.get("alerts") else " / 周辺異常なし"
+                a_lines.append(
+                    f"- **{item['name']}**（{item.get('asset_type_label', '拠点')} / {item['ward_name']}{floor_txt}{bak_txt}）\n"
+                    f"  - 座標: `{item['lat']:.5f}, {item['lon']:.5f}` / 安全度スコア: **{item.get('safety_score', '—')}** / {sh_txt}{alert_txt}"
+                )
+            sections.append("### 登録済み拠点・施設一覧とリスク診断\n" + "\n".join(a_lines))
+        elif asset_res.get("note"):
+            sections.append(f"### 登録済み拠点・施設の確認\n{asset_res['note']}")
+
+    if user_role == "enterprise" and (
+        any(k in message.lower() for k in ["bcp", "代替拠点", "高リスク", "避けるべき", "候補地"])
+        or (any(k in message.lower() for k in ["サーバー", "データセンター"]) and not _SELF_CORP_RE.search(message))
+    ):
         bcp_args = {"ward": ward, "purpose": "bcp_hq" if "bcp" in message.lower() else "datacenter_server"}
         bcp_res = _execute_tool(store, "recommend_enterprise_bcp_sites", bcp_args, board_store=board_store, reports_store=reports_store, user_role=user_role, user_uid=user_uid)
         tool_records.append({"name": "recommend_enterprise_bcp_sites", "arguments": bcp_args, "result": bcp_res})
@@ -2416,7 +2668,18 @@ def ask_quakelens_ai(
 ) -> dict[str, Any]:
     """Run Gemini Interactions API with Function Calling against real Kyoto City data."""
     effective_role = "citizen" if board_channel == "public" else user_role
-    guard = evaluate_security_guardrail(message, effective_role, board_channel=board_channel)
+    authorized_assets = (
+        []
+        if board_channel == "public"
+        else _filter_authorized_context_assets(context, user_role=effective_role, user_uid=user_uid)
+    )
+    own_asset_names = [a["name"] for a in authorized_assets if a.get("name")]
+    guard = evaluate_security_guardrail(
+        message,
+        effective_role,
+        board_channel=board_channel,
+        own_asset_names=own_asset_names,
+    )
     if guard is not None:
         return guard
 
@@ -2433,7 +2696,11 @@ def ask_quakelens_ai(
         )
 
     chosen_model = _resolve_model(model)
-    prompt = _build_contextual_prompt(message, context)
+    prompt = _build_contextual_prompt(
+        message,
+        context,
+        authorized_assets=authorized_assets,
+    )
     role_instruction = _build_system_instruction(effective_role, board_channel=board_channel)
     role_tools = get_tools_for_role(effective_role)
     client = genai.Client(api_key=api_key, http_options={"timeout": 120000})
@@ -2481,6 +2748,7 @@ def ask_quakelens_ai(
                     reports_store=reports_store,
                     user_role=effective_role,
                     user_uid=user_uid,
+                    context_assets=authorized_assets,
                 )
                 tool_records.append({"name": fn_name, "arguments": fn_args, "result": result_data})
                 summary = _summarize_tool_call(fn_name, fn_args, result_data)
@@ -2539,7 +2807,18 @@ def stream_quakelens_ai(
 ) -> Iterator[dict[str, Any]]:
     """Yield structured SSE events while streaming Gemini Function Calling and text deltas."""
     effective_role = "citizen" if board_channel == "public" else user_role
-    guard = evaluate_security_guardrail(message, effective_role, board_channel=board_channel)
+    authorized_assets = (
+        []
+        if board_channel == "public"
+        else _filter_authorized_context_assets(context, user_role=effective_role, user_uid=user_uid)
+    )
+    own_asset_names = [a["name"] for a in authorized_assets if a.get("name")]
+    guard = evaluate_security_guardrail(
+        message,
+        effective_role,
+        board_channel=board_channel,
+        own_asset_names=own_asset_names,
+    )
     if guard is not None:
         yield {"type": "verification", **guard["verification"]}
         yield {"type": "done", **guard}
@@ -2562,7 +2841,11 @@ def stream_quakelens_ai(
         return
 
     chosen_model = _resolve_model(model)
-    prompt = _build_contextual_prompt(message, context)
+    prompt = _build_contextual_prompt(
+        message,
+        context,
+        authorized_assets=authorized_assets,
+    )
     role_instruction = _build_system_instruction(effective_role, board_channel=board_channel)
     role_tools = get_tools_for_role(effective_role)
     client = genai.Client(api_key=api_key, http_options={"timeout": 120000})
@@ -2743,6 +3026,7 @@ def stream_quakelens_ai(
                 reports_store=reports_store,
                 user_role=effective_role,
                 user_uid=user_uid,
+                context_assets=authorized_assets,
             )
             tool_records.append({"name": fn_name, "arguments": fn_args, "result": result_data})
             summary = _summarize_tool_call(fn_name, fn_args, result_data)

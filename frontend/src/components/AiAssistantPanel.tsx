@@ -9,7 +9,6 @@ import {
   AlertCircle,
   AlertTriangle,
   MapPin,
-  RotateCcw,
   KeyRound,
   Square,
   ChevronDown,
@@ -20,6 +19,9 @@ import {
   Download,
   FileSpreadsheet,
   Volume2,
+  History,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import { downloadAuthenticatedFile, sendChatMessage, streamChatMessage } from "@/lib/api";
 import { useMochimamoVoice } from "@/lib/useMochimamoVoice";
@@ -30,6 +32,7 @@ import {
   AgeCategory,
   AiProtectionStatus,
   BuildingDetail,
+  EnterpriseAsset,
   GroundingVerification,
   HazardTier,
   MapAction,
@@ -56,7 +59,9 @@ interface ChatTurn {
 }
 
 interface AiAssistantPanelProps {
+  userUid?: string;
   userRole?: UserRole;
+  enterpriseAssets?: EnterpriseAsset[];
   geminiConfigured: boolean;
   aiProtection?: AiProtectionStatus | null;
   totalBuildings?: number | null;
@@ -178,8 +183,183 @@ const INITIAL_MESSAGE: ChatTurn = {
 
 type AiModelId = "gemini-3.5-flash-lite" | "gemini-4-hydrogen" | "gemini-4-argon";
 
+const MAX_SAVED_SESSIONS = 15;
+const MAX_TURNS_PER_SESSION = 80;
+
+interface SavedChatSession {
+  id: string;
+  title: string;
+  updatedAt: number;
+  interactionId: string | null;
+  model: AiModelId;
+  messages: ChatTurn[];
+}
+
+interface PersistedAiChatStore {
+  activeSessionId: string;
+  sessions: SavedChatSession[];
+}
+
+function buildChatStorageKey(userUid?: string, userRole?: UserRole): string {
+  const safeUid = (userUid || "guest").replace(/[^A-Za-z0-9_-]/g, "_");
+  return `quakelens_ai_history_v1:${safeUid}:${userRole || "citizen"}`;
+}
+
+function makeNewSessionId(): string {
+  return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function sanitizeTurnsForStorage(turns: ChatTurn[]): ChatTurn[] {
+  const cleaned: ChatTurn[] = [];
+  for (const t of turns) {
+    if (!t || typeof t !== "object") continue;
+    if (t.role === "assistant" && t.streaming && !t.content.trim() && !t.error) {
+      continue;
+    }
+    cleaned.push({
+      id: String(t.id || ""),
+      role: t.role === "user" ? "user" : "assistant",
+      content: String(t.content || ""),
+      toolCalls: Array.isArray(t.toolCalls) ? t.toolCalls : undefined,
+      mapActions: Array.isArray(t.mapActions) ? t.mapActions : undefined,
+      configured: typeof t.configured === "boolean" ? t.configured : undefined,
+      model: t.model ?? undefined,
+      streaming: false,
+      incomplete: Boolean(t.incomplete) || undefined,
+      aborted: Boolean(t.aborted) || undefined,
+      error: t.error ? String(t.error) : undefined,
+      verification: t.verification,
+    });
+  }
+  return cleaned.length > MAX_TURNS_PER_SESSION
+    ? cleaned.slice(cleaned.length - MAX_TURNS_PER_SESSION)
+    : cleaned;
+}
+
+function deriveSessionTitle(turns: ChatTurn[]): string {
+  const firstUser = turns.find((t) => t.role === "user" && t.content.trim().length > 0);
+  if (!firstUser) return "新しい会話";
+  const singleLine = firstUser.content.replace(/\s+/g, " ").trim();
+  return singleLine.length > 28 ? `${singleLine.slice(0, 28)}…` : singleLine;
+}
+
+function upsertSessionList(
+  existingSessions: SavedChatSession[],
+  activeId: string,
+  turns: ChatTurn[],
+  currInteractionId: string | null,
+  currModel: AiModelId,
+  touchTimestamp = false
+): SavedChatSession[] {
+  const sanitized = sanitizeTurnsForStorage(turns);
+  const hasConversation = sanitized.some((m) => m.role === "user");
+  const prevEntry = existingSessions.find((s) => s.id === activeId);
+  const others = existingSessions.filter((s) => s.id !== activeId);
+  if (!hasConversation) {
+    return others.slice(0, MAX_SAVED_SESSIONS);
+  }
+  const prevLastMsg = prevEntry?.messages[prevEntry.messages.length - 1];
+  const currLastMsg = sanitized[sanitized.length - 1];
+  const changed =
+    !prevEntry ||
+    prevEntry.messages.length !== sanitized.length ||
+    prevEntry.interactionId !== currInteractionId ||
+    prevLastMsg?.content !== currLastMsg?.content ||
+    prevLastMsg?.error !== currLastMsg?.error;
+
+  const nextUpdatedAt =
+    touchTimestamp && changed ? Date.now() : (prevEntry?.updatedAt ?? 0);
+
+  const entry: SavedChatSession = {
+    id: activeId,
+    title: deriveSessionTitle(sanitized),
+    updatedAt: nextUpdatedAt,
+    interactionId: currInteractionId,
+    model: currModel,
+    messages: sanitized,
+  };
+  return [entry, ...others]
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, MAX_SAVED_SESSIONS);
+}
+
+function loadInitialAiChatStore(storageKey: string): PersistedAiChatStore {
+  const fallbackId = "chat-default";
+  if (typeof window === "undefined") {
+    return { activeSessionId: fallbackId, sessions: [] };
+  }
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) {
+      return { activeSessionId: fallbackId, sessions: [] };
+    }
+    const parsed = JSON.parse(raw) as Partial<PersistedAiChatStore>;
+    const rawSessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+    const validSessions: SavedChatSession[] = [];
+    for (const s of rawSessions.slice(0, MAX_SAVED_SESSIONS)) {
+      if (!s || typeof s !== "object" || !s.id) continue;
+      const msgs = sanitizeTurnsForStorage(Array.isArray(s.messages) ? s.messages : []);
+      if (msgs.length === 0) continue;
+      validSessions.push({
+        id: String(s.id),
+        title: typeof s.title === "string" && s.title.trim() ? s.title : deriveSessionTitle(msgs),
+        updatedAt: typeof s.updatedAt === "number" ? s.updatedAt : 0,
+        interactionId: typeof s.interactionId === "string" ? s.interactionId : null,
+        model:
+          s.model === "gemini-4-hydrogen" || s.model === "gemini-4-argon"
+            ? s.model
+            : "gemini-3.5-flash-lite",
+        messages: msgs,
+      });
+    }
+    const activeId =
+      typeof parsed?.activeSessionId === "string" && parsed.activeSessionId
+        ? parsed.activeSessionId
+        : validSessions[0]?.id || fallbackId;
+    return { activeSessionId: activeId, sessions: validSessions };
+  } catch {
+    return { activeSessionId: fallbackId, sessions: [] };
+  }
+}
+
+function persistAiChatStore(storageKey: string, payload: PersistedAiChatStore): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(payload));
+  } catch {
+    // Graceful trim if browser storage quota is tight
+    try {
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          activeSessionId: payload.activeSessionId,
+          sessions: payload.sessions.slice(0, 5),
+        })
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }
+}
+
+function formatSessionTimestamp(ts: number): string {
+  if (!ts) return "";
+  try {
+    return new Date(ts).toLocaleString("ja-JP", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
 export function AiAssistantPanel({
+  userUid,
   userRole = "citizen",
+  enterpriseAssets,
   geminiConfigured,
   aiProtection,
   totalBuildings,
@@ -197,15 +377,36 @@ export function AiAssistantPanel({
   onExecuteMapActionsBatch,
 }: AiAssistantPanelProps) {
   const demoPrompts = ROLE_PROMPTS[userRole] || ROLE_PROMPTS.citizen;
-  const [messages, setMessages] = useState<ChatTurn[]>([INITIAL_MESSAGE]);
+  const storageKey = buildChatStorageKey(userUid, userRole);
+  const [initialSnapshot] = useState<PersistedAiChatStore>(() =>
+    loadInitialAiChatStore(storageKey)
+  );
+  const [sessions, setSessions] = useState<SavedChatSession[]>(() => initialSnapshot.sessions);
+  const [activeSessionId, setActiveSessionId] = useState<string>(
+    () => initialSnapshot.activeSessionId
+  );
+  const initialActiveSession = initialSnapshot.sessions.find(
+    (s) => s.id === initialSnapshot.activeSessionId
+  );
+
+  const [messages, setMessages] = useState<ChatTurn[]>(() =>
+    initialActiveSession && initialActiveSession.messages.length > 0
+      ? initialActiveSession.messages
+      : [INITIAL_MESSAGE]
+  );
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [autoAgentMap, setAutoAgentMap] = useState(true);
-  const [interactionId, setInteractionId] = useState<string | null>(null);
-  const [model, setModel] = useState<AiModelId>("gemini-3.5-flash-lite");
+  const [interactionId, setInteractionId] = useState<string | null>(
+    () => initialActiveSession?.interactionId ?? null
+  );
+  const [model, setModel] = useState<AiModelId>(
+    () => initialActiveSession?.model ?? "gemini-3.5-flash-lite"
+  );
   const [tempApiKey, setTempApiKey] = useState("");
   const [accessCode, setAccessCode] = useState("");
   const [showKeyBox, setShowKeyBox] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
   const [expandedTraces, setExpandedTraces] = useState<Record<string, boolean>>({});
   const [justCompleted, setJustCompleted] = useState(false);
@@ -248,17 +449,102 @@ export function AiAssistantPanel({
   }, []);
 
   useEffect(() => {
+    const nextSessions = upsertSessionList(
+      sessions,
+      activeSessionId,
+      messages,
+      interactionId,
+      model,
+      true
+    );
+    persistAiChatStore(storageKey, {
+      activeSessionId,
+      sessions: nextSessions,
+    });
+  }, [storageKey, sessions, activeSessionId, messages, interactionId, model]);
+
+  useEffect(() => {
     if (messages.length > 1 || sending) {
       chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, sending]);
 
-  const handleReset = () => {
+  const handleNewChat = () => {
     abortRef.current?.abort();
     stopAudio();
     setSending(false);
+    const archived = upsertSessionList(
+      sessions,
+      activeSessionId,
+      messages,
+      interactionId,
+      model,
+      true
+    );
+    const nextId = makeNewSessionId();
+    setSessions(archived);
+    setActiveSessionId(nextId);
     setInteractionId(null);
     setMessages([INITIAL_MESSAGE]);
+    setShowHistory(false);
+  };
+
+  const handleSelectSession = (target: SavedChatSession) => {
+    if (target.id === activeSessionId) {
+      setShowHistory(false);
+      return;
+    }
+    abortRef.current?.abort();
+    stopAudio();
+    setSending(false);
+    const archived = upsertSessionList(
+      sessions,
+      activeSessionId,
+      messages,
+      interactionId,
+      model,
+      true
+    );
+    setSessions(archived);
+    setActiveSessionId(target.id);
+    setMessages(target.messages.length > 0 ? target.messages : [INITIAL_MESSAGE]);
+    setInteractionId(target.interactionId ?? null);
+    setModel(target.model ?? "gemini-3.5-flash-lite");
+    setShowHistory(false);
+  };
+
+  const handleDeleteSession = (targetId: string) => {
+    const remaining = sessions.filter((s) => s.id !== targetId);
+    setSessions(remaining);
+    if (targetId === activeSessionId) {
+      abortRef.current?.abort();
+      stopAudio();
+      setSending(false);
+      if (remaining.length > 0) {
+        const nextActive = remaining[0];
+        setActiveSessionId(nextActive.id);
+        setMessages(nextActive.messages.length > 0 ? nextActive.messages : [INITIAL_MESSAGE]);
+        setInteractionId(nextActive.interactionId ?? null);
+        setModel(nextActive.model ?? "gemini-3.5-flash-lite");
+      } else {
+        setActiveSessionId(makeNewSessionId());
+        setMessages([INITIAL_MESSAGE]);
+        setInteractionId(null);
+      }
+    }
+  };
+
+  const handleClearAllHistory = () => {
+    abortRef.current?.abort();
+    stopAudio();
+    setSending(false);
+    const freshId = makeNewSessionId();
+    setSessions([]);
+    setActiveSessionId(freshId);
+    setInteractionId(null);
+    setMessages([INITIAL_MESSAGE]);
+    setShowHistory(false);
+    persistAiChatStore(storageKey, { activeSessionId: freshId, sessions: [] });
   };
 
   const handleSend = useCallback(
@@ -291,7 +577,7 @@ export function AiAssistantPanel({
 
       const controller = new AbortController();
       abortRef.current = controller;
-      const contextPayload = {
+      const contextPayload: Record<string, unknown> = {
         ward: selectedWard,
         usage_group: usageGroup,
         age_categories: ageCategories,
@@ -300,6 +586,22 @@ export function AiAssistantPanel({
         selected_building_id: selectedBuilding?.building_id ?? null,
         is_3d: is3D,
       };
+      if (userRole !== "citizen" && enterpriseAssets && enterpriseAssets.length > 0) {
+        contextPayload.my_enterprise_assets = enterpriseAssets.slice(0, 30).map((a) => ({
+          id: a.id,
+          ownerUid: a.ownerUid,
+          organizationName: a.organizationName,
+          name: a.name,
+          assetType: a.assetType,
+          confidentialityLevel: a.confidentialityLevel,
+          wardName: a.wardName,
+          lat: a.lat,
+          lon: a.lon,
+          floorInfo: a.floorInfo ?? "",
+          backupHours: a.backupHours ?? null,
+          notes: a.notes ?? "",
+        }));
+      }
       let receivedTerminal = false;
       let receivedSuccessDone = false;
       let completedAnswer = "";
@@ -573,6 +875,8 @@ export function AiAssistantPanel({
     [
       input,
       sending,
+      userRole,
+      enterpriseAssets,
       selectedWard,
       usageGroup,
       ageCategories,
@@ -639,6 +943,7 @@ export function AiAssistantPanel({
       break;
     }
   }
+  const historyList = upsertSessionList(sessions, activeSessionId, messages, interactionId, model, false);
   const mascotState = deriveMascotState({
     sending,
     audioPlaying,
@@ -667,13 +972,13 @@ export function AiAssistantPanel({
 
       {/* Top AI Controls & Context Strip */}
       <div className="mb-2 space-y-1.5 rounded-xl border border-slate-800 bg-slate-950/80 p-2">
-        <div className="flex items-center justify-between gap-1">
+        <div className="flex flex-wrap items-center justify-between gap-1">
           <div className="flex min-w-0 items-center gap-1">
             <select
               value={premiumAllowed ? model : "gemini-3.5-flash-lite"}
               onChange={(e) => setModel(e.target.value as AiModelId)}
               aria-label="Geminiモデル選択"
-              className="max-w-[144px] truncate rounded-md border border-slate-700 bg-slate-900 px-1.5 py-1 text-[10px] font-medium text-emerald-300 focus:border-emerald-500 focus:outline-none"
+              className="max-w-[128px] truncate rounded-md border border-slate-700 bg-slate-900 px-1.5 py-1 text-[10px] font-medium text-emerald-300 focus:border-emerald-500 focus:outline-none"
             >
               <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</option>
               <option value="gemini-4-hydrogen" disabled={!premiumAllowed}>
@@ -696,6 +1001,20 @@ export function AiAssistantPanel({
               <KeyRound className="h-3 w-3" />
               {hasOwnKey ? "個人キー" : accessCodeRequired ? "認証/キー" : "キー"}
             </button>
+            <button
+              type="button"
+              onClick={() => setShowHistory((v) => !v)}
+              data-testid="toggle-chat-history"
+              title="保存されたチャット履歴を表示・切り替え"
+              className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-1.5 py-1 text-[10px] font-medium transition ${
+                showHistory
+                  ? "border-sky-400/60 bg-sky-500/15 text-sky-200"
+                  : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600"
+              }`}
+            >
+              <History className="h-3 w-3" />
+              履歴{historyList.length > 0 ? `(${historyList.length})` : ""}
+            </button>
           </div>
 
           <div className="flex shrink-0 items-center gap-1">
@@ -710,11 +1029,13 @@ export function AiAssistantPanel({
             </button>
             <button
               type="button"
-              onClick={handleReset}
-              title="会話をリセット"
-              className="rounded-md border border-slate-700 bg-slate-900 p-1 text-slate-400 hover:text-white"
+              onClick={handleNewChat}
+              data-testid="new-chat-btn"
+              title="現在の会話を履歴に残して新しい会話を開始"
+              className="inline-flex items-center gap-0.5 rounded-md border border-slate-700 bg-slate-900 px-1.5 py-1 text-[10px] font-medium text-slate-300 hover:border-slate-600 hover:text-white"
             >
-              <RotateCcw className="h-3 w-3" />
+              <Plus className="h-3 w-3" />
+              新規
             </button>
           </div>
         </div>
@@ -800,6 +1121,73 @@ export function AiAssistantPanel({
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {showHistory && (
+          <div
+            data-testid="chat-history-drawer"
+            className="space-y-1.5 rounded-lg border border-sky-500/30 bg-slate-900/95 p-2 text-[10px]"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-sky-200">
+                チャット履歴（アカウント別に自動保存・最大{MAX_SAVED_SESSIONS}件）
+              </span>
+              {historyList.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearAllHistory}
+                  className="rounded px-1.5 py-0.5 text-[10px] text-rose-300 hover:bg-rose-500/15"
+                >
+                  履歴を全削除
+                </button>
+              )}
+            </div>
+            {historyList.length === 0 ? (
+              <div className="rounded border border-slate-800 bg-slate-950/70 px-2.5 py-2 text-slate-400">
+                まだ保存された会話はありません。質問を送ると自動で履歴に残ります。
+              </div>
+            ) : (
+              <div className="max-h-44 space-y-1 overflow-y-auto pr-0.5">
+                {historyList.map((s) => {
+                  const isCurrent = s.id === activeSessionId;
+                  const userCount = s.messages.filter((m) => m.role === "user").length;
+                  return (
+                    <div
+                      key={s.id}
+                      className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 transition ${
+                        isCurrent
+                          ? "border-sky-400/50 bg-sky-500/15 text-sky-100"
+                          : "border-slate-800 bg-slate-950/70 text-slate-300 hover:border-slate-700"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleSelectSession(s)}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <div className="truncate font-semibold">{s.title}</div>
+                        <div className="mt-0.5 flex items-center gap-2 text-[9px] text-slate-400">
+                          {isCurrent && (
+                            <span className="rounded bg-sky-500/25 px-1 text-sky-200">表示中</span>
+                          )}
+                          <span>質問 {userCount}件</span>
+                          {s.updatedAt > 0 && <span>{formatSessionTimestamp(s.updatedAt)}</span>}
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSession(s.id)}
+                        title="この履歴を削除"
+                        className="shrink-0 rounded p-1 text-slate-500 hover:bg-rose-500/15 hover:text-rose-300"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -2612,9 +2612,12 @@ export default function HomePage() {
               </div>
             )}
 
-            {activePanel === "ai" && (
+            <div className={activePanel === "ai" ? "h-full" : "hidden"}>
               <AiAssistantPanel
+                key={`${profile.uid}:${profile.role}`}
+                userUid={profile.uid}
                 userRole={profile.role}
+                enterpriseAssets={profile.role === "citizen" ? undefined : enterpriseAssets}
                 geminiConfigured={geminiConfigured}
                 aiProtection={aiProtection}
                 totalBuildings={metadata?.counts.total_buildings ?? stats?.total_buildings}
@@ -2631,7 +2634,7 @@ export default function HomePage() {
                 onExecuteMapAction={handleExecuteMapAction}
                 onExecuteMapActionsBatch={(acts) => void handleExecuteMapActionsBatch(acts)}
               />
-            )}
+            </div>
 
             {activePanel === "stats" && (
               <RiskStatsDrawer

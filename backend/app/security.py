@@ -69,6 +69,53 @@ def extract_client_ip(request: Request | None) -> str:
     return peer_ip
 
 
+def _sanitize_context_assets(raw_assets: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_assets, list):
+        return []
+    cleaned_assets: list[dict[str, Any]] = []
+    allowed_types = {"server_room", "datacenter", "bcp_hq", "vault", "warehouse"}
+    allowed_conf = {"enterprise_only", "gov_emergency_share"}
+    for item in raw_assets[:30]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            lat_v = float(item.get("lat"))
+            lon_v = float(item.get("lon"))
+        except (TypeError, ValueError):
+            continue
+        if not (34.5 <= lat_v <= 35.5 and 135.0 <= lon_v <= 136.5):
+            continue
+        asset_type = str(item.get("assetType") or item.get("asset_type") or "server_room").strip()
+        if asset_type not in allowed_types:
+            asset_type = "server_room"
+        conf = str(
+            item.get("confidentialityLevel") or item.get("confidentiality_level") or "enterprise_only"
+        ).strip()
+        if conf not in allowed_conf:
+            conf = "enterprise_only"
+        backup_raw = item.get("backupHours") if "backupHours" in item else item.get("backup_hours")
+        backup_val: float | None = None
+        if isinstance(backup_raw, (int, float)) and 0 <= float(backup_raw) <= 8760:
+            backup_val = float(backup_raw)
+        cleaned_assets.append({
+            "id": str(item.get("id") or "")[:64],
+            "ownerUid": str(item.get("ownerUid") or item.get("owner_uid") or "")[:128],
+            "organizationName": str(
+                item.get("organizationName") or item.get("organization_name") or ""
+            ).strip()[:80],
+            "name": str(item.get("name") or "登録拠点").strip()[:80],
+            "assetType": asset_type,
+            "confidentialityLevel": conf,
+            "wardName": str(item.get("wardName") or item.get("ward_name") or "京都市").strip()[:32],
+            "lat": lat_v,
+            "lon": lon_v,
+            "floorInfo": str(item.get("floorInfo") or item.get("floor_info") or "").strip()[:48],
+            "backupHours": backup_val,
+            "notes": str(item.get("notes") or "").strip()[:160],
+        })
+    return cleaned_assets
+
+
 def sanitize_chat_context(context: dict[str, Any] | None) -> dict[str, Any] | None:
     """Whitelist and bound chat context fields to prevent prompt bloat or injection."""
     if not context or not isinstance(context, dict):
@@ -98,6 +145,9 @@ def sanitize_chat_context(context: dict[str, Any] | None) -> dict[str, Any] | No
         cleaned["selected_building_id"] = bldg_id.strip()[:64]
     if isinstance(context.get("is_3d"), bool):
         cleaned["is_3d"] = context["is_3d"]
+    assets = _sanitize_context_assets(context.get("my_enterprise_assets"))
+    if assets:
+        cleaned["my_enterprise_assets"] = assets
     return cleaned or None
 
 
