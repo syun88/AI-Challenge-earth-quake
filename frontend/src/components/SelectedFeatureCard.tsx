@@ -135,7 +135,7 @@ export function SelectedFeatureCard({
   if (!hasSelection && !routeResult) return null;
 
   return (
-    <div className="pointer-events-none fixed bottom-16 right-3 z-20 flex w-[min(360px,calc(100vw-24px))] flex-col gap-2 lg:bottom-4 lg:right-14">
+    <div className="pointer-events-none fixed bottom-16 right-3 z-20 flex max-h-[calc(100dvh-280px)] w-[min(360px,calc(100vw-24px))] flex-col gap-2 overflow-y-auto pr-0.5 lg:bottom-4 lg:right-16 lg:max-h-[calc(100dvh-256px)]">
       {/* Compact Active Route HUD */}
       {routeResult && (
         <div

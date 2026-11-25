@@ -114,7 +114,7 @@ export function MapDisplayPopover({
   return (
     <div
       data-testid="map-display-popover"
-      className="fixed right-3 top-[66px] z-30 max-h-[calc(100dvh-136px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto rounded-2xl border border-slate-700/80 bg-slate-900/95 p-4 text-xs text-slate-200 shadow-2xl backdrop-blur-xl md:max-h-[calc(100dvh-84px)]"
+      className="fixed right-3 top-[68px] z-40 max-h-[calc(100dvh-136px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto rounded-2xl border border-slate-700/80 bg-slate-900/95 p-4 text-xs text-slate-200 shadow-2xl backdrop-blur-xl md:max-h-[calc(100dvh-84px)]"
     >
       <div className="mb-3 flex items-center justify-between border-b border-slate-800 pb-2.5">
         <div className="flex items-center gap-2 text-sm font-bold text-white">

@@ -155,6 +155,8 @@ interface QuakeMapProps {
   onSelectOfficialShelter: (shelter: OfficialShelter) => void;
   onSelectSafetyWard: (wardName: string) => void;
   onZoomChange?: (zoom: number, totalInView: number | null) => void;
+  drawerOpen?: boolean;
+  summaryPillVisible?: boolean;
 }
 
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
@@ -226,6 +228,8 @@ export function QuakeMap({
   onSelectOfficialShelter,
   onSelectSafetyWard,
   onZoomChange,
+  drawerOpen = false,
+  summaryPillVisible = false,
 }: QuakeMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -2667,8 +2671,16 @@ export function QuakeMap({
         </button>
       )}
 
-      {/* Subtle Hover Tooltip OR Zoom Prompt at bottom (above mobile controls & attribution) */}
-      <div className="pointer-events-none absolute bottom-[104px] lg:bottom-4 left-3 right-20 z-10 flex flex-wrap items-center gap-2">
+      {/* Subtle Hover Tooltip OR Zoom Prompt at bottom (avoids drawer, summary pill & mobile dock) */}
+      <div
+        className={`pointer-events-none absolute bottom-[72px] left-3 right-20 z-10 flex flex-wrap items-center gap-2 ${
+          drawerOpen
+            ? "lg:bottom-4 lg:left-[444px]"
+            : summaryPillVisible
+              ? "lg:bottom-[128px] lg:left-3"
+              : "lg:bottom-4 lg:left-3"
+        }`}
+      >
         {hoverInfo && (
           <div className="rounded-lg border border-slate-700/90 bg-slate-950/90 px-3 py-1.5 text-xs text-slate-100 shadow-lg backdrop-blur">
             {hoverInfo}

@@ -1905,6 +1905,8 @@ export default function HomePage() {
         onSelectShelterHub={handleSelectShelterHub}
         onSelectOfficialShelter={handleSelectOfficialShelterFromMap}
         onSelectSafetyWard={handleSelectSafetyWardFromMap}
+        drawerOpen={activePanel !== "none"}
+        summaryPillVisible={activePanel === "none" && mapPickMode === "none"}
       />
 
       {/* Top Floating Nav & Mobile Bottom Dock */}
@@ -2298,7 +2300,7 @@ export default function HomePage() {
       {activePanel === "none" && mapPickMode === "none" && (
         <div
           data-testid="map-summary-pill"
-          className="pointer-events-auto fixed bottom-4 left-3 z-20 hidden max-w-[600px] flex-col gap-2 rounded-2xl border border-slate-700/80 bg-slate-900/90 px-4 py-3 text-xs text-slate-200 shadow-2xl backdrop-blur-xl lg:flex"
+          className="pointer-events-auto fixed bottom-4 left-3 z-20 hidden max-w-[min(560px,calc(100vw-440px))] flex-col gap-2 rounded-2xl border border-slate-700/80 bg-slate-900/90 px-4 py-3 text-xs text-slate-200 shadow-2xl backdrop-blur-xl xl:max-w-[600px] lg:flex"
         >
           <div className="flex flex-wrap items-center gap-3">
             <span className="flex items-center gap-1.5 font-bold text-white">
@@ -2495,9 +2497,10 @@ export default function HomePage() {
         />
       )}
 
-      {/* Always-Movable Live2D ChatBot Launcher (auto-dodges bottom-right cards & freely draggable anywhere) */}
+      {/* Always-Movable Live2D ChatBot Launcher (auto-dodges bottom-right cards, display popover & freely draggable anywhere) */}
       {activePanel !== "ai" && (
         <DraggableMochimamoBot
+          displayOpen={displayOpen}
           hasBottomRightCard={Boolean(
             selectedBuilding ||
               selectedMesh ||

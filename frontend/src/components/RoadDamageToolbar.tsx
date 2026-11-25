@@ -88,7 +88,7 @@ export function RoadDamageToolbar({
       data-testid="road-paint-toolbar"
       className={`pointer-events-auto fixed top-[66px] z-30 flex flex-col gap-2 rounded-2xl border border-cyan-500/50 bg-slate-950/95 p-2.5 text-xs text-slate-100 shadow-2xl backdrop-blur-xl ${
         drawerOpen
-          ? "inset-x-2 lg:inset-x-auto lg:left-[444px] lg:right-3 lg:max-w-3xl"
+          ? "inset-x-2 lg:inset-x-auto lg:left-[444px] lg:right-[160px] lg:max-w-3xl"
           : "left-1/2 w-[min(780px,calc(100vw-20px))] -translate-x-1/2"
       }`}
     >

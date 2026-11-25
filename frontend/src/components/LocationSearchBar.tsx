@@ -353,7 +353,7 @@ export function LocationSearchBar({
       data-testid="location-search-container"
       className={`pointer-events-auto fixed top-[66px] z-[25] transition-all duration-200 ${
         drawerOpen
-          ? "hidden lg:block lg:left-[444px] lg:w-[min(390px,calc(100vw-460px))]"
+          ? "hidden lg:block lg:left-[444px] lg:w-[min(360px,calc(100vw-608px))]"
           : "left-3 w-[min(404px,calc(100vw-24px))]"
       }`}
     >

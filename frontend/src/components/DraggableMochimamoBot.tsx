@@ -8,6 +8,7 @@ const STORAGE_KEY = "quakelens.mochimamo.pos.v1";
 
 interface DraggableMochimamoBotProps {
   hasBottomRightCard: boolean;
+  displayOpen?: boolean;
   onOpenAiChat: () => void;
 }
 
@@ -28,6 +29,7 @@ function clampToViewport(x: number, y: number, w: number, h: number): Pos {
 
 export function DraggableMochimamoBot({
   hasBottomRightCard,
+  displayOpen = false,
   onOpenAiChat,
 }: DraggableMochimamoBotProps) {
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -163,9 +165,13 @@ export function DraggableMochimamoBot({
 
   const autoPositionClasses = customPos
     ? ""
-    : hasBottomRightCard
-      ? "top-[74px] right-3"
-      : "bottom-16 right-3 lg:bottom-4 lg:right-14";
+    : displayOpen
+      ? hasBottomRightCard
+        ? "hidden xl:flex xl:top-[74px] xl:right-[384px]"
+        : "hidden xl:flex xl:bottom-4 xl:right-[384px]"
+      : hasBottomRightCard
+        ? "top-[122px] right-3 lg:top-[74px] lg:right-3"
+        : "bottom-[70px] right-14 lg:bottom-[44px] lg:right-16";
 
   return (
     <div
@@ -190,7 +196,7 @@ export function DraggableMochimamoBot({
           ? { left: `${customPos.x}px`, top: `${customPos.y}px` }
           : undefined
       }
-      className={`group pointer-events-auto fixed z-30 flex select-none touch-none flex-col items-center gap-1 rounded-2xl border bg-slate-900/92 p-2 shadow-2xl backdrop-blur-xl ${
+      className={`group pointer-events-auto fixed z-30 flex select-none touch-none flex-col items-center gap-1 rounded-2xl border bg-slate-900/92 p-1.5 shadow-2xl backdrop-blur-xl sm:p-2 ${
         isDragging
           ? "cursor-grabbing border-cyan-300 ring-2 ring-cyan-400/40"
           : "cursor-grab border-cyan-500/45 transition-[border-color,box-shadow] hover:border-cyan-400/85 hover:bg-slate-900"
@@ -200,7 +206,7 @@ export function DraggableMochimamoBot({
       <div className="flex w-full items-center justify-between gap-1 px-0.5 text-[9px] text-slate-400">
         <span className="inline-flex items-center gap-1 font-medium group-hover:text-cyan-200">
           <GripHorizontal className="h-3 w-3 text-cyan-400/80" />
-          <span>ドラッグで移動</span>
+          <span>ドラッグ移動</span>
         </span>
         {customPos && (
           <button
@@ -217,17 +223,14 @@ export function DraggableMochimamoBot({
         )}
       </div>
 
-      <div className="h-[14vh] min-h-[104px] max-h-[170px] w-[14vh] min-w-[104px] max-w-[170px] overflow-hidden rounded-xl border border-slate-800/80 bg-slate-950/70 sm:h-[17vh] sm:min-h-[128px] sm:max-h-[184px] sm:w-[17vh] sm:min-w-[128px] sm:max-w-[184px]">
+      <div className="h-[92px] w-[92px] overflow-hidden rounded-xl border border-slate-800/80 bg-slate-950/70 sm:h-[116px] sm:w-[116px]">
         <MochimamoLive2D mood="idle" interactive={false} trackPointer className="h-full w-full" />
       </div>
 
-      <div className="flex items-center gap-1.5 px-1">
+      <div className="flex items-center gap-1 px-0.5">
         <span className="text-[11px] font-extrabold text-white">もちまも</span>
         <span className="rounded bg-cyan-500/20 px-1 py-0.5 text-[9px] font-semibold text-cyan-200">
-          Live2D
-        </span>
-        <span className="hidden text-[10px] text-slate-300 group-hover:text-cyan-200 sm:inline">
-          防災AIに質問
+          AI
         </span>
       </div>
     </div>

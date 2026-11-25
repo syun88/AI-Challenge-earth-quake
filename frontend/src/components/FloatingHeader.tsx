@@ -99,9 +99,9 @@ export function FloatingHeader({
   return (
     <>
       {/* Top Floating Bar */}
-      <header className="pointer-events-none fixed inset-x-3 top-3 z-30 flex items-center justify-between gap-2">
+      <header className="pointer-events-none fixed inset-x-2 top-2.5 z-30 flex items-center justify-between gap-1.5 sm:inset-x-3 sm:top-3 sm:gap-2">
         {/* Left: Brand + Ward Filter */}
-        <div className="pointer-events-auto flex items-center gap-2 rounded-2xl border border-slate-700/80 bg-slate-900/90 px-3 py-1.5 shadow-xl backdrop-blur-xl">
+        <div className="pointer-events-auto flex shrink-0 items-center gap-1.5 rounded-2xl border border-slate-700/80 bg-slate-900/90 px-2.5 py-1 shadow-xl backdrop-blur-xl sm:gap-2 sm:px-3 sm:py-1.5">
           <Link
             href="/"
             onClick={(e) => {
@@ -113,7 +113,7 @@ export function FloatingHeader({
             <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-gradient-to-br from-rose-500 to-amber-500 text-white shadow-sm">
               <ShieldAlert className="h-4 w-4" />
             </div>
-            <div className="hidden sm:block">
+            <div className="hidden xl:block">
               <div className="text-xs font-extrabold tracking-tight text-white">
                 QuakeLens
               </div>
@@ -128,7 +128,7 @@ export function FloatingHeader({
             data-testid="ward-select"
             value={selectedWard}
             onChange={(e) => onSelectWard(e.target.value)}
-            className="rounded-xl border border-slate-700/80 bg-slate-950/90 px-2.5 py-1.5 text-xs font-semibold text-white outline-none transition hover:border-slate-500"
+            className="max-w-[132px] rounded-xl border border-slate-700/80 bg-slate-950/90 px-2 py-1.5 text-xs font-semibold text-white outline-none transition hover:border-slate-500 xl:max-w-none xl:px-2.5"
           >
             <option value="all">京都市 全域 (11区)</option>
             {wards.map((w) => (
@@ -161,7 +161,7 @@ export function FloatingHeader({
                   favoriteWard === selectedWard ? "fill-amber-400 text-amber-400" : ""
                 }`}
               />
-              <span className="hidden xl:inline">
+              <span className="hidden 2xl:inline">
                 {favoriteWard === selectedWard ? "保存済" : "地域保存"}
               </span>
             </button>
@@ -171,7 +171,7 @@ export function FloatingHeader({
         {/* Center Desktop Nav Pills */}
         <nav
           aria-label="主要機能ナビゲーション"
-          className="pointer-events-auto hidden items-center gap-1 rounded-2xl border border-slate-700/80 bg-slate-900/90 p-1 shadow-xl backdrop-blur-xl lg:flex"
+          className="pointer-events-auto hidden min-w-0 max-w-fit items-center gap-0.5 overflow-x-auto rounded-2xl border border-slate-700/80 bg-slate-900/90 p-1 shadow-xl backdrop-blur-xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:flex xl:gap-1"
         >
           <NavPill
             testId="nav-tab-report"
@@ -253,7 +253,7 @@ export function FloatingHeader({
         </nav>
 
         {/* Right: Role Badge + Display Settings + Standalone Board + Sources + Logout */}
-        <div className="pointer-events-auto flex items-center gap-1.5 rounded-2xl border border-slate-700/80 bg-slate-900/90 p-1 shadow-xl backdrop-blur-xl">
+        <div className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-2xl border border-slate-700/80 bg-slate-900/90 p-1 shadow-xl backdrop-blur-xl sm:gap-1.5">
           <div
             data-testid="active-role-badge"
             title={
@@ -261,10 +261,10 @@ export function FloatingHeader({
                 ? `${roleMeta.label}: ${organizationName} (${userDisplayName})`
                 : `${roleMeta.label}: ${userDisplayName}`
             }
-            className={`hidden items-center gap-1.5 rounded-xl border px-2.5 py-1 text-[11px] font-bold sm:inline-flex ${roleMeta.badgeClass}`}
+            className={`hidden items-center gap-1 rounded-xl border px-2 py-1 text-[11px] font-bold sm:inline-flex ${roleMeta.badgeClass}`}
           >
             <span>{roleMeta.shortLabel}</span>
-            <span className="max-w-[90px] truncate text-[10px] font-normal opacity-90">
+            <span className="max-w-[56px] truncate text-[10px] font-normal opacity-90 2xl:max-w-[96px]">
               {organizationName || userDisplayName}
             </span>
           </div>
@@ -273,19 +273,21 @@ export function FloatingHeader({
             type="button"
             data-testid="toggle-display-popover"
             onClick={onToggleDisplay}
-            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition ${
+            title="表示設定"
+            aria-label="表示設定"
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-semibold transition ${
               displayOpen
                 ? "border-sky-400 bg-sky-500/20 text-white"
                 : "border-transparent text-slate-200 hover:bg-slate-800"
             }`}
           >
             <Layers className="h-3.5 w-3.5 text-sky-400" />
-            <span className="hidden md:inline">表示設定</span>
+            <span className="hidden xl:inline">表示設定</span>
           </button>
 
           <Link
             href="/board"
-            className="hidden rounded-xl px-2.5 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white xl:inline-flex"
+            className="hidden rounded-xl px-2.5 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white 2xl:inline-flex"
           >
             伝言板ページ
           </Link>
@@ -308,10 +310,10 @@ export function FloatingHeader({
             onClick={onLogout}
             title="ログアウト"
             aria-label="ログアウト"
-            className="inline-flex items-center gap-1 rounded-xl border border-slate-700/80 bg-slate-950/70 px-2.5 py-1.5 text-xs font-medium text-slate-300 transition hover:border-rose-500/50 hover:text-rose-200"
+            className="inline-flex items-center gap-1 rounded-xl border border-slate-700/80 bg-slate-950/70 px-2 py-1.5 text-xs font-medium text-slate-300 transition hover:border-rose-500/50 hover:text-rose-200 xl:px-2.5"
           >
             <LogOut className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">ログアウト</span>
+            <span className="hidden xl:inline">ログアウト</span>
           </button>
         </div>
       </header>
@@ -416,7 +418,7 @@ function NavPill({
       type="button"
       data-testid={testId}
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition ${
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl border px-2 py-1.5 text-[11px] font-semibold transition xl:gap-1.5 xl:px-2.5 2xl:px-3 2xl:text-xs ${
         active
           ? activeClass
           : "border-transparent text-slate-300 hover:bg-slate-800/80 hover:text-white"
@@ -452,12 +454,12 @@ function MobileDockBtn({
       type="button"
       data-testid={testId}
       onClick={onClick}
-      className={`flex flex-col items-center justify-center gap-0.5 rounded-xl py-1 text-[10px] font-semibold transition ${
+      className={`flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl px-0.5 py-1 text-[9px] font-semibold transition ${
         active ? "bg-slate-800 text-white" : "text-slate-400 hover:text-slate-200"
       }`}
     >
       {icon}
-      <span>{label}</span>
+      <span className="max-w-full truncate">{label}</span>
     </button>
   );
 }
