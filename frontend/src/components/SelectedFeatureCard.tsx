@@ -837,7 +837,7 @@ export function SelectedFeatureCard({
             className="flex w-full items-center justify-center gap-1 rounded-xl border border-emerald-500/45 bg-emerald-500/15 py-1.5 text-[11px] font-bold text-emerald-200 hover:bg-emerald-500/25"
           >
             <ShieldCheck className="h-3.5 w-3.5" />
-            この地点から推奨避難場所Top5を検索
+            改修前・発生時の最適避難所を自動選定
           </button>
 
           <button

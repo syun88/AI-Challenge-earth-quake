@@ -77,7 +77,7 @@ from app.security import (
     redact_secrets,
     validate_chat_inputs,
 )
-from app.shelter_rec import recommend_shelters, shelter_store
+from app.shelter_rec import auto_select_optimal_shelter, recommend_shelters, shelter_store
 
 # Load .env from repo root or backend directory
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
@@ -1281,6 +1281,52 @@ def get_shelter_recommendations(
         block_radius_m=block_radius_m,
         limit=limit,
         store=store if store.loaded else None,
+    )
+
+
+@app.get("/api/shelters/auto-select")
+def auto_select_shelter_endpoint(
+    lat: float | None = Query(default=None, ge=34.5, le=35.5),
+    lon: float | None = Query(default=None, ge=135.0, le=136.5),
+    ward: str | None = Query(default=None),
+    scenario: str = Query(default="auto"),
+    quake_intensity: str | None = Query(default=None),
+    include_samples: bool = Query(default=True),
+    avoid_unverified: bool = Query(default=True),
+    block_radius_m: float = Query(default=420.0, ge=100.0, le=1500.0),
+    limit: int = Query(default=5, ge=1, le=10),
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Automatically select the single optimal shelter and backup when an earthquake/disaster occurs."""
+    reports = reports_store.list_reports(
+        include_samples=include_samples,
+        include_resolved=False,
+        limit=300,
+        viewer_role=user.role,
+        viewer_uid=user.uid,
+    )
+    latest_quake = None
+    try:
+        u_payload = updates_store.get_updates(period="recent_2y", kind="earthquakes")
+        quakes = u_payload.get("earthquakes") or []
+        if quakes:
+            latest_quake = quakes[0]
+    except Exception:
+        latest_quake = None
+
+    return auto_select_optimal_shelter(
+        lat=lat,
+        lon=lon,
+        ward=ward,
+        scenario=scenario,
+        quake_intensity=quake_intensity,
+        reports=reports,
+        include_samples=include_samples,
+        avoid_unverified=avoid_unverified,
+        block_radius_m=block_radius_m,
+        limit=limit,
+        store=store if store.loaded else None,
+        latest_quake=latest_quake,
     )
 
 
