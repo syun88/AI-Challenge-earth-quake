@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import {
+  AutoShelterSelectionResponse,
   ShelterRecommendationItem,
   ShelterRecommendationResponse,
   ShelterScenario,
@@ -34,6 +35,10 @@ interface ShelterRecommendPanelProps {
   error: string | null;
   recommendation: ShelterRecommendationResponse | null;
   selectedShelterId: string | null;
+  autoSelection?: AutoShelterSelectionResponse | null;
+  autoLiveMode?: boolean;
+  onToggleAutoLiveMode?: (next: boolean) => void;
+  onAutoSelectNow?: () => void;
   onChangeScenario: (scenario: ShelterScenario) => void;
   onChangeAvoidUnverified: (next: boolean) => void;
   onChangeIncludeSamples: (next: boolean) => void;
@@ -108,6 +113,10 @@ export default function ShelterRecommendPanel({
   error,
   recommendation,
   selectedShelterId,
+  autoSelection = null,
+  autoLiveMode = false,
+  onToggleAutoLiveMode,
+  onAutoSelectNow,
   onChangeScenario,
   onChangeAvoidUnverified,
   onChangeIncludeSamples,
@@ -146,7 +155,108 @@ export default function ShelterRecommendPanel({
             {loading ? "探索中..." : "再計算"}
           </button>
         </div>
+
+        {/* One-Click Occurrence Auto-Selection CTA + Live Re-evaluation Toggle */}
+        <div className="mt-2.5 space-y-2 border-t border-emerald-500/25 pt-2.5">
+          <button
+            type="button"
+            data-testid="shelter-auto-select-btn"
+            disabled={loading}
+            onClick={() => onAutoSelectNow?.()}
+            className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-rose-500 to-amber-500 px-3 py-2 text-xs font-extrabold text-white shadow-lg shadow-rose-950/40 transition hover:brightness-110 disabled:opacity-50"
+          >
+            {loading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Navigation className="h-4 w-4" />
+            )}
+            <span>災害発生時：今すぐ最適避難所を自動選定</span>
+          </button>
+          {onToggleAutoLiveMode && (
+            <label className="flex cursor-pointer items-center justify-between gap-2 rounded-lg border border-emerald-500/25 bg-slate-950/60 px-2.5 py-1.5 text-[11px] text-slate-200">
+              <span>発生中自動追従（新着被害・満員・通行止めで自動切替）</span>
+              <input
+                type="checkbox"
+                data-testid="shelter-auto-live-toggle"
+                checked={autoLiveMode}
+                onChange={(e) => onToggleAutoLiveMode(e.target.checked)}
+                className="rounded border-slate-600 bg-slate-950 text-emerald-500 focus:ring-0"
+              />
+            </label>
+          )}
+        </div>
       </div>
+
+      {/* Auto-Selected Winner Card */}
+      {autoSelection?.selected_shelter && (
+        <div
+          data-testid="auto-selected-shelter-banner"
+          className="space-y-2 rounded-xl border border-amber-400/60 bg-gradient-to-br from-amber-950/40 via-slate-900 to-emerald-950/35 p-3 text-xs shadow-lg"
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="rounded bg-rose-500 px-1.5 py-0.5 text-[10px] font-black text-white">
+                  自動選定 #1
+                </span>
+                <span className="rounded border border-amber-400/40 bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-200">
+                  {autoSelection.auto_detected_scenario_label}
+                </span>
+              </div>
+              <div className="mt-1 text-sm font-extrabold text-white">
+                {autoSelection.selected_shelter.name}
+              </div>
+              <div className="text-[11px] text-emerald-200">
+                徒歩約 <strong>{autoSelection.selected_shelter.walk_minutes ?? "?"}分</strong> ／
+                実道路 <strong>{autoSelection.selected_shelter.road_distance_km ?? "?"} km</strong>
+                {autoSelection.selected_shelter.rerouted && "（通行止め回避済み）"}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onSelectRecommendation(autoSelection.selected_shelter!)}
+              className="shrink-0 rounded-lg bg-emerald-500 px-2.5 py-1.5 text-[11px] font-extrabold text-slate-950 hover:bg-emerald-400"
+            >
+              ルート表示
+            </button>
+          </div>
+
+          {autoSelection.auto_detection_reasons.length > 0 && (
+            <ul className="space-y-0.5 text-[10px] text-slate-200">
+              {autoSelection.auto_detection_reasons.map((r, i) => (
+                <li key={i} className="flex items-start gap-1">
+                  <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" />
+                  <span>{r}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {autoSelection.skipped_warnings.length > 0 && (
+            <div className="space-y-0.5 rounded-lg border border-rose-500/40 bg-rose-950/35 px-2 py-1.5 text-[10px] text-rose-200">
+              {autoSelection.skipped_warnings.map((w, i) => (
+                <div key={i}>⚠ {w}</div>
+              ))}
+            </div>
+          )}
+
+          {autoSelection.backup_shelter && (
+            <div className="flex items-center justify-between gap-2 border-t border-slate-800/80 pt-1.5 text-[10px] text-slate-300">
+              <span className="truncate">
+                第2予備候補: <strong className="text-white">{autoSelection.backup_shelter.name}</strong>
+                （徒歩約{autoSelection.backup_shelter.walk_minutes ?? "?"}分）
+              </span>
+              <button
+                type="button"
+                onClick={() => onSelectRecommendation(autoSelection.backup_shelter!)}
+                className="shrink-0 text-cyan-300 underline hover:text-cyan-200"
+              >
+                予備ルートへ切替
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Pin Color Classification Legend */}
       <div

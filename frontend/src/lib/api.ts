@@ -3,6 +3,7 @@ import {
   AiProtectionStatus,
   AuthMeResponse,
   AuthPolicyResponse,
+  AutoShelterSelectionResponse,
   BcpPurpose,
   BcpSiteResponse,
   BoardChatAgentResponse,
@@ -837,6 +838,37 @@ export function recommendShelters(params: {
     sp.set("ward", params.ward);
   }
   return fetchJson<ShelterRecommendationResponse>(`/api/shelters/recommend?${sp.toString()}`);
+}
+
+export function autoSelectOptimalShelter(params?: {
+  lat?: number;
+  lon?: number;
+  ward?: string;
+  scenario?: ShelterScenario | "auto";
+  quakeIntensity?: string;
+  includeSamples?: boolean;
+  avoidUnverified?: boolean;
+  limit?: number;
+}) {
+  const sp = new URLSearchParams({
+    scenario: params?.scenario ?? "auto",
+    include_samples: params?.includeSamples === false ? "false" : "true",
+    avoid_unverified: params?.avoidUnverified === false ? "false" : "true",
+    limit: String(params?.limit ?? 5),
+  });
+  if (params?.lat != null && params?.lon != null) {
+    sp.set("lat", String(params.lat));
+    sp.set("lon", String(params.lon));
+  }
+  if (params?.ward && params.ward !== "all") {
+    sp.set("ward", params.ward);
+  }
+  if (params?.quakeIntensity) {
+    sp.set("quake_intensity", params.quakeIntensity);
+  }
+  return fetchJson<AutoShelterSelectionResponse>(
+    `/api/shelters/auto-select?${sp.toString()}`
+  );
 }
 
 export function getDisasterUpdates(params?: {

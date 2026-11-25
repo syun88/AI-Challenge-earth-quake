@@ -750,6 +750,19 @@ export interface ShelterRecommendationResponse {
   recommendations: ShelterRecommendationItem[];
 }
 
+export interface AutoShelterSelectionResponse extends ShelterRecommendationResponse {
+  auto_mode: boolean;
+  requested_scenario: string;
+  auto_detected_scenario: ShelterScenario;
+  auto_detected_scenario_label: string;
+  auto_detection_reasons: string[];
+  skipped_warnings: string[];
+  selected_shelter: ShelterRecommendationItem | null;
+  backup_shelter: ShelterRecommendationItem | null;
+  latest_kyoto_quake?: KyotoEarthquakeArchiveItem | null;
+  selection_timestamp: string;
+}
+
 export type DisasterUpdatesPeriod = "all" | "recent_2y" | "2026" | "2025" | "archive";
 
 export interface KyotoEarthquakeArchiveItem {

@@ -1176,3 +1176,78 @@ def test_historic_and_residential_priority_and_solutions(isolated_env) -> None:
     assert t_res["focus"] == "residential"
     actions = ai_assistant._extract_map_actions("get_historic_and_residential_priorities", t_res)
     assert any(act["type"] in ("fly_to_mesh", "focus_building") for act in actions)
+
+
+def test_auto_select_optimal_shelter_on_occurrence(isolated_env) -> None:
+    """Occurrence auto-selection skips full/restricted shelters, escalates on fire risk, and emits AI actions."""
+    client, s_store, _, r_store = isolated_env
+
+    # 1) Baseline auto-select in 中京区
+    r = client.get("/api/shelters/auto-select?ward=中京区&scenario=auto&limit=5")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["auto_mode"] is True
+    assert data["selected_shelter"] is not None
+    assert data["backup_shelter"] is not None
+    assert data["selected_shelter"]["nav_route"]["alternative_route"]["reachable"] is True
+    first_id = data["selected_shelter"]["id"]
+    first_lat = data["selected_shelter"]["lat"]
+    first_lon = data["selected_shelter"]["lon"]
+
+    # 2) Simulate real-time shelter full/closed report + fire report near origin -> auto-switches away & escalates scenario
+    r_post_full = client.post(
+        "/api/reports",
+        json={
+            "category": "shelter_status",
+            "severity": "high",
+            "ward_name": "中京区",
+            "lat": first_lat,
+            "lon": first_lon,
+            "location_consent": True,
+            "title": "避難所満員・閉鎖のため使用不可",
+            "description": "収容上限のため受入停止中",
+            "reporter_alias": "テスト住民",
+            "passcode": "1234",
+            "force_duplicate": True,
+        },
+    )
+    assert r_post_full.status_code == 200
+
+    r_post_fire = client.post(
+        "/api/reports",
+        json={
+            "category": "building_damage",
+            "severity": "critical",
+            "ward_name": "中京区",
+            "lat": 35.01,
+            "lon": 135.751,
+            "location_consent": True,
+            "title": "木造住宅より火災発生・延焼中",
+            "description": "近隣で出火確認",
+            "reporter_alias": "テスト住民2",
+            "passcode": "1234",
+            "force_duplicate": True,
+        },
+    )
+    assert r_post_fire.status_code == 200
+
+    r2 = client.get("/api/shelters/auto-select?ward=中京区&scenario=auto&limit=5")
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["auto_detected_scenario"] == "post_quake_fire"
+    assert d2["selected_shelter"] is not None
+    assert d2["selected_shelter"]["id"] != first_id
+
+    # 3) AI tool auto_select_optimal_shelter available to citizen and extracts map action
+    from app import ai_assistant
+
+    assert "auto_select_optimal_shelter" in ai_assistant.get_allowed_tool_names("citizen")
+    t_auto = ai_assistant._execute_tool(
+        s_store,
+        "auto_select_optimal_shelter",
+        {"ward": "中京区", "quake_intensity": "6弱"},
+        reports_store=r_store,
+    )
+    assert t_auto["selected_shelter"] is not None
+    acts = ai_assistant._extract_map_actions("auto_select_optimal_shelter", t_auto)
+    assert any(a["type"] == "fly_to_mesh" for a in acts)

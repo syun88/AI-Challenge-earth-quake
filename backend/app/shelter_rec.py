@@ -125,6 +125,7 @@ def _lookup_mesh_hazard(lat: float, lon: float, store: Any | None) -> dict[str, 
             "arv": round(float(arv), 2) if arv is not None and not math.isnan(float(arv)) else None,
             "jname": str(r.get("jname") or "不明"),
             "pre_1981_count": int(r.get("pre_1981_count") or 0),
+            "wooden_pre_1981_count": int(r.get("wooden_pre_1981_count") or 0),
             "pre_1981_share_known": (
                 round(float(pre_share), 4)
                 if pre_share is not None and not math.isnan(float(pre_share))
@@ -422,3 +423,166 @@ def recommend_shelters(
         "total_candidates": len(candidates),
         "recommendations": top_items,
     }
+
+
+def auto_select_optimal_shelter(
+    *,
+    lat: float | None = None,
+    lon: float | None = None,
+    ward: str | None = None,
+    scenario: str = "auto",
+    quake_intensity: str | None = None,
+    reports: list[dict[str, Any]],
+    include_samples: bool = True,
+    avoid_unverified: bool = True,
+    block_radius_m: float = 420.0,
+    limit: int = 5,
+    store: Any | None = None,
+    latest_quake: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Automatically select the single optimal shelter and fallback when a real earthquake occurs.
+
+    Auto-detects fire-spread / liquefaction / multi-hazard risk around the user's origin using
+    PLATEAU pre-1981 wooden density, J-SHIS hazard, active disaster reports, and R8 seismic status,
+    while skipping restricted/full or road-severed shelters.
+    """
+    if lat is None or lon is None:
+        wc = WARD_CENTERS.get(ward or "中京区", WARD_CENTERS["中京区"])
+        o_lat = float(wc["lat"])
+        o_lon = float(wc["lon"])
+    else:
+        o_lat = float(lat)
+        o_lon = float(lon)
+
+    origin_hazard = _lookup_mesh_hazard(o_lat, o_lon, store)
+    active_reports = [
+        r
+        for r in reports
+        if not r.get("resolved")
+        and r.get("lat") is not None
+        and r.get("lon") is not None
+        and (include_samples or not r.get("is_sample"))
+    ]
+
+    nearby_fire_reports = 0
+    nearby_collapse_reports = 0
+    nearby_water_reports = 0
+    for r in active_reports:
+        d = _dist_km(o_lon, o_lat, float(r["lon"]), float(r["lat"]))
+        if d > 0.85:
+            continue
+        txt = f"{r.get('title', '')} {r.get('description', '')}"
+        if any(k in txt for k in ("火災", "出火", "延焼", "煙")):
+            nearby_fire_reports += 1
+        if r.get("category") == "building_damage" and r.get("severity") in ("critical", "high"):
+            nearby_collapse_reports += 1
+        if any(k in txt for k in ("浸水", "冠水", "土砂", "崖", "洪水")):
+            nearby_water_reports += 1
+
+    wooden_pre81 = int((origin_hazard or {}).get("wooden_pre_1981_count") or 0)
+    pre81_share = (origin_hazard or {}).get("pre_1981_share_known")
+    high_intensity = bool(
+        quake_intensity and any(k in quake_intensity for k in ("6", "7", "5強"))
+    )
+
+    detection_reasons: list[str] = []
+    if scenario != "auto" and scenario in SCENARIO_LABELS:
+        chosen_scenario = scenario
+        detection_reasons.append(f"指定シナリオ「{SCENARIO_LABELS[chosen_scenario]}」で自動選定を実行")
+    else:
+        if nearby_fire_reports > 0 or (
+            (wooden_pre81 >= 50 or (pre81_share is not None and pre81_share >= 0.40))
+            and (nearby_collapse_reports > 0 or high_intensity)
+        ):
+            chosen_scenario = "post_quake_fire"
+            if nearby_fire_reports > 0:
+                detection_reasons.append(f"近傍850m以内で火災関連報告（{nearby_fire_reports}件）を検知したため広域避難場所を自動優先")
+            else:
+                detection_reasons.append(
+                    f"木造旧耐震密集（{wooden_pre81}棟）×重大被害/強震条件のため延焼リスクに備え広域避難場所を自動選択"
+                )
+        elif nearby_water_reports > 0:
+            chosen_scenario = "multi_hazard"
+            detection_reasons.append(f"浸水・土砂等の複合リスク報告（{nearby_water_reports}件）を検知し複合災害対応避難先を選択")
+        else:
+            chosen_scenario = "earthquake"
+            if wooden_pre81 >= 30:
+                detection_reasons.append(
+                    f"周辺旧耐震木造 {wooden_pre81}棟の倒壊・通電火災に注意しつつ、最速で到達可能な指定緊急避難場所を自動選定"
+                )
+            else:
+                detection_reasons.append("通行止め迂回・R8耐震適合状況・地盤安定性(ARV)を加味して最速・安全な避難先を自動選定")
+
+    rec = recommend_shelters(
+        lat=o_lat,
+        lon=o_lon,
+        ward=ward,
+        scenario=chosen_scenario,
+        reports=reports,
+        include_samples=include_samples,
+        avoid_unverified=avoid_unverified,
+        block_radius_m=block_radius_m,
+        limit=max(limit, 8),
+        store=store,
+    )
+
+    items = list(rec["recommendations"])
+    # Secondary occurrence filter: prefer open & reachable over restricted/unreachable even further
+    viable = [it for it in items if it.get("reachable") and it.get("shelter_status") != "restricted"]
+    if not viable:
+        viable = [it for it in items if it.get("reachable")] or items
+
+    selected = viable[0] if viable else None
+    backup = viable[1] if len(viable) > 1 else (items[1] if len(items) > 1 else None)
+
+    skipped_warnings: list[str] = []
+    if selected:
+        sel_dist = float(selected.get("crow_fly_km") or 99.0)
+        for it in items:
+            if it["id"] == selected["id"]:
+                continue
+            if float(it.get("crow_fly_km") or 99.0) <= sel_dist + 0.15:
+                if it.get("shelter_status") == "restricted":
+                    skipped_warnings.append(
+                        f"より近い「{it['name']}」は満員・制限報告があるため自動除外しました"
+                    )
+                elif not it.get("reachable"):
+                    skipped_warnings.append(
+                        f"より近い「{it['name']}」は周辺通行止めにより到達困難なため回避しました"
+                    )
+        # Also note if post_quake_fire skipped non-wide-area local shelters
+        if chosen_scenario == "post_quake_fire" and selected.get("is_wide_area"):
+            detection_reasons.append(
+                f"大規模火災・延焼リスクに対応した広域避難場所「{selected['name']}」を選定"
+            )
+
+        r8 = selected.get("r8_seismic") or {}
+        if r8.get("listed_in_r8") and not r8.get("needs_retrofit"):
+            detection_reasons.append(
+                f"避難先施設はR8市有耐震リスト適合（区分: {r8.get('seismic_grade')}）を確認済み"
+            )
+        if selected.get("rerouted"):
+            detection_reasons.append(
+                f"被災道路の通行止めを自動回避した徒歩ルート（約{selected.get('walk_minutes')}分 / {selected.get('road_distance_km')}km）を確保"
+            )
+
+    return {
+        **rec,
+        "recommendations": items[: max(1, min(limit, 10))],
+        "auto_mode": True,
+        "requested_scenario": scenario,
+        "auto_detected_scenario": chosen_scenario,
+        "auto_detected_scenario_label": SCENARIO_LABELS[chosen_scenario],
+        "auto_detection_reasons": detection_reasons,
+        "skipped_warnings": skipped_warnings[:3],
+        "selected_shelter": selected,
+        "backup_shelter": backup,
+        "latest_kyoto_quake": latest_quake,
+        "selection_timestamp": _get_iso_now(),
+    }
+
+
+def _get_iso_now() -> str:
+    from datetime import datetime, timedelta, timezone
+
+    return datetime.now(timezone(timedelta(hours=9))).isoformat(timespec="seconds")

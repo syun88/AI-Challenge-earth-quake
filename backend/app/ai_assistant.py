@@ -41,6 +41,7 @@ COMMON_TOOL_NAMES: frozenset[str] = frozenset({
     "get_disaster_board_summary",
     "get_damage_reports_summary",
     "recommend_evacuation_shelters",
+    "auto_select_optimal_shelter",
     "get_kyoto_disaster_updates_and_history",
     "search_kyoto_location",
     "plan_evacuation_route",
@@ -534,6 +535,33 @@ TOOLS = [
     },
     {
         "type": "function",
+        "name": "auto_select_optimal_shelter",
+        "description": "建物改修が間に合わない段階での『実際の地震発生時』を想定し、現在地（または指定区）の木造旧耐震密度・直近地震震度・火災や倒壊報告・避難所の満員/閉鎖状況・通行止め道路をリアルタイムに総合判定して【最適な1か所の避難場所】と【第2予備避難場所】、除外警告、迂回徒歩ルートを自動選定します。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ward": {
+                    "type": "string",
+                    "description": "対象区名（例: '中京区', '伏見区', '左京区'）",
+                },
+                "lat": {
+                    "type": "number",
+                    "description": "現在地緯度（省略時は区中心）",
+                },
+                "lon": {
+                    "type": "number",
+                    "description": "現在地経度（省略時は区中心）",
+                },
+                "quake_intensity": {
+                    "type": "string",
+                    "description": "想定・発生震度（例: '5強', '6弱', '6強'）",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "type": "function",
         "name": "get_kyoto_disaster_updates_and_history",
         "description": "気象庁・Yahoo!天気災害の京都府南部地震履歴（2025年・2026年および2024年以前の過去履歴）と、京都市防災ポータルの自治体防災アップデート（避難場所指定変更・ハザードマップ更新・協定等）を取得する。",
         "parameters": {
@@ -781,6 +809,15 @@ def _summarize_tool_call(name: str, args: dict[str, Any], result: Any) -> str:
             top = recs[0]
             return f"避難場所推薦（{origin_w}）: 1位 {top.get('name')}（約{top.get('road_distance_km')}km・徒歩{top.get('walk_minutes')}分）"
         return f"避難場所推薦（{origin_w}）: 候補なし"
+    if name == "auto_select_optimal_shelter" and isinstance(result, dict):
+        sel = result.get("selected_shelter") or {}
+        origin_w = (result.get("origin") or {}).get("ward_name", "京都市")
+        if sel:
+            return (
+                f"発生時自動選定（{origin_w} / {result.get('auto_detected_scenario_label')}）: "
+                f"最適「{sel.get('name')}」（徒歩約{sel.get('walk_minutes')}分 / {sel.get('road_distance_km')}km）"
+            )
+        return f"発生時自動選定（{origin_w}）: 候補なし"
     if name == "get_kyoto_disaster_updates_and_history" and isinstance(result, dict):
         c = result.get("counts") or {}
         return f"防災アップデート・地震履歴: 地震{len(result.get('earthquakes', []))}件 / 市更新{len(result.get('municipality_updates', []))}件（全期間: 地震{c.get('total_earthquakes', 0)}・市{c.get('total_municipality_updates', 0)}）"
@@ -1123,6 +1160,19 @@ def _extract_map_actions(name: str, result: Any) -> list[dict[str, Any]]:
                 "lat": b["centroid_lat"],
                 "zoom": 17.0,
             })
+    elif name == "auto_select_optimal_shelter":
+        sel = result.get("selected_shelter")
+        ori = result.get("origin") or {}
+        if sel:
+            actions.append({
+                "type": "fly_to_mesh",
+                "key": f"auto_shelter:{sel['id']}",
+                "label": f"最適避難先「{sel['name']}」（徒歩約{sel.get('walk_minutes')}分）へ移動",
+                "meshcode": (sel.get("shelter_hazard") or {}).get("meshcode") or ori.get("meshcode") or "",
+                "lon": sel["lon"],
+                "lat": sel["lat"],
+                "zoom": 15.8,
+            })
     return actions
 
 
@@ -1431,6 +1481,46 @@ def _execute_tool(
                 }
                 for item in res["recommendations"]
             ],
+        }
+
+    if name == "auto_select_optimal_shelter":
+        from app.shelter_rec import auto_select_optimal_shelter
+
+        r_store = _resolve_reports_store(reports_store)
+        ward = args.get("ward")
+        lat = args.get("lat")
+        lon = args.get("lon")
+        quake_intensity = args.get("quake_intensity")
+        reports = r_store.list_reports(
+            include_samples=True,
+            include_resolved=False,
+            limit=300,
+            viewer_role=user_role,
+            viewer_uid=user_uid,
+        )
+        res = auto_select_optimal_shelter(
+            lat=float(lat) if lat is not None else None,
+            lon=float(lon) if lon is not None else None,
+            ward=str(ward) if ward else None,
+            scenario="auto",
+            quake_intensity=str(quake_intensity) if quake_intensity else None,
+            reports=reports,
+            include_samples=True,
+            avoid_unverified=True,
+            limit=5,
+            store=store,
+        )
+        sel = res.get("selected_shelter")
+        bak = res.get("backup_shelter")
+        return {
+            "auto_detected_scenario": res["auto_detected_scenario"],
+            "auto_detected_scenario_label": res["auto_detected_scenario_label"],
+            "auto_detection_reasons": res["auto_detection_reasons"],
+            "skipped_warnings": res["skipped_warnings"],
+            "origin": res["origin"],
+            "active_blocked_count": res["active_blocked_count"],
+            "selected_shelter": {k: v for k, v in sel.items() if k != "nav_route"} if sel else None,
+            "backup_shelter": {k: v for k, v in bak.items() if k != "nav_route"} if bak else None,
         }
 
     if name == "get_kyoto_disaster_updates_and_history":
