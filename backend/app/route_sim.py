@@ -1194,9 +1194,13 @@ def simulate_navigation(
                 mode="evacuate",
                 origin_meta=origin_meta,
                 dest_meta=dest_meta,
+                ev=ev,
                 baseline=baseline,
                 alternative=alternative,
-                evaluated_net=ev,
+                include_samples=include_samples,
+                avoid_unverified=avoid_unverified,
+                block_radius_m=block_radius_m,
+                note=f"個別避難先ルート（{t_lat:.4f}, {t_lon:.4f}）",
             )
 
         candidate_hubs = [h for h in ev["hubs"] if h["hub_status"] != "restricted"] or ev["hubs"]

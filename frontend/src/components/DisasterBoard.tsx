@@ -2,6 +2,7 @@
 
 import { MessageCircle as ChatTabIcon } from "lucide-react";
 import { BoardChatPanel } from "@/components/BoardChatPanel";
+import type { MapAction } from "@/types/quakelens";
 
 import React, { useEffect, useState, useCallback } from "react";
 import {
@@ -132,6 +133,7 @@ export interface DisasterBoardProps {
   onSelectWardFilter?: (ward: string) => void;
   onDataMutated?: () => void;
   initialView?: BoardView;
+  onExecuteMapActions?: (actions: MapAction[]) => void;
 }
 
 export function DisasterBoard({
@@ -147,6 +149,7 @@ export function DisasterBoard({
   onSelectWardFilter,
   onDataMutated,
   initialView = "check",
+  onExecuteMapActions,
 }: DisasterBoardProps) {
   const [view, setView] = useState<BoardView>(initialView);
   const [localIncludeSamples, setLocalIncludeSamples] = useState(true);
@@ -1134,7 +1137,10 @@ export function DisasterBoard({
         )}
 
         {view === "chat" && (
-          <BoardChatPanel defaultWard={searchWard} />
+          <BoardChatPanel
+            defaultWard={searchWard}
+            onExecuteMapActions={onExecuteMapActions}
+          />
         )}
       </div>
     </div>

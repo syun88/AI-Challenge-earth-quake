@@ -51,11 +51,13 @@ rules_version = '2';
 //   - tenantUid: string (required, '' for public/government; enterprise UID for enterprise_liaison, <= 128 chars)
 //   - senderUid: string (required, == request.auth.uid, 1..128 chars)
 //   - senderName: string (required, 1..80 chars)
-//   - senderRole: string (required, verified against caller's role: 'citizen' | 'enterprise' | 'government')
+//   - senderRole: string (required, verified against caller's role: 'citizen' | 'enterprise' | 'government'; Admin SDK may write 'assistant')
 //   - senderOrg: string (required, 0..120 chars)
 //   - wardName: string (required, 1..40 chars)
-//   - text: string (required, 1..500 chars)
+//   - text: string (required, 1..500 chars for user posts, 1..1500 chars for replyKind == 'ai_proxy')
 //   - createdAt: timestamp (required, == request.time on create)
+//   - replyKind: string (optional, client: 'user' | 'ai_proxy'; Admin SDK may write 'assistant')
+//   - mapActionsJson: string (optional, 0..4000 chars)
 //
 // Collection: user_preferences
 // Document ID: {uid} (must equal authenticated Firebase Auth UID)
@@ -274,10 +276,23 @@ service cloud.firestore {
         'senderOrg',
         'wardName',
         'text',
+        'createdAt',
+        'replyKind',
+        'mapActionsJson'
+      ];
+      let requiredKeys = [
+        'channel',
+        'tenantUid',
+        'senderUid',
+        'senderName',
+        'senderRole',
+        'senderOrg',
+        'wardName',
+        'text',
         'createdAt'
       ];
       return data.keys().hasOnly(allowedKeys) &&
-             data.keys().hasAll(allowedKeys) &&
+             data.keys().hasAll(requiredKeys) &&
              data.channel is string &&
              data.tenantUid is string &&
              data.tenantUid.size() <= 128 &&
@@ -294,9 +309,14 @@ service cloud.firestore {
              data.wardName is string &&
              data.wardName.size() > 0 &&
              data.wardName.size() <= 40 &&
+             (!('replyKind' in data) ||
+              (data.replyKind is string && data.replyKind in ['user', 'ai_proxy'])) &&
+             (!('mapActionsJson' in data) ||
+              (data.mapActionsJson is string && data.mapActionsJson.size() <= 4000)) &&
              data.text is string &&
              data.text.size() > 0 &&
-             data.text.size() <= 500 &&
+             ((data.get('replyKind', 'user') == 'ai_proxy' && data.text.size() <= 1500) ||
+              data.text.size() <= 500) &&
              data.createdAt is timestamp &&
              data.createdAt == request.time &&
              (

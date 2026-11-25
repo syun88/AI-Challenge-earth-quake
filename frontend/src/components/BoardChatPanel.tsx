@@ -1,14 +1,18 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
+  Bot,
   Building2,
   Landmark,
   Loader2,
   Lock,
+  MapPin,
   MessageCircle,
   Send,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Users,
 } from "lucide-react";
@@ -27,20 +31,25 @@ import {
   type Timestamp,
 } from "firebase/firestore";
 import { useAuth } from "@/contexts/AuthContext";
+import { askBoardChatAgent } from "@/lib/api";
 import { WARD_CENTERS } from "@/lib/colors";
 import { getFirebaseDb, ROLE_META } from "@/lib/firebase";
 import type {
   BoardChatChannel,
   BoardChatMessage,
+  MapAction,
   UserRole,
 } from "@/types/quakelens";
 
 interface BoardChatPanelProps {
   defaultWard?: string;
+  onExecuteMapActions?: (actions: MapAction[]) => void;
 }
 
 const KYOTO_WARDS = Object.keys(WARD_CENTERS).filter((w) => w !== "all");
 const MAX_CHAT_LENGTH = 500;
+const MENTION_PATTERN = /(?:@|＠)(?:もちまも|mochimamo)/i;
+export const PENDING_BOARD_MAP_ACTIONS_KEY = "quakelens_pending_map_actions";
 
 const CHANNEL_META: Record<
   BoardChatChannel,
@@ -56,7 +65,7 @@ const CHANNEL_META: Record<
     label: "地域共有チャット",
     shortLabel: "地域チャット",
     description:
-      "市民・企業・行政機関の全ロールでリアルタイムに状況共有・安否連絡ができます（最新50件表示）。",
+      "市民・企業・行政機関の全ロールで状況共有や @もちまも 避難ナビ連携ができます（公開チャンネルのため機密・個人情報は遮断）。",
     pillClass: "text-slate-300 hover:text-white",
     activeClass: "bg-sky-500/20 text-sky-100 border-sky-400/70",
   },
@@ -90,6 +99,17 @@ function formatChatTime(ms: number | null): string {
   }
 }
 
+function serializeCompactMapActions(actions: MapAction[] | undefined): string {
+  if (!actions || actions.length === 0) return "";
+  const full = JSON.stringify(actions);
+  if (full.length <= 3900) return full;
+  for (let count = Math.min(actions.length, 4); count >= 1; count--) {
+    const sub = JSON.stringify(actions.slice(0, count));
+    if (sub.length <= 3900) return sub;
+  }
+  return "";
+}
+
 function mapFirestoreChatError(err: FirestoreError | Error): string {
   const code = "code" in err ? err.code : "";
   if (code === "permission-denied") {
@@ -107,7 +127,11 @@ function mapFirestoreChatError(err: FirestoreError | Error): string {
   return err.message || "チャットの読み込みに失敗しました。";
 }
 
-export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
+export function BoardChatPanel({
+  defaultWard = "all",
+  onExecuteMapActions,
+}: BoardChatPanelProps) {
+  const router = useRouter();
   const { profile, firebaseUser } = useAuth();
   const db = getFirebaseDb();
 
@@ -121,6 +145,7 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
   const [chatError, setChatError] = useState<string | null>(null);
   const [draft, setDraft] = useState<string>("");
   const [sending, setSending] = useState<boolean>(false);
+  const [agentThinking, setAgentThinking] = useState<boolean>(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -206,14 +231,33 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
             const data = d.data({ serverTimestamps: "estimate" });
             const ts = data.createdAt as Timestamp | null | undefined;
             const roleRaw = String(data.senderRole || "citizen");
-            const senderRole: UserRole =
-              roleRaw === "government" || roleRaw === "enterprise"
+            const senderRole: UserRole | "assistant" =
+              roleRaw === "government" ||
+              roleRaw === "enterprise" ||
+              roleRaw === "assistant"
                 ? roleRaw
                 : "citizen";
+
+            let parsedActions: MapAction[] = [];
+            if (typeof data.mapActionsJson === "string" && data.mapActionsJson.trim()) {
+              try {
+                const raw = JSON.parse(data.mapActionsJson);
+                if (Array.isArray(raw)) {
+                  parsedActions = raw as MapAction[];
+                }
+              } catch {
+                parsedActions = [];
+              }
+            }
+
+            const replyKind: "ai_proxy" | "assistant" | "user" =
+              data.replyKind === "ai_proxy" || data.replyKind === "assistant"
+                ? (data.replyKind as "ai_proxy" | "assistant")
+                : "user";
+
             return {
               id: d.id,
-              channel:
-                (data.channel as BoardChatChannel) || "public",
+              channel: (data.channel as BoardChatChannel) || "public",
               tenantUid: String(data.tenantUid || ""),
               senderUid: String(data.senderUid || ""),
               senderName: String(data.senderName || "匿名ユーザー"),
@@ -221,6 +265,8 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
               senderOrg: String(data.senderOrg || ""),
               wardName: String(data.wardName || "京都市全域"),
               text: String(data.text || ""),
+              replyKind,
+              mapActions: parsedActions,
               createdAtMs: ts && typeof ts.toMillis === "function" ? ts.toMillis() : null,
             };
           })
@@ -240,7 +286,7 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages.length, activeChannel]);
+  }, [messages.length, activeChannel, agentThinking]);
 
   const enterpriseThreads = useMemo(() => {
     if (
@@ -295,6 +341,24 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
     resolvedTenantUid,
   ]);
 
+  const handleApplyMessageActions = (actions: MapAction[]) => {
+    const runnable = actions.filter((a) => a.type !== "download_export");
+    if (runnable.length === 0) return;
+    if (onExecuteMapActions) {
+      onExecuteMapActions(runnable);
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(
+        PENDING_BOARD_MAP_ACTIONS_KEY,
+        JSON.stringify(runnable)
+      );
+    } catch {
+      // ignore storage quota errors
+    }
+    router.push("/");
+  };
+
   const canSend =
     Boolean(db && profile && firebaseUser && draft.trim().length > 0 && !sending) &&
     (activeChannel !== "enterprise_liaison" || Boolean(resolvedTenantUid));
@@ -312,23 +376,34 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
       return;
     }
 
+    const senderDisplayName =
+      profile.display_name || firebaseUser.displayName || "登録ユーザー";
+    const wardLabel =
+      activeChannel === "public"
+        ? activeWard === "all"
+          ? "京都市全域"
+          : activeWard
+        : "連絡専用";
+    const tenantForPost =
+      activeChannel === "enterprise_liaison" ? resolvedTenantUid : "";
+    const recentSnapshot = visibleMessages.slice(-12).map((m) => ({
+      senderName: m.senderName,
+      senderRole: m.senderRole,
+      wardName: m.wardName,
+      text: m.text,
+    }));
+
     setSending(true);
     setChatError(null);
     try {
       await addDoc(collection(db, "board_chat_messages"), {
         channel: activeChannel,
-        tenantUid:
-          activeChannel === "enterprise_liaison" ? resolvedTenantUid : "",
+        tenantUid: tenantForPost,
         senderUid: profile.uid,
-        senderName: profile.display_name || firebaseUser.displayName || "登録ユーザー",
+        senderName: senderDisplayName,
         senderRole: profile.role,
         senderOrg: profile.organization_name || "",
-        wardName:
-          activeChannel === "public"
-            ? activeWard === "all"
-              ? "京都市全域"
-              : activeWard
-            : "連絡専用",
+        wardName: wardLabel,
         text: trimmed,
         createdAt: serverTimestamp(),
       });
@@ -339,8 +414,69 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
           ? mapFirestoreChatError(err)
           : "メッセージ送信に失敗しました。"
       );
+      setSending(false);
+      return;
     } finally {
       setSending(false);
+    }
+
+    // Trigger @もちまも AI Agent when mentioned inside this isolated channel
+    if (MENTION_PATTERN.test(trimmed)) {
+      setAgentThinking(true);
+      try {
+        const agentRes = await askBoardChatAgent({
+          channel: activeChannel,
+          ward_name: activeWard,
+          tenant_uid: tenantForPost,
+          trigger_message: trimmed,
+          recent_messages: [
+            ...recentSnapshot,
+            {
+              senderName: senderDisplayName,
+              senderRole: profile.role,
+              wardName: wardLabel,
+              text: trimmed,
+            },
+          ],
+        });
+
+        // Apply Agent map actions directly when inside map workspace
+        const runnable = (agentRes.map_actions || []).filter(
+          (a) => a.type !== "download_export"
+        );
+        if (onExecuteMapActions && runnable.length > 0) {
+          onExecuteMapActions(runnable);
+        }
+
+        // Persist Spark-fallback AI reply card in Firestore when backend Admin SDK isn't configured locally
+        if (!agentRes.persisted_to_firestore && agentRes.answer?.trim()) {
+          const actionsJson = serializeCompactMapActions(runnable);
+          const aiPayload: Record<string, unknown> = {
+            channel: activeChannel,
+            tenantUid: tenantForPost,
+            senderUid: profile.uid,
+            senderName: "もちまも (AI防災エージェント)",
+            senderRole: profile.role,
+            senderOrg: "QuakeLens 防災AI",
+            wardName: wardLabel,
+            replyKind: "ai_proxy",
+            text: agentRes.answer.trim().slice(0, 1450),
+            createdAt: serverTimestamp(),
+          };
+          if (actionsJson) {
+            aiPayload.mapActionsJson = actionsJson;
+          }
+          await addDoc(collection(db, "board_chat_messages"), aiPayload);
+        }
+      } catch (err) {
+        setChatError(
+          err instanceof Error
+            ? `もちまも応答エラー: ${err.message}`
+            : "もちまもエージェントの応答に失敗しました。"
+        );
+      } finally {
+        setAgentThinking(false);
+      }
     }
   };
 
@@ -376,10 +512,7 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
   const channelMeta = CHANNEL_META[activeChannel];
 
   return (
-    <div
-      data-testid="board-chat-panel"
-      className="flex flex-col gap-2.5"
-    >
+    <div data-testid="board-chat-panel" className="flex flex-col gap-2.5">
       {/* Role-based Channel Switcher */}
       <div
         className={`grid gap-1 rounded-xl border border-slate-800 bg-slate-950/70 p-1 text-[11px] ${
@@ -429,7 +562,7 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
           </div>
           <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] text-slate-300">
             <ShieldCheck className="h-3 w-3 text-emerald-400" />
-            Firebase リアルタイム同期
+            @もちまも AI連携対応
           </span>
         </div>
         <p className="mt-1 text-[10px] text-slate-400">
@@ -532,7 +665,7 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
             <span>このチャンネルにはまだ投稿がありません。</span>
             <span className="text-[10px] text-slate-500">
               {activeChannel === "public"
-                ? "周辺の道路状況・避難所混雑・連絡事項を共有できます。"
+                ? "「@もちまも 京都駅から安全な避難先へナビして」のようにAIへ直接依頼もできます。"
                 : activeChannel === "enterprise_liaison"
                   ? "BCP拠点被害や行政への支援要請を秘匿送信できます。"
                   : "政府・自治体間の運用連絡を送信できます。"}
@@ -540,31 +673,53 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
           </div>
         ) : (
           visibleMessages.map((msg) => {
-            const isMine = msg.senderUid === profile.uid;
-            const canDelete = isMine || profile.role === "government";
-            const rMeta = ROLE_META[msg.senderRole];
+            const isAiMsg =
+              msg.senderRole === "assistant" ||
+              msg.replyKind === "ai_proxy" ||
+              msg.replyKind === "assistant";
+            const isMine = !isAiMsg && msg.senderUid === profile.uid;
+            const canDelete =
+              msg.senderUid === profile.uid || profile.role === "government";
+            const rMeta =
+              msg.senderRole === "assistant"
+                ? {
+                    shortLabel: "もちまも AI",
+                    badgeClass:
+                      "bg-emerald-500/20 text-emerald-200 border-emerald-400/50",
+                  }
+                : ROLE_META[msg.senderRole];
+            const runnableMapActions = (msg.mapActions || []).filter(
+              (a) => a.type !== "download_export"
+            );
 
             return (
               <div
                 key={msg.id}
                 data-testid={`chat-message-${msg.id}`}
                 className={`rounded-xl border px-3 py-2 text-xs transition ${
-                  isMine
-                    ? "ml-4 border-sky-500/35 bg-sky-950/35"
-                    : "mr-4 border-slate-800 bg-slate-900/80"
+                  isAiMsg
+                    ? "mr-2 border-emerald-500/45 bg-emerald-950/35"
+                    : isMine
+                      ? "ml-4 border-sky-500/35 bg-sky-950/35"
+                      : "mr-4 border-slate-800 bg-slate-900/80"
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                     <span
-                      className={`rounded border px-1.5 py-0.5 text-[9px] font-bold ${rMeta.badgeClass}`}
+                      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-bold ${
+                        isAiMsg
+                          ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-200"
+                          : rMeta.badgeClass
+                      }`}
                     >
-                      {rMeta.shortLabel}
+                      {isAiMsg && <Bot className="h-2.5 w-2.5" />}
+                      {isAiMsg ? "もちまも AI" : rMeta.shortLabel}
                     </span>
                     <span className="truncate font-semibold text-white">
                       {msg.senderName}
                     </span>
-                    {msg.senderOrg && (
+                    {msg.senderOrg && !isAiMsg && (
                       <span className="truncate text-[10px] text-slate-400">
                         ({msg.senderOrg})
                       </span>
@@ -613,11 +768,59 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
                 <p className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-100">
                   {msg.text}
                 </p>
+
+                {runnableMapActions.length > 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-emerald-500/25 pt-1.5">
+                    <button
+                      type="button"
+                      data-testid="board-chat-apply-map"
+                      onClick={() => handleApplyMessageActions(runnableMapActions)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-emerald-400/60 bg-emerald-500/20 px-2.5 py-1 text-[10.5px] font-bold text-emerald-100 transition hover:bg-emerald-500/35"
+                    >
+                      <MapPin className="h-3 w-3 text-emerald-300" />
+                      地図にルート・ピンを表示 ({runnableMapActions.length}操作)
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })
         )}
+
+        {agentThinking && (
+          <div
+            data-testid="board-chat-agent-thinking"
+            className="flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-950/30 px-3 py-2 text-[11px] text-emerald-200"
+          >
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-300" />
+            <span>
+              もちまも（AI防災エージェント）が会話履歴とハザード・通行止め状況を確認し、案内と地図操作を準備中です...
+            </span>
+          </div>
+        )}
         <div ref={bottomRef} />
+      </div>
+
+      {/* Quick @もちまも Mention Helper */}
+      <div className="flex flex-wrap items-center justify-between gap-1.5 text-[10px]">
+        <button
+          type="button"
+          data-testid="insert-mochimamo-mention"
+          onClick={() =>
+            setDraft((prev) =>
+              MENTION_PATTERN.test(prev)
+                ? prev
+                : `@もちまも ${prev}`.trimStart()
+            )
+          }
+          className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 font-semibold text-emerald-200 transition hover:bg-emerald-500/25"
+        >
+          <Sparkles className="h-3 w-3 text-emerald-300" />
+          @もちまも を挿入
+        </button>
+        <span className="text-slate-400">
+          例: <code className="text-sky-300">@もちまも Bさんに安全な場所までナビゲーションをして</code>
+        </span>
       </div>
 
       {/* Composer */}
@@ -643,7 +846,7 @@ export function BoardChatPanel({ defaultWard = "all" }: BoardChatPanelProps) {
             }}
             placeholder={
               activeChannel === "public"
-                ? `${activeWard === "all" ? "京都市全域" : activeWard} へ状況共有メッセージを送信 (Enterで送信 / Shift+Enterで改行)`
+                ? `${activeWard === "all" ? "京都市全域" : activeWard} へ送信 / 「@もちまも 〜」でAIに避難ナビ等を依頼`
                 : activeChannel === "enterprise_liaison"
                   ? profile.role === "government"
                     ? resolvedTenantUid

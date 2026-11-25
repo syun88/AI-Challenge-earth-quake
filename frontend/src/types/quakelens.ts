@@ -235,14 +235,28 @@ export interface ToolCallTrace {
   summary?: string;
 }
 
+export interface AgentMapPin {
+  id: string;
+  label: string;
+  lat: number;
+  lon: number;
+  tone?: "emerald" | "amber" | "rose" | "sky";
+  description?: string;
+}
+
 export interface MapAction {
   type:
     | "fly_to_mesh"
     | "fly_to_ward"
+    | "fly_to_location"
     | "focus_building"
     | "focus_report"
     | "download_export"
-    | "show_route_simulation";
+    | "show_route_simulation"
+    | "navigate_evacuation"
+    | "set_agent_pins"
+    | "clear_agent_pins"
+    | "configure_map_layers";
   key: string;
   label: string;
   meshcode?: string;
@@ -256,6 +270,23 @@ export interface MapAction {
   lon?: number;
   lat?: number;
   zoom?: number;
+  pins?: AgentMapPin[];
+  replace?: boolean;
+  start_lat?: number;
+  start_lon?: number;
+  start_label?: string;
+  target_lat?: number;
+  target_lon?: number;
+  target_label?: string;
+  show_hazard_mesh?: boolean;
+  mesh_overlay_mode?: "hazard" | "pre1981";
+  show_buildings?: boolean;
+  show_official_shelters?: boolean;
+  show_road_closures?: boolean;
+  show_reports?: boolean;
+  map_3d?: boolean;
+  visual_preset?: "crisis" | "risk";
+  open_panel?: "none" | "report" | "safety" | "shelter" | "nav" | "stats" | "assets";
 }
 
 export interface AiProtectionStatus {
@@ -283,6 +314,7 @@ export interface GroundingVerification {
 
 export interface ChatResponse {
   configured: boolean;
+  security_blocked?: boolean;
   answer: string;
   interaction_id: string | null;
   tool_calls: ToolCallTrace[];
@@ -1116,11 +1148,19 @@ export interface BoardChatMessage {
   tenantUid: string;
   senderUid: string;
   senderName: string;
-  senderRole: UserRole;
+  senderRole: UserRole | "assistant";
   senderOrg: string;
   wardName: string;
   text: string;
+  replyKind?: "user" | "assistant" | "ai_proxy";
+  mapActions?: MapAction[];
   createdAtMs: number | null;
+}
+
+export interface BoardChatAgentResponse extends ChatResponse {
+  channel: BoardChatChannel;
+  persisted_to_firestore: boolean;
+  firestore_doc_id: string | null;
 }
 
 export interface UserPreferences {

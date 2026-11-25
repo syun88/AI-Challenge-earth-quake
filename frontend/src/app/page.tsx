@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Ban,
+  Bot,
   Building2,
   Compass,
   Loader2,
   Map as MapIcon,
+  MapPin,
   MessageSquareHeart,
   ShieldAlert,
   Tent,
@@ -30,6 +32,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { getFirebaseDb } from "@/lib/firebase";
 import { AiAssistantPanel } from "@/components/AiAssistantPanel";
+import { PENDING_BOARD_MAP_ACTIONS_KEY } from "@/components/BoardChatPanel";
 import { DraggableMochimamoBot } from "@/components/DraggableMochimamoBot";
 import { DamageReportPanel } from "@/components/DamageReportPanel";
 import { DisasterBoard } from "@/components/DisasterBoard";
@@ -81,6 +84,7 @@ import {
 } from "@/lib/api";
 import {
   AgeCategory,
+  AgentMapPin,
   AiProtectionStatus,
   BcpSiteCandidate,
   BoardSummaryResponse,
@@ -247,6 +251,8 @@ export default function HomePage() {
     bbox?: [number, number, number, number] | null;
     ts: number;
   } | null>(null);
+  const [agentPins, setAgentPins] = useState<AgentMapPin[]>([]);
+  const [selectedAgentPin, setSelectedAgentPin] = useState<AgentMapPin | null>(null);
   const [queuedAiPrompt, setQueuedAiPrompt] = useState<{ text: string; ts: number } | null>(null);
   const [reportCreateTrigger, setReportCreateTrigger] = useState(0);
 
@@ -1677,6 +1683,74 @@ export default function HomePage() {
 
   const handleExecuteMapAction = useCallback(
     async (action: MapAction) => {
+      if (action.type === "clear_agent_pins") {
+        setAgentPins([]);
+        setSelectedAgentPin(null);
+        return;
+      }
+
+      if (action.type === "set_agent_pins" && action.pins) {
+        const incoming = action.pins.filter(
+          (p) => Number.isFinite(p.lat) && Number.isFinite(p.lon)
+        );
+        setAgentPins((prev) => {
+          if (action.replace) return incoming;
+          const byId = new Map(prev.map((p) => [p.id, p]));
+          for (const p of incoming) {
+            byId.set(p.id, p);
+          }
+          return Array.from(byId.values());
+        });
+        if (incoming.length > 0) {
+          setSelectedAgentPin(incoming[0]);
+        }
+        return;
+      }
+
+      if (action.type === "configure_map_layers") {
+        if (typeof action.show_hazard_mesh === "boolean") {
+          setShowHazardMesh(action.show_hazard_mesh);
+        }
+        if (action.mesh_overlay_mode) {
+          setMeshOverlayMode(action.mesh_overlay_mode);
+        }
+        if (typeof action.show_buildings === "boolean") {
+          setShowBuildings(action.show_buildings);
+        }
+        if (typeof action.show_official_shelters === "boolean") {
+          setShowOfficialShelters(action.show_official_shelters);
+        }
+        if (typeof action.show_road_closures === "boolean") {
+          setShowRoadClosures(action.show_road_closures);
+        }
+        if (typeof action.show_reports === "boolean") {
+          setShowReports(action.show_reports);
+        }
+        if (typeof action.map_3d === "boolean") {
+          setMap3DMode(action.map_3d ? "3d" : "auto");
+        }
+        if (action.visual_preset) {
+          setVisualPreset(action.visual_preset);
+        }
+        if (
+          action.open_panel &&
+          (action.open_panel !== "assets" || profile?.role === "enterprise")
+        ) {
+          setActivePanel(action.open_panel);
+        }
+        return;
+      }
+
+      if (action.type === "fly_to_location" && action.lat != null && action.lon != null) {
+        setFlyToTarget({
+          lon: action.lon,
+          lat: action.lat,
+          zoom: action.zoom ?? 15.6,
+          ts: Date.now(),
+        });
+        return;
+      }
+
       if (action.type === "fly_to_ward" && action.ward) {
         setSelectedWard(action.ward);
         setSelectedMeshcode(null);
@@ -1750,6 +1824,46 @@ export default function HomePage() {
         return;
       }
 
+      if (
+        action.type === "navigate_evacuation" &&
+        action.start_lat != null &&
+        action.start_lon != null
+      ) {
+        try {
+          const navParams = {
+            mode: "evacuate" as const,
+            startLat: action.start_lat,
+            startLon: action.start_lon,
+            targetLat: action.target_lat,
+            targetLon: action.target_lon,
+            includeSamples,
+            avoidUnverified: true,
+          };
+          setLastNavParams(navParams);
+          const res = await simulateNavigation(navParams);
+          setRouteResult(res);
+          setShowRoadClosures(true);
+          setShowOfficialShelters(true);
+          const dest = res.destination;
+          setFlyToTarget({
+            lon: dest?.lon ?? action.target_lon ?? action.start_lon,
+            lat: dest?.lat ?? action.target_lat ?? action.start_lat,
+            zoom: action.zoom ?? 14.6,
+            ts: Date.now(),
+          });
+        } catch {
+          if (action.target_lat != null && action.target_lon != null) {
+            setFlyToTarget({
+              lon: action.target_lon,
+              lat: action.target_lat,
+              zoom: action.zoom ?? 14.6,
+              ts: Date.now(),
+            });
+          }
+        }
+        return;
+      }
+
       if (action.type === "show_route_simulation" && action.origin_id && action.destination_id) {
         try {
           const res = await simulateRoute({
@@ -1765,8 +1879,75 @@ export default function HomePage() {
         }
       }
     },
-    [includeSamples]
+    [includeSamples, profile?.role]
   );
+
+  const handleExecuteMapActionsBatch = useCallback(
+    async (actions: MapAction[]) => {
+      if (!actions || actions.length === 0) return;
+
+      for (const act of actions) {
+        if (
+          act.type === "clear_agent_pins" ||
+          act.type === "set_agent_pins" ||
+          act.type === "configure_map_layers"
+        ) {
+          await handleExecuteMapAction(act);
+        }
+      }
+
+      const navAct = actions.find(
+        (a) => a.type === "navigate_evacuation" || a.type === "show_route_simulation"
+      );
+      if (navAct) {
+        await handleExecuteMapAction(navAct);
+        return;
+      }
+
+      const camAct = actions.find(
+        (a) =>
+          a.type === "fly_to_location" ||
+          a.type === "focus_building" ||
+          a.type === "fly_to_mesh" ||
+          a.type === "focus_report" ||
+          a.type === "fly_to_ward"
+      );
+      if (camAct) {
+        await handleExecuteMapAction(camAct);
+        return;
+      }
+
+      const pinAct = actions.find(
+        (a) => a.type === "set_agent_pins" && a.pins && a.pins.length > 0
+      );
+      if (pinAct?.pins?.[0]) {
+        setFlyToTarget({
+          lon: pinAct.pins[0].lon,
+          lat: pinAct.pins[0].lat,
+          zoom: 14.8,
+          ts: Date.now(),
+        });
+      }
+    },
+    [handleExecuteMapAction]
+  );
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    try {
+      const raw = window.sessionStorage.getItem(PENDING_BOARD_MAP_ACTIONS_KEY);
+      if (!raw) return;
+      window.sessionStorage.removeItem(PENDING_BOARD_MAP_ACTIONS_KEY);
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        queueMicrotask(() => {
+          void handleExecuteMapActionsBatch(parsed as MapAction[]);
+        });
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, [isAuthenticated, handleExecuteMapActionsBatch]);
 
   const wards = metadata?.wards ?? Object.keys(WARD_CENTERS).filter((k) => k !== "all");
   const blockedCount = networkStatus?.blocked_count ?? 0;
@@ -1821,6 +2002,11 @@ export default function HomePage() {
             setStatsTab("shared_assets");
             setActivePanel("stats");
           }
+        }}
+        agentPins={agentPins}
+        onSelectAgentPin={(pin) => {
+          setSelectedAgentPin(pin);
+          setFlyToTarget({ lon: pin.lon, lat: pin.lat, zoom: 16.0, ts: Date.now() });
         }}
         map3DMode={map3DMode}
         onChangeMap3DMode={setMap3DMode}
@@ -2093,6 +2279,7 @@ export default function HomePage() {
                 onFocusArea={handleFocusBoardArea}
                 onSelectWardFilter={handleSelectWard}
                 onDataMutated={triggerDisasterRefresh}
+                onExecuteMapActions={(acts) => void handleExecuteMapActionsBatch(acts)}
               />
             )}
 
@@ -2235,6 +2422,7 @@ export default function HomePage() {
                 queuedPrompt={queuedAiPrompt}
                 onConsumeQueuedPrompt={() => setQueuedAiPrompt(null)}
                 onExecuteMapAction={handleExecuteMapAction}
+                onExecuteMapActionsBatch={(acts) => void handleExecuteMapActionsBatch(acts)}
               />
             )}
 
@@ -2392,6 +2580,42 @@ export default function HomePage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* AI Agent Pinned Locations Floating Control Pill */}
+      {agentPins.length > 0 && !displayOpen && (
+        <div
+          data-testid="agent-pins-pill"
+          className="pointer-events-auto fixed right-3 top-[68px] z-20 flex max-w-[min(320px,calc(100vw-24px))] items-center gap-2 rounded-2xl border border-emerald-500/50 bg-slate-900/95 px-3 py-1.5 text-[11px] text-emerald-100 shadow-2xl backdrop-blur-xl"
+        >
+          <Bot className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-bold text-white">
+              {selectedAgentPin ? selectedAgentPin.label : `AIピン ${agentPins.length}件表示中`}
+            </div>
+            {selectedAgentPin?.description && (
+              <div className="truncate text-[10px] text-emerald-200/90">
+                {selectedAgentPin.description}
+              </div>
+            )}
+          </div>
+          <span className="inline-flex items-center gap-0.5 rounded bg-emerald-500/20 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-200">
+            <MapPin className="h-2.5 w-2.5" />
+            {agentPins.length}
+          </span>
+          <button
+            type="button"
+            data-testid="clear-agent-pins-btn"
+            aria-label="AIピンをクリア"
+            onClick={() => {
+              setAgentPins([]);
+              setSelectedAgentPin(null);
+            }}
+            className="rounded-lg p-1 text-slate-400 transition hover:bg-rose-500/20 hover:text-rose-200"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
 

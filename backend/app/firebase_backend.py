@@ -274,3 +274,45 @@ def fetch_firestore_collection(collection_name: str) -> list[dict[str, Any]] | N
         return out
     except Exception:
         return None
+
+
+def query_firestore_collection(
+    collection_name: str,
+    *,
+    filters: list[tuple[str, str, Any]] | None = None,
+    limit_n: int = 30,
+) -> list[dict[str, Any]] | None:
+    """Run a bounded filtered Firestore query via Admin SDK, returning None when unavailable."""
+    db = get_firestore_client()
+    if db is None:
+        return None
+    try:
+        from google.cloud.firestore_v1.base_query import FieldFilter
+
+        ref: Any = db.collection(collection_name)
+        for field, op, val in filters or []:
+            ref = ref.where(filter=FieldFilter(field, op, val))
+        bounded = max(1, min(int(limit_n), 50))
+        ref = ref.limit(bounded)
+        out: list[dict[str, Any]] = []
+        for snap in ref.stream():
+            data = snap.to_dict() or {}
+            data.setdefault("id", snap.id)
+            out.append(data)
+        return out
+    except Exception:
+        return None
+
+
+def add_firestore_server_doc(collection_name: str, payload: dict[str, Any]) -> str | None:
+    """Create a new server-authored Firestore document with server timestamp."""
+    db = get_firestore_client()
+    if db is None:
+        return None
+    try:
+        doc_payload = dict(payload)
+        doc_payload.setdefault("createdAt", firebase_firestore.SERVER_TIMESTAMP)
+        _, doc_ref = db.collection(collection_name).add(doc_payload)
+        return str(doc_ref.id)
+    except Exception:
+        return None

@@ -12,6 +12,7 @@ import {
 import { API_BASE, getBuildingsCountInBbox, getRoadsInBbox, getSyncAuthToken } from "@/lib/api";
 import {
   AgeCategory,
+  AgentMapPin,
   BoardSummaryResponse,
   DamageReport,
   EarthquakeEvent,
@@ -108,6 +109,8 @@ interface QuakeMapProps {
   recommendedShelters: ShelterRecommendationItem[];
   enterpriseAssets?: EnterpriseAsset[];
   onSelectEnterpriseAsset?: (asset: EnterpriseAsset) => void;
+  agentPins?: AgentMapPin[];
+  onSelectAgentPin?: (pin: AgentMapPin) => void;
   map3DMode: Map3DMode;
   onChangeMap3DMode?: (mode: Map3DMode) => void;
   onPitch3DChange?: (active: boolean) => void;
@@ -199,6 +202,8 @@ export function QuakeMap({
   recommendedShelters,
   enterpriseAssets = [],
   onSelectEnterpriseAsset,
+  agentPins = [],
+  onSelectAgentPin,
   map3DMode,
   onChangeMap3DMode,
   onPitch3DChange,
@@ -403,6 +408,7 @@ export function QuakeMap({
   const highlightMarkerRef = useRef<maplibregl.Marker | null>(null);
   const corridorStartMarkerRef = useRef<maplibregl.Marker | null>(null);
   const enterpriseAssetMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const agentPinMarkersRef = useRef<maplibregl.Marker[]>([]);
 
   const syncBuilding3DLayers = useCallback((map: maplibregl.Map) => {
     if (!map.getLayer("buildings-fill") || !map.getLayer("buildings-3d")) return;
@@ -2178,6 +2184,84 @@ export function QuakeMap({
       enterpriseAssetMarkersRef.current = [];
     };
   }, [enterpriseAssets, selectedWard, mapReady, onSelectEnterpriseAsset]);
+
+  // Autonomous AI Agent Custom Pins (XSS-safe textContent + interactive click jump)
+  useEffect(() => {
+    const map = mapRef.current;
+    agentPinMarkersRef.current.forEach((m) => m.remove());
+    agentPinMarkersRef.current = [];
+    if (!map || !mapReady || !agentPins || agentPins.length === 0) return;
+
+    const paletteByTone: Record<
+      "emerald" | "amber" | "rose" | "sky",
+      { card: string; dot: string }
+    > = {
+      emerald: {
+        card: "border-emerald-300 bg-emerald-950/95 text-emerald-50",
+        dot: "bg-emerald-400",
+      },
+      amber: {
+        card: "border-amber-300 bg-amber-950/95 text-amber-50",
+        dot: "bg-amber-400",
+      },
+      rose: {
+        card: "border-rose-400 bg-rose-950/95 text-rose-50",
+        dot: "bg-rose-400",
+      },
+      sky: {
+        card: "border-sky-300 bg-slate-900/95 text-sky-50",
+        dot: "bg-sky-400",
+      },
+    };
+
+    for (const pin of agentPins) {
+      if (!Number.isFinite(pin.lat) || !Number.isFinite(pin.lon)) continue;
+      const tone = paletteByTone[pin.tone ?? "sky"];
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.setAttribute("data-testid", `agent-pin-${pin.id}`);
+      btn.title = pin.description ? `${pin.label} — ${pin.description}` : pin.label;
+      btn.className = "group flex flex-col items-center focus:outline-none cursor-pointer";
+
+      const pill = document.createElement("div");
+      pill.className = `flex max-w-[200px] items-center gap-1.5 rounded-xl border-2 px-2.5 py-1 text-[10.5px] font-bold shadow-2xl backdrop-blur-md transition group-hover:scale-105 ${tone.card}`;
+
+      const dot = document.createElement("span");
+      dot.className = `h-2 w-2 shrink-0 rounded-full ${tone.dot}`;
+      pill.appendChild(dot);
+
+      const labelSpan = document.createElement("span");
+      labelSpan.className = "truncate";
+      labelSpan.textContent = pin.label;
+      pill.appendChild(labelSpan);
+
+      const stem = document.createElement("div");
+      stem.className = `mt-0.5 h-2.5 w-0.5 rounded-full ${tone.dot}`;
+
+      const tip = document.createElement("div");
+      tip.className = `h-2.5 w-2.5 rounded-full border-2 border-white shadow ${tone.dot}`;
+
+      btn.appendChild(pill);
+      btn.appendChild(stem);
+      btn.appendChild(tip);
+
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        onSelectAgentPin?.(pin);
+      });
+
+      const marker = new maplibregl.Marker({ element: btn, anchor: "bottom" })
+        .setLngLat([pin.lon, pin.lat])
+        .addTo(map);
+      agentPinMarkersRef.current.push(marker);
+    }
+
+    return () => {
+      agentPinMarkersRef.current.forEach((m) => m.remove());
+      agentPinMarkersRef.current = [];
+    };
+  }, [agentPins, mapReady, onSelectAgentPin]);
 
   // Highlighted Selected Building / Facility Beacon (pulsing radar ring + floating callout)
   useEffect(() => {

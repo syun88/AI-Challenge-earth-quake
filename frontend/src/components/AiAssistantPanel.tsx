@@ -71,28 +71,30 @@ interface AiAssistantPanelProps {
   queuedPrompt: { text: string; ts: number } | null;
   onConsumeQueuedPrompt: () => void;
   onExecuteMapAction: (action: MapAction) => void;
+  onExecuteMapActionsBatch?: (actions: MapAction[]) => void;
 }
 
 const ROLE_PROMPTS: Record<UserRole, string[]> = {
   citizen: [
+    "京都駅から通行止めを回避した安全な避難先までナビして地図にピンを立てて",
     "中京区の安全な指定緊急避難場所を教えて",
     "道路損壊・通行止めが報告されている地域は？",
     "伏見区と東山区で地震ハザードや古い建物の分布を比較して",
-    "1981年以前の建物が多い優先確認エリアを教えて",
     "現在の地域の耐震診断や補助制度について教えて",
   ],
   enterprise: [
+    "BCP代替拠点を置く際に避けるべき高リスクエリアを教えて（ピン表示もして）",
     "京都市内でサーバー室・データセンターに適した低リスク候補地は？",
-    "BCP代替拠点を置く際に避けるべき高リスクエリアを教えて",
+    "自社の登録拠点のリスク状況と周辺通行止めを診断して",
     "道路損壊・通行止めが報告されている主要幹線周辺は？",
     "R8市有耐震リストの区ごとの耐震化状況と周辺建物リスクを教えて",
   ],
   government: [
     "伏見区の現在の被害報告（救助要請含む）と建物リスクをまとめて",
+    "緊急時共有に設定された企業拠点のリスク状況を確認して",
     "道路損壊・通行止めが報告されている地域は？",
-    "支援が必要という報告を地域別に整理して",
     "現在の地域の災害状況をCSVにまとめて",
-    "1981年以前の建物が多い優先確認エリアを教えて",
+    "1981年以前の建物が多い優先確認エリアを地図で確認して",
   ],
 };
 
@@ -192,11 +194,13 @@ export function AiAssistantPanel({
   queuedPrompt,
   onConsumeQueuedPrompt,
   onExecuteMapAction,
+  onExecuteMapActionsBatch,
 }: AiAssistantPanelProps) {
   const demoPrompts = ROLE_PROMPTS[userRole] || ROLE_PROMPTS.citizen;
   const [messages, setMessages] = useState<ChatTurn[]>([INITIAL_MESSAGE]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [autoAgentMap, setAutoAgentMap] = useState(true);
   const [interactionId, setInteractionId] = useState<string | null>(null);
   const [model, setModel] = useState<AiModelId>("gemini-3.5-flash-lite");
   const [tempApiKey, setTempApiKey] = useState("");
@@ -300,6 +304,18 @@ export function AiAssistantPanel({
       let receivedSuccessDone = false;
       let completedAnswer = "";
       let completedConfigured = false;
+      let completedMapActions: MapAction[] = [];
+
+      const applyAutoMapActions = (actions?: MapAction[]) => {
+        if (!autoAgentMap || !actions || actions.length === 0) return;
+        const runnable = actions.filter((a) => a.type !== "download_export");
+        if (runnable.length === 0) return;
+        if (onExecuteMapActionsBatch) {
+          onExecuteMapActionsBatch(runnable);
+        } else {
+          runnable.forEach((a) => onExecuteMapAction(a));
+        }
+      };
 
       try {
         await streamChatMessage(
@@ -376,6 +392,7 @@ export function AiAssistantPanel({
               receivedSuccessDone = true;
               completedAnswer = ev.answer || "";
               completedConfigured = ev.configured !== false;
+              completedMapActions = ev.map_actions || [];
               if (!ev.incomplete && ev.interaction_id) {
                 setInteractionId(ev.interaction_id);
               }
@@ -422,6 +439,7 @@ export function AiAssistantPanel({
         if (receivedSuccessDone) {
           onRefreshHealth?.();
           triggerHappyCompletion();
+          applyAutoMapActions(completedMapActions);
           if (completedConfigured && completedAnswer.trim()) {
             void speakText(assistantId, completedAnswer, {
               apiKey: tempApiKey,
@@ -495,6 +513,7 @@ export function AiAssistantPanel({
               }
               onRefreshHealth?.();
               triggerHappyCompletion();
+              applyAutoMapActions(res.map_actions);
               if (res.configured !== false && res.answer.trim()) {
                 void speakText(assistantId, res.answer, {
                   apiKey: tempApiKey,
@@ -565,6 +584,9 @@ export function AiAssistantPanel({
       model,
       tempApiKey,
       accessCode,
+      autoAgentMap,
+      onExecuteMapAction,
+      onExecuteMapActionsBatch,
       onRefreshHealth,
       triggerHappyCompletion,
       unlockAudio,
@@ -716,7 +738,7 @@ export function AiAssistantPanel({
           {is3D && (
             <span className="rounded bg-slate-800 px-1.5 py-0.5 text-amber-200">3D表示中</span>
           )}
-          {aiProtection && geminiConfigured && !hasOwnKey && (
+              {aiProtection && geminiConfigured && !hasOwnKey && (
             <span
               className="inline-flex items-center gap-1 rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300"
               title={`1分あたり${aiProtection.per_minute_limit}回制限 / 本日の残り共用リクエスト枠`}
@@ -725,6 +747,20 @@ export function AiAssistantPanel({
               残枠 {aiProtection.daily_remaining}/{aiProtection.daily_limit}
             </span>
           )}
+          <button
+            type="button"
+            data-testid="toggle-auto-agent-map"
+            onClick={() => setAutoAgentMap((v) => !v)}
+            title="AI回答時に推奨地点ピン・避難ルート・カメラ移動を自動で地図へ反映します"
+            className={`ml-auto inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold transition ${
+              autoAgentMap
+                ? "border-sky-400/60 bg-sky-500/15 text-sky-200"
+                : "border-slate-700 bg-slate-900 text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <MapPin className="h-2.5 w-2.5" />
+            自律地図操作 {autoAgentMap ? "ON" : "OFF"}
+          </button>
         </div>
 
         {showKeyBox && (

@@ -19,7 +19,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
-from app.ai_assistant import _resolve_api_key, ask_quakelens_ai, stream_quakelens_ai
+from app.ai_assistant import (
+    _resolve_api_key,
+    ask_board_mention_agent,
+    ask_quakelens_ai,
+    stream_quakelens_ai,
+)
 from app.auth import (
     ROLE_LABELS,
     ROLE_PERMISSIONS,
@@ -1447,6 +1452,22 @@ class ChatTtsRequest(BaseModel):
     model: str | None = None
 
 
+class BoardChatRecentMessage(BaseModel):
+    senderName: str = "参加者"
+    senderRole: str = "citizen"
+    wardName: str = ""
+    text: str = ""
+
+
+class BoardChatAgentRequest(BaseModel):
+    channel: str = "public"
+    ward_name: str = "all"
+    tenant_uid: str = ""
+    trigger_message: str
+    recent_messages: list[BoardChatRecentMessage] = []
+    model: str | None = None
+
+
 @app.post("/api/chat/tts")
 def chat_tts(
     req: ChatTtsRequest,
@@ -1633,3 +1654,79 @@ def chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/api/board-chat/agent")
+def board_chat_agent(
+    req: BoardChatAgentRequest,
+    request: Request,
+    x_gemini_api_key: str | None = Header(default=None),
+    x_ai_access_code: str | None = Header(default=None),
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    s = _require_store()
+    if req.channel not in {"public", "enterprise_liaison", "government"}:
+        raise HTTPException(status_code=400, detail="不正なチャットチャンネルです。")
+    if req.channel == "government" and user.role != "government":
+        raise HTTPException(
+            status_code=403,
+            detail="政府専用チャットでのAIエージェント呼び出しは政府関連機関のみ可能です。",
+        )
+    if req.channel == "enterprise_liaison":
+        if user.role == "citizen":
+            raise HTTPException(
+                status_code=403,
+                detail="行政連携チャットでのAIエージェント呼び出しは企業・政府機関のみ可能です。",
+            )
+        if user.role == "enterprise" and req.tenant_uid != user.uid:
+            raise HTTPException(
+                status_code=403,
+                detail="他社の行政連携スレッドに対するAIエージェント操作は許可されていません。",
+            )
+
+    cleaned_trigger, _, _ = validate_chat_inputs(req.trigger_message, None, None)
+    ticket = ai_guard.authorize_and_acquire(
+        client_ip=extract_client_ip(request),
+        requested_model=req.model,
+        api_key_override=x_gemini_api_key,
+        access_code=x_ai_access_code,
+    )
+    try:
+        recent_payload = [
+            {
+                "senderName": m.senderName[:40],
+                "senderRole": m.senderRole[:20],
+                "wardName": m.wardName[:40],
+                "text": m.text[:300],
+            }
+            for m in req.recent_messages[-12:]
+        ]
+        return ask_board_mention_agent(
+            s,
+            trigger_message=cleaned_trigger,
+            channel=req.channel,
+            ward_name=req.ward_name,
+            tenant_uid=req.tenant_uid,
+            recent_messages=recent_payload,
+            caller_name=user.display_name or "ユーザー",
+            caller_role=user.role,
+            caller_uid=user.uid,
+            model=req.model,
+            api_key_override=x_gemini_api_key,
+            earthquakes_cache=_quake_cache.get("data"),
+            board_store=board_store,
+            reports_store=reports_store,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"掲示板AIエージェントの応答生成中にエラーが発生しました: {redact_secrets(str(exc))}",
+        ) from exc
+    finally:
+        ai_guard.release_slot(ticket)

@@ -1,9 +1,12 @@
 import {
+  AgentMapPin,
   AiProtectionStatus,
   AuthMeResponse,
   AuthPolicyResponse,
   BcpPurpose,
   BcpSiteResponse,
+  BoardChatAgentResponse,
+  BoardChatChannel,
   BoardEntry,
   BoardListResponse,
   BoardStatus,
@@ -927,3 +930,36 @@ export function assessEnterpriseAssets(
     body: JSON.stringify({ assets }),
   });
 }
+
+export function askBoardChatAgent(
+  body: {
+    channel: BoardChatChannel;
+    ward_name: string;
+    tenant_uid?: string;
+    trigger_message: string;
+    recent_messages: Array<{
+      senderName: string;
+      senderRole: string;
+      wardName: string;
+      text: string;
+    }>;
+    model?: string;
+  },
+  apiKeyOverride?: string,
+  accessCode?: string
+) {
+  const headers: Record<string, string> = {};
+  if (apiKeyOverride?.trim()) {
+    headers["X-Gemini-Api-Key"] = apiKeyOverride.trim();
+  }
+  if (accessCode?.trim()) {
+    headers["X-Ai-Access-Code"] = accessCode.trim();
+  }
+  return fetchJson<BoardChatAgentResponse>("/api/board-chat/agent", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
+export type { AgentMapPin };

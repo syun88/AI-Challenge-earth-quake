@@ -129,6 +129,7 @@ def recommend_safe_enterprise_sites(
             "r8_grade_counts": r8_summary["grade_counts"],
             "ward_ranking": [],
             "recommendations": [],
+            "avoid_high_risk_areas": [],
             "disclaimer": R8_SEISMIC_DISCLAIMER,
         }
 
@@ -172,25 +173,23 @@ def recommend_safe_enterprise_sites(
         })
     ward_ranking.sort(key=lambda x: x["safety_score"], reverse=True)
 
-    # 2) Filter & Score Individual 250m Mesh Candidates
-    df = meshes_df.copy()
+    # 2) Score Individual 250m Mesh Candidates (both safe sites & high-risk avoid zones)
+    df_all = meshes_df.copy()
     if ward and ward != "all":
-        df = df[df["ward_name"] == ward]
-    df = df[df["t30_i55_ps"].notna() & df["arv"].notna()]
-    if avoid_mountain:
-        non_mt = df[~df["jname"].isin(["山地", "山麓地"])]
-        if not non_mt.empty:
-            df = non_mt
-
-    min_b_filtered = df[df["total_buildings"] >= min_buildings]
-    if not min_b_filtered.empty:
-        df = min_b_filtered
+        df_all = df_all[df_all["ward_name"] == ward]
+    df_all = df_all[df_all["t30_i55_ps"].notna() & df_all["arv"].notna()]
+    min_b_all = df_all[df_all["total_buildings"] >= min_buildings]
+    if not min_b_all.empty:
+        df_all = min_b_all
 
     shelter_store.ensure_loaded()
     shelters = shelter_store.list_shelters(ward=None if ward == "all" else ward)
 
-    scored_rows: list[tuple[float, dict[str, Any]]] = []
-    for _, r in df.iterrows():
+    safe_scored_rows: list[tuple[float, dict[str, Any]]] = []
+    avoid_scored_rows: list[tuple[float, dict[str, Any]]] = []
+    has_non_mountain = not df_all[~df_all["jname"].isin(["山地", "山麓地"])].empty
+
+    for _, r in df_all.iterrows():
         t30_55 = _safe_float(r.get("t30_i55_ps"))
         arv = _safe_float(r.get("arv"))
         if t30_55 is None or arv is None:
@@ -219,8 +218,65 @@ def recommend_safe_enterprise_sites(
             r8_ward_safe_rate=r8_safe_rate,
             purpose=purpose,
         )
+        risk_score = round(max(0.0, 100.0 - score), 1)
+        h_tier = str(r.get("hazard_tier") or "unknown")
+        h_label = HAZARD_TIER_LABELS.get(h_tier, "不明")
 
-        # Build clear human-readable reasons & cautions
+        # High-risk avoidance reasons (applicable across ALL landforms including mountain/wetland)
+        avoid_reasons: list[str] = []
+        if t30_55 >= 0.25:
+            avoid_reasons.append(f"30年震度6弱以上確率が非常に高い（{t30_55 * 100:.1f}% / {h_label}）")
+        elif t30_55 >= 0.15:
+            avoid_reasons.append(f"30年震度6弱以上確率が高め（{t30_55 * 100:.1f}% / {h_label}）")
+        if arv >= 1.6:
+            avoid_reasons.append(
+                f"表層地盤増幅率が大きく揺れが増幅しやすい（ARV {arv:.2f}"
+                + (f" / AVS {avs:.0f}m/s）" if avs else "）")
+            )
+        if jname in SOFT_LIQUEFACTION_JNAMES:
+            avoid_reasons.append(f"液状化・軟弱地盤に注意すべき微地形「{jname}」")
+        elif jname in LANDSLIDE_PRONE_JNAMES:
+            avoid_reasons.append(f"急傾斜・土砂災害リスクに注意すべき微地形「{jname}」")
+        if wooden_pre81 >= 40 or pre81_share_tot >= 0.35:
+            avoid_reasons.append(
+                f"R8未掲載の木造旧耐震密集（{wooden_pre81}棟 / 旧耐震率 {pre81_share_tot * 100:.1f}%：延焼・道路閉塞リスク）"
+            )
+        if not avoid_reasons:
+            avoid_reasons.append(
+                f"複合安全性スコアが相対的に低い（安全性 {score:.1f}点 / ARV {arv:.2f} / 確率 {t30_55 * 100:.1f}%）"
+            )
+
+        base_item: dict[str, Any] = {
+            "meshcode": str(r["meshcode"]),
+            "ward_name": w_str,
+            "centroid_lat": round(float(r["centroid_lat"]), 6),
+            "centroid_lon": round(float(r["centroid_lon"]), 6),
+            "safety_score": score,
+            "risk_score": risk_score,
+            "t30_i55_ps": round(t30_55, 4),
+            "t30_i60_ps": round(t30_60, 4) if t30_60 is not None else None,
+            "hazard_tier": h_tier,
+            "hazard_label": h_label,
+            "arv": round(arv, 2),
+            "avs": round(avs, 1) if avs is not None else None,
+            "jname": jname,
+            "total_buildings": tot_b,
+            "pre_1981_count": pre81,
+            "wooden_pre_1981_count": wooden_pre81,
+            "unlisted_priority_count": pre81 + unk,
+            "pre_1981_share_known": round(pre81_share_known, 4) if pre81_share_known is not None else None,
+            "r8_ward_stats": {
+                **r8_w,
+                "safe_rate": round(r8_safe_rate, 3),
+                "sample_safe_facilities": r8_safe_examples.get(w_str, []),
+            },
+        }
+        avoid_scored_rows.append((risk_score, {**base_item, "avoid_reasons": avoid_reasons}))
+
+        if avoid_mountain and has_non_mountain and jname in {"山地", "山麓地"}:
+            continue
+
+        # Build clear human-readable reasons & cautions for safe recommendations
         reasons: list[str] = []
         cautions: list[str] = []
 
@@ -257,39 +313,24 @@ def recommend_safe_enterprise_sites(
                 f"{w_str}のR8市有防災拠点 耐震適合率 {r8_safe_rate * 100:.1f}%（{r8_w['safe']}/{r8_w['total']}棟が新耐震/Ⅲ）"
             )
 
-        scored_rows.append((
+        safe_scored_rows.append((
             score,
             {
-                "meshcode": str(r["meshcode"]),
-                "ward_name": w_str,
-                "centroid_lat": round(float(r["centroid_lat"]), 6),
-                "centroid_lon": round(float(r["centroid_lon"]), 6),
-                "safety_score": score,
-                "t30_i55_ps": round(t30_55, 4),
-                "t30_i60_ps": round(t30_60, 4) if t30_60 is not None else None,
-                "hazard_tier": str(r.get("hazard_tier") or "unknown"),
-                "hazard_label": HAZARD_TIER_LABELS.get(str(r.get("hazard_tier") or "unknown"), "不明"),
-                "arv": round(arv, 2),
-                "avs": round(avs, 1) if avs is not None else None,
-                "jname": jname,
-                "total_buildings": tot_b,
-                "pre_1981_count": pre81,
-                "wooden_pre_1981_count": wooden_pre81,
-                "unlisted_priority_count": pre81 + unk,
-                "pre_1981_share_known": round(pre81_share_known, 4) if pre81_share_known is not None else None,
-                "r8_ward_stats": {
-                    **r8_w,
-                    "safe_rate": round(r8_safe_rate, 3),
-                    "sample_safe_facilities": r8_safe_examples.get(w_str, []),
-                },
+                **base_item,
                 "reasons": reasons,
                 "cautions": cautions,
             },
         ))
 
-    scored_rows.sort(key=lambda x: x[0], reverse=True)
+    safe_scored_rows.sort(key=lambda x: x[0], reverse=True)
+    avoid_scored_rows.sort(key=lambda x: x[0], reverse=True)
+    avoid_items = [
+        {"risk_rank": idx, **item}
+        for idx, (_, item) in enumerate(avoid_scored_rows[: min(limit, 5)], start=1)
+    ]
+
     top_items: list[dict[str, Any]] = []
-    for idx, (_, item) in enumerate(scored_rows[:limit], start=1):
+    for idx, (_, item) in enumerate(safe_scored_rows[:limit], start=1):
         # Find nearest official shelter for BCP staff evacuation / emergency coordination
         nearest_sh: dict[str, Any] | None = None
         best_d = 999.0
@@ -335,6 +376,7 @@ def recommend_safe_enterprise_sites(
         "r8_grade_counts": r8_summary["grade_counts"],
         "ward_ranking": ward_ranking,
         "recommendations": top_items,
+        "avoid_high_risk_areas": avoid_items,
         "disclaimer": (
             "※本診断はJ-SHIS 250m地震ハザード・表層地盤、PLATEAU建物築年集計、および京都市『R8_list.pdf（市有建築物耐震性能リスト）』に基づく"
             "比較スクリーニングです。最終的な重要施設（サーバー室・金庫等）の建設時は、敷地ごとのボーリング地質調査・水害/土砂ハザードマップ確認を行ってください。"
