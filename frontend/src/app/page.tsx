@@ -290,6 +290,27 @@ export default function HomePage() {
   const [paintStatusText, setPaintStatusText] = useState<string | null>(null);
   const [paintErrorText, setPaintErrorText] = useState<string | null>(null);
   const [currentMapZoom, setCurrentMapZoom] = useState(12.6);
+  const summaryPillRef = useRef<HTMLDivElement | null>(null);
+  const [summaryPillHeight, setSummaryPillHeight] = useState(0);
+  const summaryPillVisible = activePanel === "none" && mapPickMode === "none";
+
+  useEffect(() => {
+    if (!summaryPillVisible) {
+      queueMicrotask(() => setSummaryPillHeight(0));
+      return;
+    }
+    const el = summaryPillRef.current;
+    if (!el) return;
+    const measure = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height);
+      setSummaryPillHeight((prev) => (prev !== h ? h : prev));
+    };
+    queueMicrotask(measure);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [summaryPillVisible, profile?.role]);
 
   // Auth Guard Redirect: never reveal map before Firebase Auth + Profile registration
   useEffect(() => {
@@ -2356,7 +2377,8 @@ export default function HomePage() {
         onSelectOfficialShelter={handleSelectOfficialShelterFromMap}
         onSelectSafetyWard={handleSelectSafetyWardFromMap}
         drawerOpen={activePanel !== "none"}
-        summaryPillVisible={activePanel === "none" && mapPickMode === "none"}
+        summaryPillVisible={summaryPillVisible}
+        summaryPillHeight={summaryPillHeight}
         seismicBeltsGeoJson={
           activePanel === "stats" && statsTab === "seismic_belts" ? seismicBeltsGeoJson : null
         }
@@ -2769,8 +2791,9 @@ export default function HomePage() {
       )}
 
       {/* Unobtrusive Bottom-Left Live Summary & Visual Key when Drawer Closed (Desktop) */}
-      {activePanel === "none" && mapPickMode === "none" && (
+      {summaryPillVisible && (
         <div
+          ref={summaryPillRef}
           data-testid="map-summary-pill"
           className="pointer-events-auto fixed bottom-4 left-3 z-20 hidden max-w-[min(560px,calc(100vw-440px))] flex-col gap-2 rounded-2xl border border-slate-700/80 bg-slate-900/90 px-4 py-3 text-xs text-slate-200 shadow-2xl backdrop-blur-xl xl:max-w-[600px] lg:flex"
         >

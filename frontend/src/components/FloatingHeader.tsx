@@ -6,6 +6,7 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  BookOpen,
   Compass,
   Database,
   Layers,
@@ -290,6 +291,17 @@ export function FloatingHeader({
             className="hidden rounded-xl px-2.5 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white 2xl:inline-flex"
           >
             伝言板ページ
+          </Link>
+
+          <Link
+            href="/guide"
+            data-testid="open-guide-link"
+            title="利用ガイド・権限比較・AI質問例"
+            aria-label="利用ガイド"
+            className="inline-flex items-center gap-1 rounded-xl px-2 py-1.5 text-xs text-amber-200 transition hover:bg-slate-800 hover:text-amber-100"
+          >
+            <BookOpen className="h-3.5 w-3.5 text-amber-400" />
+            <span className="hidden xl:inline">ガイド</span>
           </Link>
 
           <button

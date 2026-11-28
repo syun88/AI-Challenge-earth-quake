@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  BookOpen,
   Building2,
   CheckCircle2,
   Landmark,
@@ -176,13 +177,22 @@ export default function LoginPage() {
               </p>
             </div>
           </div>
-          <Link
-            href={`/register?role=${selectedRole}`}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-sky-500/40 bg-sky-500/15 px-4 py-2 text-xs font-semibold text-sky-200 transition hover:bg-sky-500/25"
-          >
-            <UserCheck className="h-4 w-4" />
-            新規アカウント登録
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href="/guide"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/40 bg-amber-500/15 px-3.5 py-2 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/25"
+            >
+              <BookOpen className="h-4 w-4" />
+              ご利用ガイド・ログイン方法
+            </Link>
+            <Link
+              href={`/register?role=${selectedRole}`}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-sky-500/40 bg-sky-500/15 px-4 py-2 text-xs font-semibold text-sky-200 transition hover:bg-sky-500/25"
+            >
+              <UserCheck className="h-4 w-4" />
+              新規登録（市民 / 企業 / 政府・メール / Google）
+            </Link>
+          </div>
         </div>
 
         {!firebaseReady && (
@@ -340,16 +350,57 @@ export default function LoginPage() {
               Googleアカウントでログイン（{ROLE_META[selectedRole].shortLabel}）
             </button>
 
-            <p className="mt-5 text-center text-xs text-slate-400">
-              初めてご利用の方は{" "}
-              <Link
-                href={`/register?role=${selectedRole}`}
-                className="font-semibold text-sky-400 underline underline-offset-4 hover:text-sky-300"
-              >
-                新規アカウント登録ページ
-              </Link>{" "}
-              から登録してください。
-            </p>
+            <div className="mt-5 rounded-xl border border-slate-800 bg-slate-950/70 p-3.5 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-slate-200">
+                  初めてご利用の方・別区分での新規登録
+                </span>
+                <span className="text-[11px] text-sky-300">
+                  メール登録／Google登録どちらも全区分対応
+                </span>
+              </div>
+              <div className="mt-2.5 grid gap-2 sm:grid-cols-3">
+                <Link
+                  href="/register?role=citizen"
+                  className="rounded-lg border border-sky-500/35 bg-sky-500/10 px-2.5 py-2 text-center text-[11px] font-semibold text-sky-200 transition hover:bg-sky-500/20"
+                >
+                  一般市民で新規登録
+                  <span className="mt-0.5 block text-[10px] font-normal text-sky-200/75">
+                    メール / Google・コード不要
+                  </span>
+                </Link>
+                <Link
+                  href="/register?role=enterprise"
+                  className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-2.5 py-2 text-center text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
+                >
+                  企業（BCP）で新規登録
+                  <span className="mt-0.5 block text-[10px] font-normal text-emerald-200/75">
+                    メール / Google・コード不要
+                  </span>
+                </Link>
+                <Link
+                  href="/register?role=government"
+                  className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-2.5 py-2 text-center text-[11px] font-semibold text-amber-200 transition hover:bg-amber-500/20"
+                >
+                  政府機関で新規登録
+                  <span className="mt-0.5 block text-[10px] font-normal text-amber-200/75">
+                    メール / Google・要認証コード
+                  </span>
+                </Link>
+              </div>
+              <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/80 pt-2.5 text-[11px] text-slate-400">
+                <span>
+                  初めての方・各区分の違いやログイン手順を確認したい方はこちら
+                </span>
+                <Link
+                  href="/guide"
+                  className="inline-flex items-center gap-1 font-semibold text-amber-300 underline underline-offset-4 hover:text-amber-200"
+                >
+                  <BookOpen className="h-3.5 w-3.5" />
+                  ご利用ガイドを見る
+                </Link>
+              </div>
+            </div>
           </div>
 
           {/* Right: Role Classification Matrix */}

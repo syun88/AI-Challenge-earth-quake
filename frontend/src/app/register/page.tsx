@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   ArrowLeft,
+  BookOpen,
   Building2,
   CheckCircle2,
   KeyRound,
@@ -77,8 +78,8 @@ function RegisterFormContent() {
     };
   }, []);
 
-  const validateRoleFields = (): string | null => {
-    if (!displayName.trim()) {
+  const validateRoleFields = (requireDisplayName: boolean): string | null => {
+    if (requireDisplayName && !displayName.trim()) {
       return "氏名（または担当者名）を入力してください。";
     }
     if ((role === "enterprise" || role === "government") && !organizationName.trim()) {
@@ -95,7 +96,7 @@ function RegisterFormContent() {
   const handleEmailRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    const roleErr = validateRoleFields();
+    const roleErr = validateRoleFields(true);
     if (roleErr) {
       setErrorMsg(roleErr);
       return;
@@ -135,7 +136,7 @@ function RegisterFormContent() {
   const handleGoogleRegister = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setErrorMsg(null);
-    const roleErr = validateRoleFields();
+    const roleErr = validateRoleFields(needsRegistration);
     if (roleErr) {
       setErrorMsg(roleErr);
       return;
@@ -174,19 +175,30 @@ function RegisterFormContent() {
               <UserPlus className="h-5 w-5 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-white">新規アカウント登録</h1>
+              <h1 className="text-xl font-bold text-white">
+                新規アカウント登録（市民 / 企業 / 政府機関）
+              </h1>
               <p className="text-xs text-slate-400">
-                登録区分に応じて防災情報・機密拠点管理・救助データの閲覧権限が自動で分離されます
+                全3区分とも「メールアドレス登録」「Googleアカウント登録」の両方に対応し、閲覧権限が自動分離されます
               </p>
             </div>
           </div>
-          <Link
-            href="/login"
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            ログイン画面へ戻る
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href="/guide"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/40 bg-amber-500/15 px-3.5 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-500/25"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              ご利用ガイド・ログイン方法
+            </Link>
+            <Link
+              href="/login"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              ログイン画面へ戻る
+            </Link>
+          </div>
         </div>
 
         {!firebaseReady && (
@@ -281,7 +293,10 @@ function RegisterFormContent() {
           >
             <div>
               <label className="mb-1.5 block text-xs font-semibold text-slate-300">
-                氏名 / 担当者名 <span className="text-rose-400">*</span>
+                氏名 / 担当者名{" "}
+                <span className="text-[11px] font-normal text-slate-400">
+                  （メール登録は必須 / Google登録時は省略可）
+                </span>
               </label>
               <input
                 type="text"
@@ -349,8 +364,26 @@ function RegisterFormContent() {
                 <p className="mt-1.5 text-[11px] text-amber-100/80">
                   政府機関アカウントは一般市民・企業の個人通報詳細を閲覧するため、サーバー側の機関認証コード照合が必須です。
                   {govCodeConfigured === false &&
-                    "（※現在サーバー側の GOV_REGISTRATION_CODE が未設定のため政府機関登録は無効です）"}
+                    "（※現在、サーバー側に機関認証コードが未設定のため政府機関登録は無効です）"}
                 </p>
+                <div className="mt-2.5 rounded-lg border border-amber-400/25 bg-slate-950/80 p-2.5 text-[11px] leading-relaxed text-slate-300">
+                  <div className="font-bold text-amber-200">
+                    アカウント登録に関するご案内
+                  </div>
+                  <p className="mt-1">
+                    <strong>一般市民・企業アカウントは認証コード不要</strong>ですぐに登録できます。
+                    政府関連機関アカウントのみ不正閲覧を防ぐため機関認証コードが必要です（審査・試用でお使いの場合は、配布のご利用ガイドPDFに記載された専用認証コードをご入力ください）。
+                  </p>
+                  <div className="mt-1.5">
+                    <Link
+                      href="/guide"
+                      className="inline-flex items-center gap-1 font-semibold text-amber-300 underline underline-offset-4 hover:text-amber-200"
+                    >
+                      <BookOpen className="h-3 w-3" />
+                      ログイン・登録方法と権限ガイドを見る
+                    </Link>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -442,7 +475,7 @@ function RegisterFormContent() {
                   onClick={() => void handleGoogleRegister()}
                   className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-xs font-semibold text-slate-100 hover:bg-slate-800 disabled:opacity-50"
                 >
-                  Googleアカウントを使用して {ROLE_META[role].label} 登録
+                  Googleアカウントを使用して {ROLE_META[role].label} として登録
                 </button>
               </div>
             )}

@@ -59,6 +59,17 @@ function mapFirebaseAuthError(err: unknown): string {
       return "Googleログイン画面が閉じられました。";
     case "auth/popup-blocked":
       return "ブラウザによりポップアップがブロックされました。ポップアップを許可してください。";
+    case "auth/unauthorized-domain": {
+      const currentHost =
+        typeof window !== "undefined" ? window.location.hostname : "";
+      return currentHost
+        ? `現在のアクセス元ドメイン（${currentHost}）が Firebase Authentication の「承認済みドメイン」に許可されていません。http://localhost:3000 または承認済みドメインでアクセスしてください。`
+        : "現在のアクセス元ドメインが Firebase Authentication の「承認済みドメイン」に許可されていません。";
+    }
+    case "auth/operation-not-allowed":
+      return "この認証方式は Firebase Console 側で有効化されていません。";
+    case "auth/account-exists-with-different-credential":
+      return "同じメールアドレスで別の認証方式（メール/パスワード等）が既に登録されています。";
     case "auth/network-request-failed":
       return "ネットワークエラーが発生しました。接続状態を確認してください。";
     default:
@@ -442,6 +453,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       actionLockRef.current = true;
       setAuthError(null);
+      const hadUserBefore = Boolean(auth.currentUser);
       try {
         let user = auth.currentUser;
         if (!user) {
@@ -450,21 +462,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         const token = await user.getIdToken(true);
         setSyncAuthToken(token);
-        const registered = await registerAuthProfile(
-          {
-            role: params.role,
-            display_name:
-              params.displayName.trim() || user.displayName || user.email || "登録ユーザー",
-            organization_name: params.organizationName?.trim() || "",
-            department: params.department?.trim() || "",
-            gov_code: params.govCode?.trim() || "",
-          },
-          token
-        );
-        await syncUserDocAndToken(user, registered.user, registered.claims_synced);
-        setFirebaseUser(user);
-        setProfile(registered.user);
-        return registered.user;
+        try {
+          const registered = await registerAuthProfile(
+            {
+              role: params.role,
+              display_name:
+                params.displayName.trim() || user.displayName || user.email || "登録ユーザー",
+              organization_name: params.organizationName?.trim() || "",
+              department: params.department?.trim() || "",
+              gov_code: params.govCode?.trim() || "",
+            },
+            token
+          );
+          await syncUserDocAndToken(user, registered.user, registered.claims_synced);
+          setFirebaseUser(user);
+          setProfile(registered.user);
+          return registered.user;
+        } catch (err) {
+          const errText = err instanceof Error ? err.message : "";
+          if (!hadUserBefore && errText.includes("既に")) {
+            await signOut(auth).catch(() => {});
+            setFirebaseUser(null);
+            setProfile(null);
+          }
+          throw err;
+        }
       } catch (err) {
         throw new Error(mapFirebaseAuthError(err));
       } finally {

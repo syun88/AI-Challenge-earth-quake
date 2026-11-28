@@ -160,6 +160,7 @@ interface QuakeMapProps {
   onZoomChange?: (zoom: number, totalInView: number | null) => void;
   drawerOpen?: boolean;
   summaryPillVisible?: boolean;
+  summaryPillHeight?: number;
   seismicBeltsGeoJson?: GeoJSON.FeatureCollection | null;
   activeSeismicBeltId?: string | null;
 }
@@ -237,6 +238,7 @@ export function QuakeMap({
   onZoomChange,
   drawerOpen = false,
   summaryPillVisible = false,
+  summaryPillHeight = 0,
   seismicBeltsGeoJson = null,
   activeSeismicBeltId = null,
 }: QuakeMapProps) {
@@ -2808,18 +2810,24 @@ export function QuakeMap({
         </button>
       )}
 
-      {/* Subtle Hover Tooltip OR Zoom Prompt at bottom (avoids drawer, summary pill & mobile dock) */}
+      {/* Subtle Hover Tooltip OR Zoom Prompt at bottom (avoids drawer, measured summary pill & mobile dock) */}
       <div
-        className={`pointer-events-none absolute bottom-[72px] left-3 right-20 z-10 flex flex-wrap items-center gap-2 ${
-          drawerOpen
-            ? "lg:bottom-4 lg:left-[444px]"
-            : summaryPillVisible
-              ? "lg:bottom-[128px] lg:left-3"
-              : "lg:bottom-4 lg:left-3"
+        data-testid="map-hover-hud"
+        style={
+          {
+            "--hover-bottom-desktop": `${
+              !drawerOpen && summaryPillVisible
+                ? Math.max(200, (summaryPillHeight > 0 ? summaryPillHeight : 184) + 28)
+                : 16
+            }px`,
+          } as React.CSSProperties
+        }
+        className={`pointer-events-none absolute bottom-[72px] left-3 right-20 z-30 flex flex-wrap items-center gap-2 lg:bottom-[var(--hover-bottom-desktop)] ${
+          drawerOpen ? "lg:left-[444px]" : "lg:left-3"
         }`}
       >
         {hoverInfo && (
-          <div className="rounded-lg border border-slate-700/90 bg-slate-950/90 px-3 py-1.5 text-xs text-slate-100 shadow-lg backdrop-blur">
+          <div className="rounded-xl border border-sky-500/45 bg-slate-950/95 px-3 py-1.5 text-xs font-medium text-slate-100 shadow-2xl backdrop-blur-md">
             {hoverInfo}
           </div>
         )}
