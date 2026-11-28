@@ -100,8 +100,8 @@ export default function UserGuidePage() {
   const { firebaseUser, profile } = useAuth();
 
   return (
-    <div className="h-full overflow-y-auto bg-slate-950 text-slate-100">
-      <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+    <div className="h-[100dvh] overflow-x-hidden overflow-y-auto bg-slate-950 pb-[env(safe-area-inset-bottom,0px)] text-slate-100">
+      <div className="mx-auto max-w-5xl px-3.5 py-6 sm:px-6 sm:py-8 lg:px-8">
         {/* Header */}
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">

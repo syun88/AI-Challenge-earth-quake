@@ -12,6 +12,7 @@ import {
   Map as MapIcon,
   MapPin,
   MessageSquareHeart,
+  PanelLeftOpen,
   ShieldAlert,
   Tent,
   X,
@@ -164,9 +165,28 @@ export default function HomePage() {
 
   // Workspace Shell & Visual Presets
   const [activePanel, setActivePanel] = useState<WorkspacePanel>("none");
+  const [minimizedForPanel, setMinimizedForPanel] = useState<WorkspacePanel | null>(null);
   const [displayOpen, setDisplayOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [visualPreset, setVisualPreset] = useState<VisualPreset>("crisis");
+
+  const mobileDrawerMinimized = activePanel !== "none" && minimizedForPanel === activePanel;
+
+  const collapseDrawerOnMobile = useCallback((panel: WorkspacePanel) => {
+    if (typeof window !== "undefined" && window.innerWidth < 1024 && panel !== "none") {
+      setMinimizedForPanel(panel);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth >= 1024) {
+        setMinimizedForPanel(null);
+      }
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // Map Layers & Filters
   const [selectedWard, setSelectedWard] = useState<string>("all");
@@ -2219,11 +2239,34 @@ export default function HomePage() {
   const wards = metadata?.wards ?? Object.keys(WARD_CENTERS).filter((k) => k !== "all");
   const blockedCount = networkStatus?.blocked_count ?? 0;
 
+  const hasSelectionOrRoute = Boolean(
+    selectedBuilding ||
+      selectedMesh ||
+      selectedReport ||
+      selectedBlockedRoad ||
+      selectedShelterHub ||
+      selectedOfficialShelter ||
+      selectedR8Facility ||
+      selectedR8Unlisted ||
+      searchPin ||
+      reverseAddress ||
+      routeResult
+  );
+  const mobileDrawerHidden =
+    mobileDrawerMinimized || mapPickMode !== "none" || roadPaintTool !== "none";
+  const mobileDrawerCoveringMap = activePanel !== "none" && !mobileDrawerHidden;
+  const showMobileQuickBar =
+    !mobileDrawerCoveringMap &&
+    !hasSelectionOrRoute &&
+    !displayOpen &&
+    mapPickMode === "none" &&
+    roadPaintTool === "none";
+
   if (authLoading || !isAuthenticated || !profile) {
     return (
-      <div className="flex h-[100dvh] w-screen items-center justify-center bg-slate-950 text-slate-200">
-        <div className="flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/90 px-6 py-4 shadow-xl">
-          <Loader2 className="h-5 w-5 animate-spin text-sky-400" />
+      <div className="flex h-[100dvh] w-full items-center justify-center bg-slate-950 px-4 text-slate-200">
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/90 px-5 py-4 shadow-xl">
+          <Loader2 className="h-5 w-5 shrink-0 animate-spin text-sky-400" />
           <span className="text-sm font-medium">
             認証確認中...（未ログインの場合はログイン画面へ移動します）
           </span>
@@ -2233,7 +2276,7 @@ export default function HomePage() {
   }
 
   return (
-    <div className="relative h-[100dvh] w-screen overflow-hidden bg-slate-950">
+    <div className="relative h-[100dvh] w-full overflow-hidden bg-slate-950">
       {/* Full-Viewport Interactive Kyoto Map Canvas */}
       <QuakeMap
         meshesGeoJson={meshesGeoJson}
@@ -2377,6 +2420,7 @@ export default function HomePage() {
         onSelectOfficialShelter={handleSelectOfficialShelterFromMap}
         onSelectSafetyWard={handleSelectSafetyWardFromMap}
         drawerOpen={activePanel !== "none"}
+        mobileOverlayOpen={mobileDrawerCoveringMap || hasSelectionOrRoute || displayOpen}
         summaryPillVisible={summaryPillVisible}
         summaryPillHeight={summaryPillHeight}
         seismicBeltsGeoJson={
@@ -2388,8 +2432,10 @@ export default function HomePage() {
       {/* Top Floating Nav & Mobile Bottom Dock */}
       <FloatingHeader
         activePanel={activePanel}
+        mobileDrawerMinimized={mobileDrawerMinimized}
         onTogglePanel={(p) => {
           setActivePanel(p);
+          setMinimizedForPanel(null);
           setDisplayOpen(false);
         }}
         wards={wards}
@@ -2417,7 +2463,7 @@ export default function HomePage() {
       <LocationSearchBar
         activeSearchPlace={searchPin}
         candidateCount={searchCandidates.length}
-        drawerOpen={activePanel !== "none"}
+        drawerOpen={mobileDrawerCoveringMap}
         hidden={roadPaintTool !== "none" || mapPickMode !== "none"}
         onSelectResult={(item, all) => void handleSelectSearchResult(item, all)}
         onClearSearch={handleClearSearch}
@@ -2483,14 +2529,16 @@ export default function HomePage() {
         onResetFilters={handleResetFilters}
       />
 
-      {/* Clean Left Slide-Over Action Drawer */}
+      {/* Clean Left Slide-Over Action Drawer (auto-hides on mobile while picking/painting or minimized so the map stays interactive) */}
       {activePanel !== "none" && (
         <aside
           data-testid="workspace-drawer"
-          className="fixed inset-x-2 bottom-[62px] top-[66px] z-20 flex flex-col overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-900/95 shadow-2xl backdrop-blur-xl lg:inset-x-auto lg:bottom-4 lg:left-3 lg:top-[68px] lg:w-[420px]"
+          className={`fixed inset-x-2 bottom-[calc(var(--mobile-dock-h)+4px)] top-[calc(3.75rem+env(safe-area-inset-top,0px))] z-20 flex-col overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-900/95 shadow-2xl backdrop-blur-xl sm:inset-x-3 lg:inset-x-auto lg:bottom-4 lg:left-3 lg:top-[68px] lg:flex lg:w-[min(420px,calc(100vw-460px))] xl:w-[420px] ${
+            mobileDrawerHidden ? "hidden" : "flex"
+          }`}
         >
-          <div className="flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950/70 px-4 py-2.5">
-            <span className="text-xs font-bold text-slate-200">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-800 bg-slate-950/70 px-3 py-2 sm:px-4 sm:py-2.5">
+            <span className="truncate text-xs font-bold text-slate-200">
               {activePanel === "report"
                 ? "被害状況の報告・確認"
                 : activePanel === "safety"
@@ -2520,11 +2568,15 @@ export default function HomePage() {
             <button
               type="button"
               data-testid="close-drawer-btn"
-              onClick={() => setActivePanel("none")}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-slate-300 hover:bg-slate-800 hover:text-white"
+              onClick={() => {
+                setMinimizedForPanel(null);
+                setActivePanel("none");
+              }}
+              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-slate-800 hover:text-white sm:py-1"
             >
               <X className="h-3.5 w-3.5" />
-              地図を広く見る
+              <span className="sm:hidden">地図</span>
+              <span className="hidden sm:inline">地図を広く見る</span>
             </button>
           </div>
 
@@ -2548,15 +2600,24 @@ export default function HomePage() {
                 }}
                 onCancelPickLocation={() => setMapPickMode("none")}
                 onClearPickedLocation={() => setPickedReportTarget(null)}
-                onFocusReport={handleFocusReport}
+                onFocusReport={(rep) => {
+                  handleFocusReport(rep);
+                  collapseDrawerOnMobile(activePanel);
+                }}
                 onReportCreated={handleReportCreated}
                 onDispatchRescue={
                   profile.role === "government"
-                    ? (rep) => void handleDispatchRescueToReport(rep)
+                    ? (rep) => {
+                        collapseDrawerOnMobile(activePanel);
+                        void handleDispatchRescueToReport(rep);
+                      }
                     : undefined
                 }
                 onReportsChanged={() => void handleRoadClosuresChanged()}
-                onOpenRouteSimulator={() => setActivePanel("nav")}
+                onOpenRouteSimulator={() => {
+                  setMinimizedForPanel(null);
+                  setActivePanel("nav");
+                }}
                 startInCreateMode={reportCreateTrigger > 0}
               />
             )}
@@ -2570,10 +2631,16 @@ export default function HomePage() {
                 defaultMeshcode={selectedMeshcode}
                 includeSamples={includeSamples}
                 onToggleIncludeSamples={setIncludeSamples}
-                onFocusArea={handleFocusBoardArea}
+                onFocusArea={(ward, mesh) => {
+                  handleFocusBoardArea(ward, mesh);
+                  collapseDrawerOnMobile(activePanel);
+                }}
                 onSelectWardFilter={handleSelectWard}
                 onDataMutated={triggerDisasterRefresh}
-                onExecuteMapActions={(acts) => void handleExecuteMapActionsBatch(acts)}
+                onExecuteMapActions={(acts) => {
+                  if (acts.length > 0) collapseDrawerOnMobile(activePanel);
+                  void handleExecuteMapActionsBatch(acts);
+                }}
               />
             )}
 
@@ -2629,7 +2696,10 @@ export default function HomePage() {
                     });
                   }}
                   onRefresh={() => void runShelterRecommendation()}
-                  onSelectRecommendation={handleSelectRecommendedShelter}
+                  onSelectRecommendation={(item) => {
+                    handleSelectRecommendedShelter(item);
+                    collapseDrawerOnMobile(activePanel);
+                  }}
                 />
               </div>
             )}
@@ -2670,13 +2740,20 @@ export default function HomePage() {
                   if (res) {
                     clearSelections();
                     if (params) setLastNavParams(params);
+                    collapseDrawerOnMobile(activePanel);
                   } else {
                     setLastNavParams(null);
                   }
                   setRouteResult(res);
                 }}
-                onSelectShelterHub={handleSelectShelterHub}
-                onFocusReport={handleFocusReport}
+                onSelectShelterHub={(hub) => {
+                  handleSelectShelterHub(hub);
+                  collapseDrawerOnMobile(activePanel);
+                }}
+                onFocusReport={(rep) => {
+                  handleFocusReport(rep);
+                  collapseDrawerOnMobile(activePanel);
+                }}
                 onRoadClosuresChanged={handleRoadClosuresChanged}
               />
             )}
@@ -2698,6 +2775,7 @@ export default function HomePage() {
                       zoom: 16.5,
                       ts: Date.now(),
                     });
+                    collapseDrawerOnMobile(activePanel);
                   }}
                 />
               </div>
@@ -2745,17 +2823,41 @@ export default function HomePage() {
                 hazardTiers={hazardTiers}
                 onToggleAgeCategory={handleToggleAgeCategory}
                 onToggleHazardTier={handleToggleHazardTier}
-                onSelectPriorityArea={handleSelectPriorityArea}
-                onSelectR8Record={handleSelectR8Record}
-                onSelectR8Unlisted={handleSelectR8Unlisted}
+                onSelectPriorityArea={(area) => {
+                  handleSelectPriorityArea(area);
+                  collapseDrawerOnMobile(activePanel);
+                }}
+                onSelectR8Record={(rec) => {
+                  handleSelectR8Record(rec);
+                  collapseDrawerOnMobile(activePanel);
+                }}
+                onSelectR8Unlisted={(item) => {
+                  handleSelectR8Unlisted(item);
+                  collapseDrawerOnMobile(activePanel);
+                }}
                 statsTab={statsTab}
                 onChangeStatsTab={setStatsTab}
-                onSelectBcpSite={(site) => void handleSelectBcpSite(site)}
-                onSelectHeritageMesh={(m) => void handleSelectHeritageMesh(m)}
-                onSelectHeritageBuilding={(b) => void handleSelectHeritageBuilding(b)}
+                onSelectBcpSite={(site) => {
+                  collapseDrawerOnMobile(activePanel);
+                  void handleSelectBcpSite(site);
+                }}
+                onSelectHeritageMesh={(m) => {
+                  collapseDrawerOnMobile(activePanel);
+                  void handleSelectHeritageMesh(m);
+                }}
+                onSelectHeritageBuilding={(b) => {
+                  collapseDrawerOnMobile(activePanel);
+                  void handleSelectHeritageBuilding(b);
+                }}
                 onSeismicBeltsLoaded={handleSeismicBeltsLoaded}
-                onSelectSeismicBelt={handleSelectSeismicBelt}
-                onSelectMultiBeltHotspot={(h) => void handleSelectMultiBeltHotspot(h)}
+                onSelectSeismicBelt={(belt) => {
+                  handleSelectSeismicBelt(belt);
+                  collapseDrawerOnMobile(activePanel);
+                }}
+                onSelectMultiBeltHotspot={(h) => {
+                  collapseDrawerOnMobile(activePanel);
+                  void handleSelectMultiBeltHotspot(h);
+                }}
                 onSelectEnterpriseAsset={(asset) => {
                   setFlyToTarget({
                     lon: asset.lon,
@@ -2763,10 +2865,17 @@ export default function HomePage() {
                     zoom: 16.5,
                     ts: Date.now(),
                   });
+                  collapseDrawerOnMobile(activePanel);
                 }}
                 onSelectWardFilter={handleSelectWard}
-                onOpenSafety={() => setActivePanel("safety")}
-                onOpenReports={() => setActivePanel("report")}
+                onOpenSafety={() => {
+                  setMinimizedForPanel(null);
+                  setActivePanel("safety");
+                }}
+                onOpenReports={() => {
+                  setMinimizedForPanel(null);
+                  setActivePanel("report");
+                }}
               />
             )}
 
@@ -2783,11 +2892,99 @@ export default function HomePage() {
                   setUpdatesPeriod(nextPeriod);
                 }}
                 onRefreshLive={() => void handleRefreshUpdatesLive()}
-                onFocusEarthquake={handleFocusArchiveEarthquake}
+                onFocusEarthquake={(eq) => {
+                  handleFocusArchiveEarthquake(eq);
+                  collapseDrawerOnMobile(activePanel);
+                }}
               />
             )}
           </div>
         </aside>
+      )}
+
+      {/* Mobile Restore-Drawer Pill when a drawer was minimized to view the map */}
+      {activePanel !== "none" &&
+        mobileDrawerMinimized &&
+        mapPickMode === "none" &&
+        roadPaintTool === "none" &&
+        !displayOpen && (
+          <button
+            type="button"
+            data-testid="mobile-restore-drawer-btn"
+            onClick={() => setMinimizedForPanel(null)}
+            className="pointer-events-auto fixed left-2 top-[calc(7.35rem+env(safe-area-inset-top,0px))] z-[26] inline-flex items-center gap-1.5 rounded-full border border-sky-400/70 bg-slate-900/95 px-3 py-1.5 text-xs font-bold text-sky-100 shadow-2xl backdrop-blur-xl active:scale-95 sm:left-3 lg:hidden"
+          >
+            <PanelLeftOpen className="h-3.5 w-3.5 text-sky-400" />
+            <span>パネルに戻る</span>
+          </button>
+        )}
+
+      {/* Compact Mobile Quick-Action & Live Summary Strip (< lg, when clean map view) */}
+      {showMobileQuickBar && (
+        <div
+          data-testid="mobile-quick-bar"
+          className="no-scrollbar pointer-events-auto fixed inset-x-2 bottom-[calc(var(--mobile-dock-h)+6px)] z-[21] flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-slate-700/80 bg-slate-900/92 px-2 py-1.5 text-[11px] text-slate-200 shadow-2xl backdrop-blur-xl lg:hidden"
+        >
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-950/80 px-2 py-1 font-mono text-[10px] text-slate-300">
+            <span className="text-rose-300">止{blockedCount}</span>
+            <span className="text-slate-600">/</span>
+            <span className="text-amber-300">報{reportSummary?.total_reports ?? reports.length}</span>
+            <span className="text-slate-600">/</span>
+            <span className="text-sky-300">安{boardSummary?.total_entries ?? 0}</span>
+          </span>
+          <button
+            type="button"
+            onClick={handleAutoSelectNow}
+            className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-gradient-to-r from-rose-500 to-amber-500 px-2.5 py-1.5 font-bold text-white shadow-sm active:brightness-110"
+          >
+            <ShieldAlert className="h-3.5 w-3.5" />
+            緊急自動避難
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setReportCreateTrigger((n) => n + 1);
+              setMinimizedForPanel(null);
+              setActivePanel("report");
+            }}
+            className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-rose-500 px-2.5 py-1.5 font-bold text-white active:bg-rose-400"
+          >
+            ＋被害報告
+          </button>
+          <button
+            type="button"
+            onClick={() => openRoadPaintMode("click")}
+            className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-cyan-500/50 bg-cyan-500/20 px-2.5 py-1.5 font-bold text-cyan-100"
+          >
+            <Ban className="h-3 w-3 text-rose-300" />
+            道路閉鎖
+          </button>
+          {profile.role === "enterprise" && (
+            <button
+              type="button"
+              onClick={() => {
+                setStatsTab("bcp");
+                setMinimizedForPanel(null);
+                setActivePanel("stats");
+              }}
+              className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-emerald-500/50 bg-emerald-500/20 px-2.5 py-1.5 font-bold text-emerald-100"
+            >
+              <Building2 className="h-3 w-3 text-emerald-300" />
+              BCP適地
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setMinimizedForPanel(null);
+              setActivePanel("nav");
+            }}
+            className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-emerald-500 px-2.5 py-1.5 font-bold text-slate-950"
+          >
+            <Compass className="h-3.5 w-3.5" />
+            {profile.role === "government" ? "救援ナビ" : "避難ナビ"}
+          </button>
+        </div>
       )}
 
       {/* Unobtrusive Bottom-Left Live Summary & Visual Key when Drawer Closed (Desktop) */}
@@ -2795,7 +2992,7 @@ export default function HomePage() {
         <div
           ref={summaryPillRef}
           data-testid="map-summary-pill"
-          className="pointer-events-auto fixed bottom-4 left-3 z-20 hidden max-w-[min(560px,calc(100vw-440px))] flex-col gap-2 rounded-2xl border border-slate-700/80 bg-slate-900/90 px-4 py-3 text-xs text-slate-200 shadow-2xl backdrop-blur-xl xl:max-w-[600px] lg:flex"
+          className="pointer-events-auto fixed bottom-4 left-3 z-20 hidden max-w-[min(560px,calc(100vw-240px))] flex-col gap-2 rounded-2xl border border-slate-700/80 bg-slate-900/90 px-4 py-3 text-xs text-slate-200 shadow-2xl backdrop-blur-xl lg:flex xl:max-w-[600px]"
         >
           <div className="flex flex-wrap items-center gap-3">
             <span className="flex items-center gap-1.5 font-bold text-white">
@@ -2938,6 +3135,7 @@ export default function HomePage() {
       {/* Selected Building / Report / Blocked Road / Shelter Hub / Search Place / Active Route HUD */}
       <SelectedFeatureCard
         userRole={profile.role}
+        hiddenOnMobile={mobileDrawerCoveringMap || displayOpen}
         selectedBuilding={selectedBuilding}
         selectedMesh={selectedMesh}
         selectedReport={selectedReport}
@@ -3041,20 +3239,18 @@ export default function HomePage() {
       {activePanel !== "ai" && (
         <DraggableMochimamoBot
           displayOpen={displayOpen}
-          hasBottomRightCard={Boolean(
-            selectedBuilding ||
-              selectedMesh ||
-              selectedReport ||
-              selectedBlockedRoad ||
-              selectedShelterHub ||
-              selectedOfficialShelter ||
-              selectedR8Facility ||
-              selectedR8Unlisted ||
-              searchPin ||
-              reverseAddress ||
-              routeResult
-          )}
-          onOpenAiChat={() => setActivePanel("ai")}
+          hiddenOnMobile={
+            mobileDrawerCoveringMap ||
+            hasSelectionOrRoute ||
+            displayOpen ||
+            mapPickMode !== "none" ||
+            roadPaintTool !== "none"
+          }
+          hasBottomRightCard={hasSelectionOrRoute}
+          onOpenAiChat={() => {
+            setMinimizedForPanel(null);
+            setActivePanel("ai");
+          }}
         />
       )}
 

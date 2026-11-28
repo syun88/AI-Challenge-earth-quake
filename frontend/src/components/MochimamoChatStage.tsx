@@ -193,9 +193,9 @@ export function MochimamoChatStage({
       />
 
       {stageMode === "compact" ? (
-        <div className="flex items-stretch gap-2.5 p-2">
-          {/* Live2D Canvas Stage (~1/5 viewport height) */}
-          <div className="relative h-[152px] w-[148px] shrink-0 overflow-hidden rounded-lg border border-slate-800/80 bg-slate-950/65 sm:h-[168px] sm:w-[162px]">
+        <div className="flex items-stretch gap-2 p-2 sm:gap-2.5">
+          {/* Live2D Canvas Stage (~1/5 viewport height, compact on narrow phones) */}
+          <div className="relative h-[112px] w-[108px] shrink-0 overflow-hidden rounded-lg border border-slate-800/80 bg-slate-950/65 sm:h-[156px] sm:w-[152px]">
             <MochimamoLive2D
               mood={effectiveMood}
               speechPulseKey={muted ? 0 : speechPulseKey}
@@ -257,7 +257,7 @@ export function MochimamoChatStage({
             </div>
 
             {/* Quick Voice Mute + Live2D Mood Controls */}
-            <div className="flex items-center justify-between gap-1">
+            <div className="flex flex-wrap items-center justify-between gap-1">
               <button
                 type="button"
                 data-testid="mochimamo-mute-btn"
@@ -275,7 +275,7 @@ export function MochimamoChatStage({
                 )}
                 <span>{muted ? "ミュート" : audioPlaying ? "喋り中" : "音声ON"}</span>
               </button>
-              <div className="flex items-center gap-0.5">
+              <div className="flex flex-wrap items-center gap-0.5">
                 {MANUAL_MOODS.map((opt) => (
                   <button
                     key={opt.id}

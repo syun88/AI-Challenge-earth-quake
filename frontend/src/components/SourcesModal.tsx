@@ -22,8 +22,8 @@ export function SourcesModal({ open, onClose, metadata }: SourcesModalProps) {
   const backmarshPct = hs?.backmarsh_mean != null ? (hs.backmarsh_mean * 100).toFixed(1) : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-5 text-slate-100 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2.5 backdrop-blur-sm sm:p-4">
+      <div className="max-h-[88dvh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-4 text-slate-100 shadow-2xl sm:p-5">
         <div className="mb-4 flex items-center justify-between border-b border-slate-800 pb-3">
           <div className="flex items-center gap-2">
             <Database className="h-5 w-5 text-sky-400" />

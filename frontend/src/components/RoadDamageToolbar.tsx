@@ -86,15 +86,15 @@ export function RoadDamageToolbar({
   return (
     <div
       data-testid="road-paint-toolbar"
-      className={`pointer-events-auto fixed top-[66px] z-30 flex flex-col gap-2 rounded-2xl border border-cyan-500/50 bg-slate-950/95 p-2.5 text-xs text-slate-100 shadow-2xl backdrop-blur-xl ${
+      className={`pointer-events-auto fixed top-[calc(3.75rem+env(safe-area-inset-top,0px))] z-30 flex max-h-[42dvh] flex-col gap-2 overflow-y-auto rounded-2xl border border-cyan-500/50 bg-slate-950/95 p-2 text-xs text-slate-100 shadow-2xl backdrop-blur-xl sm:top-[66px] sm:p-2.5 ${
         drawerOpen
           ? "inset-x-2 lg:inset-x-auto lg:left-[444px] lg:right-[160px] lg:max-w-3xl"
-          : "left-1/2 w-[min(780px,calc(100vw-20px))] -translate-x-1/2"
+          : "inset-x-2 sm:inset-x-auto sm:left-1/2 sm:w-[min(780px,calc(100vw-24px))] sm:-translate-x-1/2"
       }`}
     >
       {/* Row 1: 3 Tool Modes + Cause + Undo + Done */}
       <div className="flex flex-wrap items-center gap-1.5">
-        <div className="grid flex-1 min-w-[280px] sm:min-w-[340px] grid-cols-3 gap-1 rounded-xl border border-slate-800 bg-slate-900/90 p-1">
+        <div className="grid w-full grid-cols-3 gap-1 rounded-xl border border-slate-800 bg-slate-900/90 p-1 sm:w-auto sm:min-w-[320px] sm:flex-1">
           <button
             type="button"
             data-testid="paint-mode-click"
@@ -132,7 +132,8 @@ export function RoadDamageToolbar({
             }`}
           >
             <Brush className="h-3.5 w-3.5 shrink-0" />
-            <span>Canvasでなぞる</span>
+            <span className="sm:hidden">なぞる</span>
+            <span className="hidden sm:inline">Canvasでなぞる</span>
           </button>
         </div>
 
@@ -140,7 +141,7 @@ export function RoadDamageToolbar({
           aria-label="道路被害の原因"
           value={causeIdx}
           onChange={(e) => onChangeCauseIdx(Number(e.target.value))}
-          className="h-8 rounded-lg border border-slate-700 bg-slate-900 px-2 text-[11px] text-slate-100 outline-none focus:border-cyan-400"
+          className="h-8 min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2 text-[11px] text-slate-100 outline-none focus:border-cyan-400 sm:flex-initial"
         >
           {ROAD_CAUSE_PRESETS.map((p, idx) => (
             <option key={p.label} value={idx}>

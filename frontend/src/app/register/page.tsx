@@ -167,8 +167,8 @@ function RegisterFormContent() {
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-slate-950 text-slate-100">
-      <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+    <div className="h-[100dvh] overflow-x-hidden overflow-y-auto bg-slate-950 pb-[env(safe-area-inset-bottom,0px)] text-slate-100">
+      <div className="mx-auto max-w-3xl px-3.5 py-6 sm:px-6 sm:py-8">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-sky-600">
@@ -207,7 +207,7 @@ function RegisterFormContent() {
           </div>
         )}
 
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-6 shadow-xl">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 shadow-xl sm:p-6">
           {/* Step 1: Role Picker */}
           <div className="mb-6">
             <label className="mb-2 block text-xs font-bold text-slate-300">
@@ -306,7 +306,7 @@ function RegisterFormContent() {
                 placeholder={
                   role === "citizen" ? "例: 京都 太郎" : "例: 防災対策 担当者"
                 }
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-base sm:text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
               />
             </div>
 
@@ -327,7 +327,7 @@ function RegisterFormContent() {
                         ? "例: 株式会社○○データセンター"
                         : "例: 京都市防災危機管理室"
                     }
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-base sm:text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
                   />
                 </div>
                 <div>
@@ -341,7 +341,7 @@ function RegisterFormContent() {
                     placeholder={
                       role === "enterprise" ? "例: インフラ・BCP推進部" : "例: 災害対策本部"
                     }
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-base sm:text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
                   />
                 </div>
               </div>
@@ -359,7 +359,7 @@ function RegisterFormContent() {
                   value={govCode}
                   onChange={(e) => setGovCode(e.target.value)}
                   placeholder="管理者から発行された機関認証コードを入力"
-                  className="w-full rounded-xl border border-amber-500/40 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:border-amber-400 focus:outline-none"
+                  className="w-full rounded-xl border border-amber-500/40 bg-slate-950 px-3.5 py-2.5 text-base sm:text-sm text-white placeholder-slate-500 focus:border-amber-400 focus:outline-none"
                 />
                 <p className="mt-1.5 text-[11px] text-amber-100/80">
                   政府機関アカウントは一般市民・企業の個人通報詳細を閲覧するため、サーバー側の機関認証コード照合が必須です。
@@ -399,7 +399,7 @@ function RegisterFormContent() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="name@example.com"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-base sm:text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
                   />
                 </div>
 
@@ -415,7 +415,7 @@ function RegisterFormContent() {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="6文字以上"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-base sm:text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
                     />
                   </div>
                   <div>
@@ -429,7 +429,7 @@ function RegisterFormContent() {
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       placeholder="もう一度入力"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-base sm:text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
                     />
                   </div>
                 </div>

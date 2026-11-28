@@ -452,91 +452,92 @@ export function DisasterBoard({
     <div className={outerClass}>
       {/* Standalone Header when rendered at /board or modal */}
       {!embedded && (
-        <header className="relative flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950/90 px-4 py-3">
+        <header className="relative flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-950/90 px-3 py-2.5 sm:flex-nowrap sm:px-4 sm:py-3">
           {onBack ? (
             <button
               type="button"
               onClick={onBack}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-slate-100 hover:border-slate-500"
+              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-slate-100 hover:border-slate-500"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
-              統合防災マップへ
+              <span className="sm:hidden">マップへ</span>
+              <span className="hidden sm:inline">統合防災マップへ</span>
             </button>
           ) : (
             <span />
           )}
-          <div className="text-center">
-            <h2 className="text-sm font-bold text-white">災害用伝言板（安否確認）</h2>
-            <p className="text-[10px] text-slate-400">京都市エリア連携・SQLite永続化</p>
+          <div className="min-w-0 text-center">
+            <h2 className="truncate text-sm font-bold text-white">災害用伝言板（安否確認）</h2>
+            <p className="truncate text-[10px] text-slate-400">京都市エリア連携・SQLite永続化</p>
           </div>
-          <div className="w-20 text-right font-mono text-[10px] text-sky-300">
+          <div className="shrink-0 text-right font-mono text-[10px] text-sky-300 sm:w-20">
             {summary ? `${summary.total_entries}件` : ""}
           </div>
         </header>
       )}
 
       {/* Sub-navigation tabs */}
-      <div className="grid shrink-0 grid-cols-5 gap-1 border-b border-slate-800 bg-slate-950/60 p-1.5 text-[10.5px]">
+      <div className="grid shrink-0 grid-cols-5 gap-1 border-b border-slate-800 bg-slate-950/60 p-1.5 text-[9.5px] sm:text-[10.5px]">
         <button
           type="button"
           onClick={() => handleSwitchView("check")}
-          className={`flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
+          className={`flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg px-0.5 py-1.5 font-semibold transition sm:flex-row sm:gap-1 ${
             view === "check"
               ? "bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/50"
               : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"
           }`}
         >
-          <Search className="h-3 w-3 shrink-0" />
-          確認・集計
+          <Search className="h-3.5 w-3.5 shrink-0 sm:h-3 sm:w-3" />
+          <span className="truncate">確認</span>
         </button>
         <button
           type="button"
           data-testid="board-tab-chat"
           onClick={() => handleSwitchView("chat")}
-          className={`flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
+          className={`flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg px-0.5 py-1.5 font-semibold transition sm:flex-row sm:gap-1 ${
             view === "chat"
               ? "bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/50"
               : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"
           }`}
         >
-          <ChatTabIcon className="h-3 w-3 shrink-0" />
-          チャット
+          <ChatTabIcon className="h-3.5 w-3.5 shrink-0 sm:h-3 sm:w-3" />
+          <span className="truncate">チャット</span>
         </button>
         <button
           type="button"
           onClick={() => handleSwitchView("register")}
-          className={`flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
+          className={`flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg px-0.5 py-1.5 font-semibold transition sm:flex-row sm:gap-1 ${
             view === "register"
               ? "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/50"
               : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"
           }`}
         >
-          <ClipboardEdit className="h-3 w-3 shrink-0" />
-          安否登録
+          <ClipboardEdit className="h-3.5 w-3.5 shrink-0 sm:h-3 sm:w-3" />
+          <span className="truncate">安否登録</span>
         </button>
         <button
           type="button"
           onClick={() => handleSwitchView("history")}
-          className={`flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
+          className={`flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg px-0.5 py-1.5 font-semibold transition sm:flex-row sm:gap-1 ${
             view === "history"
               ? "bg-indigo-500/20 text-indigo-200 ring-1 ring-indigo-500/50"
               : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"
           }`}
         >
-          <Pencil className="h-3 w-3 shrink-0" />
-          管理({historyItems.length})
+          <Pencil className="h-3.5 w-3.5 shrink-0 sm:h-3 sm:w-3" />
+          <span className="truncate">管理({historyItems.length})</span>
         </button>
         <button
           type="button"
           onClick={() => handleSwitchView("web")}
-          className={`flex items-center justify-center gap-1 rounded-lg py-1.5 font-semibold transition ${
+          className={`flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg px-0.5 py-1.5 font-semibold transition sm:flex-row sm:gap-1 ${
             view === "web"
               ? "bg-amber-500/20 text-amber-200 ring-1 ring-amber-500/50"
               : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"
           }`}
         >
-          <Phone className="h-3 w-3 shrink-0" />
-          web171
+          <Phone className="h-3.5 w-3.5 shrink-0 sm:h-3 sm:w-3" />
+          <span className="truncate">web171</span>
         </button>
       </div>
 

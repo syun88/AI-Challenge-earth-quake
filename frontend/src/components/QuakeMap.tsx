@@ -159,6 +159,7 @@ interface QuakeMapProps {
   onSelectSafetyWard: (wardName: string) => void;
   onZoomChange?: (zoom: number, totalInView: number | null) => void;
   drawerOpen?: boolean;
+  mobileOverlayOpen?: boolean;
   summaryPillVisible?: boolean;
   summaryPillHeight?: number;
   seismicBeltsGeoJson?: GeoJSON.FeatureCollection | null;
@@ -237,6 +238,7 @@ export function QuakeMap({
   onSelectSafetyWard,
   onZoomChange,
   drawerOpen = false,
+  mobileOverlayOpen = false,
   summaryPillVisible = false,
   summaryPillHeight = 0,
   seismicBeltsGeoJson = null,
@@ -2814,14 +2816,14 @@ export function QuakeMap({
 
       {/* Centered Clean Prompt Banner ONLY when user actively picks on map */}
       {pickPrompt && (
-        <div className="pointer-events-none absolute inset-x-0 top-20 z-30 flex justify-center px-3">
-          <div className="pointer-events-auto flex items-center gap-3 rounded-full border-2 border-amber-400 bg-slate-950/95 px-4 py-2 text-xs sm:text-sm font-bold text-amber-100 shadow-2xl">
+        <div className="pointer-events-none absolute inset-x-0 top-[calc(3.75rem+env(safe-area-inset-top,0px))] z-30 flex justify-center px-2.5 sm:top-20 sm:px-3">
+          <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-2 rounded-2xl border-2 border-amber-400 bg-slate-950/95 px-3 py-2 text-center text-xs font-bold text-amber-100 shadow-2xl sm:gap-3 sm:rounded-full sm:px-4 sm:text-sm">
             <MapPin className="h-4 w-4 animate-bounce text-amber-400 shrink-0" />
             <span>{pickPrompt}</span>
             <button
               type="button"
               onClick={onCancelPickMode}
-              className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2.5 py-0.5 text-xs text-slate-200 hover:bg-slate-700"
+              className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700"
             >
               <X className="h-3.5 w-3.5" /> 中止
             </button>
@@ -2841,7 +2843,9 @@ export function QuakeMap({
           }}
           title="視点モード切替（自動3D: ホイール拡大や右/中ボタンドラッグで自動立体表示 ⇄ 3D固定 ⇄ 2D固定）"
           aria-label="3D表示モード切替"
-          className={`pointer-events-auto fixed bottom-[204px] right-2.5 z-20 flex flex-col items-center justify-center rounded-xl border px-1.5 py-1.5 text-[10px] font-extrabold shadow-xl backdrop-blur-md transition lg:bottom-[144px] ${
+          className={`pointer-events-auto fixed bottom-[calc(var(--mobile-dock-h)+188px)] right-2.5 z-[15] flex-col items-center justify-center rounded-xl border px-1.5 py-1.5 text-[10px] font-extrabold shadow-xl backdrop-blur-md transition lg:bottom-[144px] lg:z-20 lg:flex ${
+            mobileOverlayOpen ? "hidden" : "flex"
+          } ${
             map3DMode === "3d" || pitch >= PITCH_3D_THRESHOLD
               ? "border-sky-400/80 bg-sky-500/25 text-sky-100 hover:bg-sky-500/35"
               : map3DMode === "auto"
@@ -2873,9 +2877,9 @@ export function QuakeMap({
             }px`,
           } as React.CSSProperties
         }
-        className={`pointer-events-none absolute bottom-[72px] left-3 right-20 z-30 flex flex-wrap items-center gap-2 lg:bottom-[var(--hover-bottom-desktop)] ${
-          drawerOpen ? "lg:left-[444px]" : "lg:left-3"
-        }`}
+        className={`pointer-events-none absolute bottom-[calc(var(--mobile-dock-h)+54px)] left-2 right-16 z-[15] flex-wrap items-center gap-2 lg:bottom-[var(--hover-bottom-desktop)] lg:z-30 lg:flex ${
+          mobileOverlayOpen ? "hidden" : "flex"
+        } ${drawerOpen ? "lg:left-[444px]" : "lg:left-3"}`}
       >
         {hoverInfo && (
           <div className="rounded-xl border border-sky-500/45 bg-slate-950/95 px-3 py-1.5 text-xs font-medium text-slate-100 shadow-2xl backdrop-blur-md">

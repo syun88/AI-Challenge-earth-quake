@@ -351,10 +351,10 @@ export function LocationSearchBar({
     <div
       ref={containerRef}
       data-testid="location-search-container"
-      className={`pointer-events-auto fixed top-[66px] z-[25] transition-all duration-200 ${
+      className={`pointer-events-auto fixed top-[calc(3.75rem+env(safe-area-inset-top,0px))] z-[25] transition-all duration-200 sm:top-[66px] ${
         drawerOpen
-          ? "hidden lg:block lg:left-[444px] lg:w-[min(360px,calc(100vw-608px))]"
-          : "left-3 w-[min(404px,calc(100vw-24px))]"
+          ? "hidden lg:block lg:left-[min(444px,calc(100vw-460px))] lg:w-[min(360px,calc(100vw-608px))] xl:left-[444px]"
+          : "inset-x-2 w-auto sm:left-3 sm:right-auto sm:w-[min(404px,calc(100vw-24px))]"
       }`}
     >
       {/* Floating Google-Maps-Style Search Pill */}
@@ -406,7 +406,7 @@ export function LocationSearchBar({
             composingRef.current = false;
           }}
           onKeyDown={handleKeyDown}
-          className="min-w-0 flex-1 bg-transparent py-1 text-xs sm:text-sm text-white placeholder-slate-400 outline-none"
+          className="min-w-0 flex-1 bg-transparent py-1 text-base sm:text-sm text-white placeholder-slate-400 outline-none"
         />
 
         {activeSearchPlace && candidateCount > 1 && !open && (
@@ -540,7 +540,7 @@ export function LocationSearchBar({
       {showSearchResults && (
         <div
           data-testid="location-search-dropdown"
-          className="mt-1.5 max-h-[min(60vh,440px)] overflow-y-auto rounded-2xl border border-slate-700/85 bg-slate-900/95 p-1.5 text-xs text-slate-200 shadow-2xl backdrop-blur-xl"
+          className="mt-1.5 max-h-[min(52dvh,420px)] overflow-y-auto rounded-2xl border border-slate-700/85 bg-slate-900/95 p-1.5 text-xs text-slate-200 shadow-2xl backdrop-blur-xl"
         >
           {notice && (
             <div className="mx-1 mb-1 rounded-lg border border-amber-500/40 bg-amber-950/40 px-2.5 py-1.5 text-[10px] text-amber-200">

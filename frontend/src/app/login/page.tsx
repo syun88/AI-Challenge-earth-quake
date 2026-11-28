@@ -161,8 +161,8 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-slate-950 text-slate-100">
-      <div className="mx-auto flex min-h-full max-w-5xl flex-col justify-center px-4 py-8 sm:px-6 lg:px-8">
+    <div className="h-[100dvh] overflow-x-hidden overflow-y-auto bg-slate-950 pb-[env(safe-area-inset-bottom,0px)] text-slate-100">
+      <div className="mx-auto flex min-h-full max-w-5xl flex-col justify-center px-3.5 py-6 sm:px-6 sm:py-8 lg:px-8">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 shadow-lg shadow-sky-900/30">
@@ -235,14 +235,14 @@ export default function LoginPage() {
           </div>
         )}
 
-        <div className="grid gap-6 lg:grid-cols-12">
+        <div className="grid gap-5 sm:gap-6 lg:grid-cols-12">
           {/* Left: Login Form */}
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-6 shadow-xl lg:col-span-7">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 shadow-xl sm:p-6 lg:col-span-7">
             <div className="mb-4">
               <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                 1. ログイン区分を選択
               </span>
-              <div className="mt-2 grid grid-cols-3 gap-2">
+              <div className="mt-2 grid grid-cols-3 gap-1.5 sm:gap-2">
                 {ROLE_CARDS.map((role) => {
                   const Icon = role.icon;
                   const active = selectedRole === role.id;
@@ -254,14 +254,14 @@ export default function LoginPage() {
                         setSelectedRole(role.id);
                         setErrorMsg(null);
                       }}
-                      className={`flex flex-col items-center gap-1.5 rounded-xl border px-3 py-3 text-center transition ${
+                      className={`flex flex-col items-center gap-1 rounded-xl border px-1.5 py-2.5 text-center transition sm:gap-1.5 sm:px-3 sm:py-3 ${
                         active
                           ? `${role.accentBorder} ${role.accentBg} text-white shadow-sm`
                           : "border-slate-800 bg-slate-950/60 text-slate-400 hover:border-slate-700 hover:text-slate-200"
                       }`}
                     >
                       <Icon className="h-5 w-5" />
-                      <span className="text-xs font-bold">{role.title}</span>
+                      <span className="text-[11px] font-bold leading-tight sm:text-xs">{role.title}</span>
                     </button>
                   );
                 })}
@@ -279,7 +279,7 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="name@example.com"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-base text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none sm:text-sm"
                 />
               </div>
 
@@ -293,7 +293,7 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-base text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none sm:text-sm"
                 />
               </div>
 

@@ -38,6 +38,7 @@ import {
 
 interface SelectedFeatureCardProps {
   userRole: UserRole;
+  hiddenOnMobile?: boolean;
   selectedBuilding: BuildingDetail | null;
   selectedMesh: MeshDetail | null;
   selectedReport: DamageReport | null;
@@ -73,6 +74,7 @@ interface SelectedFeatureCardProps {
 
 export function SelectedFeatureCard({
   userRole,
+  hiddenOnMobile = false,
   selectedBuilding,
   selectedMesh,
   selectedReport,
@@ -135,7 +137,11 @@ export function SelectedFeatureCard({
   if (!hasSelection && !routeResult) return null;
 
   return (
-    <div className="pointer-events-none fixed bottom-16 right-3 z-20 flex max-h-[calc(100dvh-280px)] w-[min(360px,calc(100vw-24px))] flex-col gap-2 overflow-y-auto pr-0.5 lg:bottom-4 lg:right-16 lg:max-h-[calc(100dvh-256px)]">
+    <div
+      className={`pointer-events-none fixed inset-x-2 bottom-[calc(var(--mobile-dock-h)+8px)] z-[24] max-h-[50dvh] flex-col gap-2 overflow-y-auto pr-0.5 sm:left-auto sm:right-3 sm:w-[min(360px,calc(100vw-24px))] lg:inset-x-auto lg:bottom-4 lg:right-16 lg:z-20 lg:flex lg:max-h-[calc(100dvh-160px)] lg:w-[min(360px,calc(100vw-480px))] xl:w-[360px] ${
+        hiddenOnMobile ? "hidden" : "flex"
+      }`}
+    >
       {/* Compact Active Route HUD */}
       {routeResult && (
         <div

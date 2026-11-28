@@ -1549,7 +1549,7 @@ export function AiAssistantPanel({
           maxLength={maxMessageChars}
           onChange={(e) => setInput(e.target.value)}
           placeholder="京都市の建物・避難場所・災害状況を質問..."
-          className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+          className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-base sm:text-xs text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
         />
         {sending ? (
           <button

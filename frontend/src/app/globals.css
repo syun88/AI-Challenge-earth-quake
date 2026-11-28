@@ -4,6 +4,9 @@
 :root {
   --background: #020617;
   --foreground: #f1f5f9;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --mobile-dock-h: calc(64px + env(safe-area-inset-bottom, 0px));
 }
 
 @theme inline {
@@ -11,6 +14,12 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-sans-jp), system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-mono), ui-monospace, monospace;
+}
+
+html,
+body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Custom subtle scrollbars for dense dashboard panels */
@@ -32,6 +41,19 @@
   background: rgba(100, 116, 139, 0.9);
 }
 
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.maplibregl-popup {
+  max-width: min(320px, calc(100vw - 24px)) !important;
+}
+
 .maplibregl-popup-content {
   background: #0f172a !important;
   color: #f8fafc !important;
@@ -39,6 +61,8 @@
   border-radius: 0.75rem !important;
   padding: 0.75rem !important;
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6) !important;
+  max-width: min(320px, calc(100vw - 24px)) !important;
+  overflow-wrap: anywhere;
 }
 
 .maplibregl-popup-tip {
@@ -58,6 +82,15 @@
 
 @media (max-width: 1023px) {
   .maplibregl-ctrl-bottom-right {
-    margin-bottom: 60px !important;
+    margin-bottom: calc(var(--mobile-dock-h) + 50px) !important;
+  }
+
+  .maplibregl-ctrl-bottom-left {
+    margin-bottom: calc(var(--mobile-dock-h) + 50px) !important;
+  }
+
+  .maplibregl-ctrl-group button {
+    width: 34px !important;
+    height: 34px !important;
   }
 }

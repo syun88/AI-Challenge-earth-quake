@@ -929,7 +929,7 @@ export function BoardChatPanel({
                     : "政府・行政機関へ秘匿連携メッセージを送信..."
                   : "認証済み政府・自治体関係者へ指令連絡を送信..."
             }
-            className="flex-1 resize-none rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-sky-500"
+            className="flex-1 resize-none rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-base sm:text-xs text-white placeholder-slate-500 outline-none focus:border-sky-500"
           />
           <button
             type="submit"

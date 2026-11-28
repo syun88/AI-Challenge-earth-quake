@@ -35,6 +35,7 @@ export type WorkspacePanel =
 
 interface FloatingHeaderProps {
   activePanel: WorkspacePanel;
+  mobileDrawerMinimized?: boolean;
   onTogglePanel: (panel: WorkspacePanel) => void;
   wards: string[];
   selectedWard: string;
@@ -59,6 +60,7 @@ interface FloatingHeaderProps {
 
 export function FloatingHeader({
   activePanel,
+  mobileDrawerMinimized = false,
   onTogglePanel,
   wards,
   selectedWard,
@@ -81,6 +83,12 @@ export function FloatingHeader({
   onLogout,
 }: FloatingHeaderProps) {
   const toggle = (panel: WorkspacePanel) => {
+    // On mobile, if the active panel is currently minimized to show the map,
+    // tapping the same dock tab restores the drawer instead of closing it.
+    if (activePanel === panel && mobileDrawerMinimized) {
+      onTogglePanel(panel);
+      return;
+    }
     onTogglePanel(activePanel === panel ? "none" : panel);
   };
   const roleMeta = ROLE_META[userRole];
@@ -100,16 +108,17 @@ export function FloatingHeader({
   return (
     <>
       {/* Top Floating Bar */}
-      <header className="pointer-events-none fixed inset-x-2 top-2.5 z-30 flex items-center justify-between gap-1.5 sm:inset-x-3 sm:top-3 sm:gap-2">
+      <header className="pointer-events-none fixed inset-x-2 top-[calc(0.5rem+env(safe-area-inset-top,0px))] z-30 flex items-center justify-between gap-1.5 sm:inset-x-3 sm:top-3 sm:gap-2">
         {/* Left: Brand + Ward Filter */}
-        <div className="pointer-events-auto flex shrink-0 items-center gap-1.5 rounded-2xl border border-slate-700/80 bg-slate-900/90 px-2.5 py-1 shadow-xl backdrop-blur-xl sm:gap-2 sm:px-3 sm:py-1.5">
+        <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1 rounded-2xl border border-slate-700/80 bg-slate-900/92 px-2 py-1 shadow-xl backdrop-blur-xl sm:flex-initial sm:shrink-0 sm:gap-2 sm:px-3 sm:py-1.5">
           <Link
             href="/"
             onClick={(e) => {
               e.preventDefault();
               onTogglePanel("none");
             }}
-            className="flex items-center gap-2"
+            className="flex shrink-0 items-center gap-2"
+            aria-label="QuakeLens ホーム（地図を表示）"
           >
             <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-gradient-to-br from-rose-500 to-amber-500 text-white shadow-sm">
               <ShieldAlert className="h-4 w-4" />
@@ -122,14 +131,14 @@ export function FloatingHeader({
             </div>
           </Link>
 
-          <div className="h-5 w-px bg-slate-800" />
+          <div className="h-5 w-px shrink-0 bg-slate-800" />
 
           <select
             aria-label="対象地域（行政区）"
             data-testid="ward-select"
             value={selectedWard}
             onChange={(e) => onSelectWard(e.target.value)}
-            className="max-w-[132px] rounded-xl border border-slate-700/80 bg-slate-950/90 px-2 py-1.5 text-xs font-semibold text-white outline-none transition hover:border-slate-500 xl:max-w-none xl:px-2.5"
+            className="min-w-0 flex-1 truncate rounded-xl border border-slate-700/80 bg-slate-950/90 px-1.5 py-1.5 text-xs font-semibold text-white outline-none transition hover:border-slate-500 sm:flex-initial sm:max-w-[144px] sm:px-2 xl:max-w-none xl:px-2.5"
           >
             <option value="all">京都市 全域 (11区)</option>
             {wards.map((w) => (
@@ -151,7 +160,7 @@ export function FloatingHeader({
                   : "現在選択中の地域を初期表示として保存"
               }
               aria-label="お気に入り地域を保存"
-              className={`flex items-center gap-1 rounded-xl border px-2 py-1.5 text-[11px] font-semibold transition disabled:opacity-50 ${
+              className={`flex shrink-0 items-center justify-center gap-1 rounded-xl border px-2 py-1.5 text-[11px] font-semibold transition disabled:opacity-50 ${
                 favoriteWard === selectedWard
                   ? "border-amber-400/60 bg-amber-500/20 text-amber-200"
                   : "border-slate-700/80 bg-slate-950/80 text-slate-300 hover:border-slate-500 hover:text-white"
@@ -254,7 +263,7 @@ export function FloatingHeader({
         </nav>
 
         {/* Right: Role Badge + Display Settings + Standalone Board + Sources + Logout */}
-        <div className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-2xl border border-slate-700/80 bg-slate-900/90 p-1 shadow-xl backdrop-blur-xl sm:gap-1.5">
+        <div className="pointer-events-auto flex shrink-0 items-center gap-0.5 rounded-2xl border border-slate-700/80 bg-slate-900/92 p-1 shadow-xl backdrop-blur-xl sm:gap-1.5">
           <div
             data-testid="active-role-badge"
             title={
@@ -262,7 +271,7 @@ export function FloatingHeader({
                 ? `${roleMeta.label}: ${organizationName} (${userDisplayName})`
                 : `${roleMeta.label}: ${userDisplayName}`
             }
-            className={`hidden items-center gap-1 rounded-xl border px-2 py-1 text-[11px] font-bold sm:inline-flex ${roleMeta.badgeClass}`}
+            className={`hidden items-center gap-1 rounded-xl border px-2 py-1 text-[11px] font-bold md:inline-flex ${roleMeta.badgeClass}`}
           >
             <span>{roleMeta.shortLabel}</span>
             <span className="max-w-[56px] truncate text-[10px] font-normal opacity-90 2xl:max-w-[96px]">
@@ -276,7 +285,7 @@ export function FloatingHeader({
             onClick={onToggleDisplay}
             title="表示設定"
             aria-label="表示設定"
-            className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-semibold transition ${
+            className={`inline-flex h-8 w-8 items-center justify-center gap-1.5 rounded-xl border text-xs font-semibold transition sm:h-auto sm:w-auto sm:px-2.5 sm:py-1.5 ${
               displayOpen
                 ? "border-sky-400 bg-sky-500/20 text-white"
                 : "border-transparent text-slate-200 hover:bg-slate-800"
@@ -298,7 +307,7 @@ export function FloatingHeader({
             data-testid="open-guide-link"
             title="利用ガイド・権限比較・AI質問例"
             aria-label="利用ガイド"
-            className="inline-flex items-center gap-1 rounded-xl px-2 py-1.5 text-xs text-amber-200 transition hover:bg-slate-800 hover:text-amber-100"
+            className="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-xl text-xs text-amber-200 transition hover:bg-slate-800 hover:text-amber-100 sm:h-auto sm:w-auto sm:px-2 sm:py-1.5"
           >
             <BookOpen className="h-3.5 w-3.5 text-amber-400" />
             <span className="hidden xl:inline">ガイド</span>
@@ -310,7 +319,7 @@ export function FloatingHeader({
             onClick={onOpenSources}
             title="出典・データライセンス"
             aria-label="出典・データライセンス"
-            className="inline-flex items-center gap-1 rounded-xl px-2 py-1.5 text-xs text-slate-300 transition hover:bg-slate-800 hover:text-white"
+            className="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-xl text-xs text-slate-300 transition hover:bg-slate-800 hover:text-white sm:h-auto sm:w-auto sm:px-2 sm:py-1.5"
           >
             <Database className="h-3.5 w-3.5 text-slate-400" />
             <span className="hidden 2xl:inline">出典</span>
@@ -322,7 +331,7 @@ export function FloatingHeader({
             onClick={onLogout}
             title="ログアウト"
             aria-label="ログアウト"
-            className="inline-flex items-center gap-1 rounded-xl border border-slate-700/80 bg-slate-950/70 px-2 py-1.5 text-xs font-medium text-slate-300 transition hover:border-rose-500/50 hover:text-rose-200 xl:px-2.5"
+            className="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-xl border border-slate-700/80 bg-slate-950/70 text-xs font-medium text-slate-300 transition hover:border-rose-500/50 hover:text-rose-200 sm:h-auto sm:w-auto sm:px-2 sm:py-1.5 xl:px-2.5"
           >
             <LogOut className="h-3.5 w-3.5" />
             <span className="hidden xl:inline">ログアウト</span>
@@ -330,73 +339,76 @@ export function FloatingHeader({
         </div>
       </header>
 
-      {/* Mobile Bottom Dock (< lg) */}
+      {/* Mobile & Tablet Touch-Friendly Scrollable Bottom Dock (< lg) */}
       <nav
         aria-label="モバイルナビゲーション"
-        className={`fixed inset-x-0 bottom-0 z-30 grid ${
-          userRole === "enterprise" ? "grid-cols-9" : "grid-cols-8"
-        } border-t border-slate-800 bg-slate-950/95 px-1 py-1.5 backdrop-blur-xl lg:hidden`}
+        className="no-scrollbar fixed inset-x-0 bottom-0 z-30 flex items-stretch gap-1 overflow-x-auto border-t border-slate-800/90 bg-slate-950/95 px-1.5 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom,0px))] shadow-[0_-8px_24px_rgba(0,0,0,0.45)] backdrop-blur-xl md:justify-center lg:hidden"
       >
         <MobileDockBtn
-          active={activePanel === "none"}
+          active={activePanel === "none" || mobileDrawerMinimized}
           onClick={() => onTogglePanel("none")}
           icon={<MapIcon className="h-4 w-4" />}
           label="地図"
         />
         <MobileDockBtn
           testId="mobile-tab-report"
-          active={activePanel === "report"}
+          active={activePanel === "report" && !mobileDrawerMinimized}
           onClick={() => toggle("report")}
           icon={<AlertTriangle className="h-4 w-4 text-rose-400" />}
           label="被害報告"
+          badge={reportCount > 0 ? String(reportCount) : undefined}
         />
         <MobileDockBtn
           testId="mobile-tab-safety"
-          active={activePanel === "safety"}
+          active={activePanel === "safety" && !mobileDrawerMinimized}
           onClick={() => toggle("safety")}
           icon={<MessageSquareHeart className="h-4 w-4 text-sky-400" />}
           label="安否確認"
+          badge={boardCount > 0 ? String(boardCount) : undefined}
         />
         <MobileDockBtn
           testId="mobile-tab-shelter"
-          active={activePanel === "shelter"}
+          active={activePanel === "shelter" && !mobileDrawerMinimized}
           onClick={() => toggle("shelter")}
           icon={<ShieldCheck className="h-4 w-4 text-teal-400" />}
           label="避難推薦"
         />
         <MobileDockBtn
           testId="mobile-tab-nav"
-          active={activePanel === "nav"}
+          active={activePanel === "nav" && !mobileDrawerMinimized}
           onClick={() => toggle("nav")}
           icon={<Compass className="h-4 w-4 text-emerald-400" />}
           label="ナビ"
+          badge={hasActiveRoute ? "中" : blockedRoadCount > 0 ? String(blockedRoadCount) : undefined}
         />
         {userRole === "enterprise" && (
           <MobileDockBtn
             testId="mobile-tab-assets"
-            active={activePanel === "assets"}
+            active={activePanel === "assets" && !mobileDrawerMinimized}
             onClick={() => toggle("assets")}
             icon={<Server className="h-4 w-4 text-emerald-300" />}
             label="拠点"
+            badge={enterpriseAssetCount > 0 ? String(enterpriseAssetCount) : undefined}
           />
         )}
         <MobileDockBtn
           testId="mobile-tab-ai"
-          active={activePanel === "ai"}
+          active={activePanel === "ai" && !mobileDrawerMinimized}
           onClick={() => toggle("ai")}
           icon={<Sparkles className="h-4 w-4 text-amber-300" />}
           label="AI分析"
+          dotColor={geminiConfigured ? "bg-emerald-400" : "bg-amber-400"}
         />
         <MobileDockBtn
           testId="mobile-tab-stats"
-          active={activePanel === "stats"}
+          active={activePanel === "stats" && !mobileDrawerMinimized}
           onClick={() => toggle("stats")}
           icon={<BarChart3 className="h-4 w-4 text-indigo-300" />}
           label="統計"
         />
         <MobileDockBtn
           testId="mobile-tab-updates"
-          active={activePanel === "updates"}
+          active={activePanel === "updates" && !mobileDrawerMinimized}
           onClick={() => toggle("updates")}
           icon={<Activity className="h-4 w-4 text-cyan-300" />}
           label="防災更新"
@@ -454,24 +466,40 @@ function MobileDockBtn({
   onClick,
   icon,
   label,
+  badge,
+  dotColor,
 }: {
   testId?: string;
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  badge?: string;
+  dotColor?: string;
 }) {
   return (
     <button
       type="button"
       data-testid={testId}
       onClick={onClick}
-      className={`flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl px-0.5 py-1 text-[9px] font-semibold transition ${
-        active ? "bg-slate-800 text-white" : "text-slate-400 hover:text-slate-200"
+      className={`relative flex min-h-[46px] min-w-[60px] shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl px-1.5 py-1 text-[10px] font-semibold transition sm:min-w-[68px] md:flex-1 ${
+        active
+          ? "bg-slate-800/95 text-white ring-1 ring-slate-600/80"
+          : "text-slate-400 active:bg-slate-800/70 hover:text-slate-200"
       }`}
     >
-      {icon}
-      <span className="max-w-full truncate">{label}</span>
+      <span className="relative inline-flex items-center justify-center">
+        {icon}
+        {dotColor && (
+          <span className={`absolute -right-1.5 -top-0.5 h-1.5 w-1.5 rounded-full ${dotColor}`} />
+        )}
+        {badge && (
+          <span className="absolute -right-3 -top-1.5 rounded-full bg-slate-900 px-1 py-0 font-mono text-[8.5px] font-bold leading-tight text-sky-200 ring-1 ring-slate-700">
+            {badge}
+          </span>
+        )}
+      </span>
+      <span className="max-w-full whitespace-nowrap leading-tight">{label}</span>
     </button>
   );
 }

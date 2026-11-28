@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Noto_Sans_JP, JetBrains_Mono } from "next/font/google";
 import { AuthProvider } from "@/contexts/AuthContext";
 import "./globals.css";
@@ -20,6 +20,13 @@ export const metadata: Metadata = {
     "Project PLATEAU建物データ・J-SHIS地震ハザード・災害用伝言板・被害状況報告を統合し、Gemini AIが状況を分析する防災プラットフォーム",
 };
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#020617",
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -30,7 +37,7 @@ export default function RootLayout({
       lang="ja"
       className={`${notoSansJp.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
-      <body className="h-full overflow-hidden bg-slate-950 text-slate-100 font-sans">
+      <body className="h-[100dvh] w-full overflow-hidden bg-slate-950 text-slate-100 font-sans">
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
