@@ -1,14 +1,47 @@
 import { NextRequest } from "next/server";
 
+const MAX_PROXY_BODY_BYTES = 1024 * 1024; // 1 MiB
+const UNSAFE_SEGMENT_RE = /(\.\.|\\|\/|%2e|%2f|%5c|[\u0000-\u001f\u007f])/i;
+
 async function forwardProxyRequest(
   req: NextRequest,
   context: { params: Promise<{ path: string[] }> }
 ) {
   const { path } = await context.params;
+  if (
+    !Array.isArray(path) ||
+    path.length === 0 ||
+    path.some((seg) => !seg || seg === "." || seg === ".." || UNSAFE_SEGMENT_RE.test(seg))
+  ) {
+    return new Response(JSON.stringify({ detail: "Invalid API path" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+    });
+  }
+
   const backendUrl =
     process.env.BACKEND_INTERNAL_URL?.replace(/\/$/, "") || "http://127.0.0.1:8000";
 
-  const target = `${backendUrl}/api/${path.join("/")}${req.nextUrl.search}`;
+  let targetUrl: URL;
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(backendUrl);
+    targetUrl = new URL(`/api/${path.map(encodeURIComponent).join("/")}${req.nextUrl.search}`, baseUrl);
+  } catch {
+    return new Response(JSON.stringify({ detail: "Invalid target URL" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+    });
+  }
+
+  if (targetUrl.origin !== baseUrl.origin || !targetUrl.pathname.startsWith("/api/")) {
+    return new Response(JSON.stringify({ detail: "Forbidden API path" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+    });
+  }
+
+  const target = targetUrl.toString();
   const forwardHeaders: Record<string, string> = {
     // Request identity encoding between server & backend so Node fetch never double-decompresses
     "Accept-Encoding": "identity",
@@ -23,10 +56,21 @@ async function forwardProxyRequest(
   if (geminiKey) forwardHeaders["X-Gemini-Api-Key"] = geminiKey;
   const accessCode = req.headers.get("x-ai-access-code");
   if (accessCode) forwardHeaders["X-Ai-Access-Code"] = accessCode;
+  const entryPasscode = req.headers.get("x-entry-passcode");
+  if (entryPasscode) forwardHeaders["X-Entry-Passcode"] = entryPasscode;
 
   let body: string | undefined;
   if (req.method !== "GET" && req.method !== "HEAD") {
     body = await req.text();
+    if (Buffer.byteLength(body, "utf8") > MAX_PROXY_BODY_BYTES) {
+      return new Response(
+        JSON.stringify({ detail: "リクエストサイズが上限（1MB）を超えています。" }),
+        {
+          status: 413,
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+        }
+      );
+    }
   }
 
   let upstream: Response;

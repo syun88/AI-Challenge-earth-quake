@@ -41,6 +41,19 @@ const PERIOD_TABS: Array<{ id: DisasterUpdatesPeriod; label: string }> = [
 
 type SectionView = "all" | "municipality" | "earthquakes";
 
+function safeHttpUrl(raw: string | null | undefined, fallback: string): string {
+  if (!raw) return fallback;
+  try {
+    const u = new URL(raw);
+    if (u.protocol === "https:" || u.protocol === "http:") {
+      return u.toString();
+    }
+  } catch {
+    // ignore invalid URLs
+  }
+  return fallback;
+}
+
 function formatSyncTime(iso: string | null): string {
   if (!iso) return "未取得";
   try {
@@ -269,7 +282,7 @@ export default function DisasterUpdatesPanel({
             {notices.map((n) => (
               <a
                 key={n.id}
-                href={n.url}
+                href={safeHttpUrl(n.url, "https://www.bousai.city.kyoto.lg.jp/")}
                 target="_blank"
                 rel="noreferrer"
                 className="block rounded-xl border border-slate-700/80 bg-slate-900/75 p-2.5 transition hover:border-emerald-400/60 hover:bg-slate-900"
@@ -366,7 +379,10 @@ export default function DisasterUpdatesPanel({
                     </button>
                   )}
                   <a
-                    href={q.url}
+                    href={safeHttpUrl(
+                      q.url,
+                      "https://typhoon.yahoo.co.jp/weather/jp/earthquake/list/?e=511"
+                    )}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800/80 px-2 py-1 text-[10px] text-slate-200 hover:border-slate-500"

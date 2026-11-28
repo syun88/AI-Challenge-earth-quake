@@ -3133,19 +3133,35 @@ def ask_board_mention_agent(
 
     effective_role = "citizen" if channel == "public" else caller_role
     effective_tenant = tenant_uid if channel == "enterprise_liaison" else ""
-    effective_ward = (ward_name or "all").strip() or "all"
-    if effective_ward == "京都市全域":
+    raw_ward = (ward_name or "all").strip() or "all"
+    if raw_ward in {"all", "京都市全域"}:
+        effective_ward = "all"
+    elif raw_ward in WARD_NAMES.values():
+        effective_ward = raw_ward
+    else:
         effective_ward = "all"
 
-    # Check security guardrail on BOTH trigger and recent context for public isolation
+    # Check security guardrail on trigger AND sanitize recent messages to block indirect prompt injection
     guard = evaluate_security_guardrail(trigger_message, effective_role, board_channel=channel)
-    if guard is None and channel == "public" and any(k in trigger_message for k in ("上に答えて", "前の質問", "それに答えて", "同じ質問")):
+    sanitized_recent: list[dict[str, Any]] = []
+    blocked_recent_found = False
+    for m in (recent_messages or [])[-12:]:
+        m_text = str(m.get("text") or "")
+        if channel == "public" and m_text and evaluate_security_guardrail(m_text, effective_role, board_channel=channel) is not None:
+            blocked_recent_found = True
+            sanitized_recent.append({**m, "text": "[セキュリティ保護により省略]"})
+        else:
+            sanitized_recent.append(m)
+
+    if guard is None and channel == "public" and blocked_recent_found and any(
+        k in trigger_message for k in ("上に答えて", "前の質問", "それに答えて", "同じ質問", "回答して", "答えて", "教えて")
+    ):
         joined_recent = "\n".join(str(m.get("text") or "") for m in (recent_messages or [])[-5:])
         guard = evaluate_security_guardrail(joined_recent, effective_role, board_channel=channel)
 
     place_hint, ward_hint = _extract_location_hint_from_dialogue(
         trigger_message,
-        recent_messages,
+        sanitized_recent,
         effective_ward,
     )
 
@@ -3166,7 +3182,7 @@ def ask_board_mention_agent(
         )
     else:
         history_lines: list[str] = []
-        for m in (recent_messages or [])[-12:]:
+        for m in sanitized_recent:
             s_name = re.sub(r"[\r\n]+", " ", str(m.get("senderName") or "参加者"))[:40]
             s_role = str(m.get("senderRole") or "citizen")
             s_text = re.sub(r"[\r\n]+", " ", str(m.get("text") or "")).strip()[:280]

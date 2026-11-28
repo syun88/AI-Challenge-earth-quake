@@ -15,13 +15,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from html import unescape
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -44,6 +46,16 @@ RECENT_TARGET_YEARS = {2025, 2026}
 
 def _is_kyoto_epicenter(name: Any) -> bool:
     return "京都" in str(name or "")
+
+
+def _sanitize_http_url(url: str | None, fallback: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return fallback
+    parsed = urlparse(raw)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return raw
+    return fallback
 
 
 def _strip_tags(raw: str) -> str:
@@ -78,7 +90,10 @@ def _parse_yahoo_quake_list_html(
         if year is None:
             continue
         hrefs = re.findall(r'href=["\']([^"\']+)["\']', tr)
-        detail_url = hrefs[0] if hrefs else YAHOO_KYOTO_QUAKE_LIST_URL
+        detail_url = _sanitize_http_url(
+            urljoin(YAHOO_KYOTO_QUAKE_LIST_URL, hrefs[0]) if hrefs else None,
+            YAHOO_KYOTO_QUAKE_LIST_URL,
+        )
         m_id = re.search(r"/earthquake/(\d+)\.html", detail_url)
         eid = f"yahoo-{m_id.group(1)}" if m_id else f"yahoo-{iso_date}-{len(events)}"
         try:
@@ -153,7 +168,9 @@ def _parse_kyoto_news_html(html: str, base_url: str) -> list[dict[str, Any]]:
         hrefs = re.findall(r'href=["\']([^"\']+)["\']', li_raw)
         if not hrefs:
             continue
-        full_url = urljoin(base_url, hrefs[0])
+        full_url = _sanitize_http_url(urljoin(base_url, hrefs[0]), "")
+        if not full_url:
+            continue
         title = re.sub(r"\[?\s*\d{4}年\d{1,2}月\d{1,2}日\s*\]?", "", text).strip()
         title = re.sub(r"別ウィンドウで開く", "", title).strip()
         if not title:
@@ -371,8 +388,20 @@ class DisasterUpdatesStore:
     def __init__(self, archive_path: Path | None = None) -> None:
         self.archive_path = archive_path or ARCHIVE_PATH
         self._lock = threading.Lock()
+        self._refresh_lock: asyncio.Lock | None = None
+        self._last_refresh_monotonic: float = 0.0
         self._loaded = False
         self._payload: dict[str, Any] = {}
+
+    @staticmethod
+    def _refresh_cooldown_sec() -> float:
+        raw = os.getenv("DISASTER_UPDATES_REFRESH_COOLDOWN_SEC", "").strip()
+        if raw:
+            try:
+                return max(0.0, float(raw))
+            except ValueError:
+                pass
+        return 60.0
 
     def ensure_loaded(self) -> None:
         if self._loaded:
@@ -458,39 +487,63 @@ class DisasterUpdatesStore:
             "municipality_updates": notices,
         }
 
-    async def refresh_live(self, *, persist: bool = True) -> dict[str, Any]:
-        """Fetch latest data from JMA, Yahoo Kyoto Earthquakes, and Kyoto City Bousai Portal."""
+    async def refresh_live(self, *, persist: bool = True, force: bool = False) -> dict[str, Any]:
+        """Fetch latest data from JMA, Yahoo Kyoto Earthquakes, and Kyoto City Bousai Portal with cooldown & single-flight protection."""
         self.ensure_loaded()
-        prev_quake_ids = {q.get("id") for q in (self._payload.get("earthquakes") or [])}
-        prev_notice_urls = {n.get("url") for n in (self._payload.get("municipality_updates") or [])}
+        if self._refresh_lock is None:
+            self._refresh_lock = asyncio.Lock()
 
-        fresh = await fetch_live_archive_payload(
-            existing_earthquakes=self._payload.get("earthquakes") or [],
-        )
-        # Keep existing items if a live source transiently failed
-        if not fresh["earthquakes"] and self._payload.get("earthquakes"):
-            fresh["earthquakes"] = list(self._payload["earthquakes"])
-        if not fresh["municipality_updates"] and self._payload.get("municipality_updates"):
-            fresh["municipality_updates"] = list(self._payload["municipality_updates"])
+        async with self._refresh_lock:
+            now_m = time.monotonic()
+            cooldown = self._refresh_cooldown_sec()
+            if (
+                not force
+                and cooldown > 0.0
+                and self._last_refresh_monotonic > 0.0
+                and (now_m - self._last_refresh_monotonic) < cooldown
+            ):
+                return {
+                    "refreshed": False,
+                    "cached": True,
+                    "new_earthquakes_count": 0,
+                    "new_municipality_updates_count": 0,
+                    **self.query_updates(),
+                }
 
-        with self._lock:
-            self._payload = fresh
-            self._loaded = True
-            if persist:
-                self.archive_path.parent.mkdir(parents=True, exist_ok=True)
-                self.archive_path.write_text(
-                    json.dumps(fresh, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
+            prev_quake_ids = {q.get("id") for q in (self._payload.get("earthquakes") or [])}
+            prev_notice_urls = {n.get("url") for n in (self._payload.get("municipality_updates") or [])}
 
-        new_q = sum(1 for q in fresh["earthquakes"] if q.get("id") not in prev_quake_ids)
-        new_n = sum(1 for n in fresh["municipality_updates"] if n.get("url") not in prev_notice_urls)
-        return {
-            "refreshed": True,
-            "new_earthquakes_count": new_q,
-            "new_municipality_updates_count": new_n,
-            **self.query_updates(),
-        }
+            fresh = await fetch_live_archive_payload(
+                existing_earthquakes=self._payload.get("earthquakes") or [],
+            )
+            # Keep existing items if a live source transiently failed
+            if not fresh["earthquakes"] and self._payload.get("earthquakes"):
+                fresh["earthquakes"] = list(self._payload["earthquakes"])
+            if not fresh["municipality_updates"] and self._payload.get("municipality_updates"):
+                fresh["municipality_updates"] = list(self._payload["municipality_updates"])
+
+            with self._lock:
+                self._payload = fresh
+                self._loaded = True
+                self._last_refresh_monotonic = time.monotonic()
+                if persist:
+                    self.archive_path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp_path = self.archive_path.with_suffix(".json.tmp")
+                    tmp_path.write_text(
+                        json.dumps(fresh, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    tmp_path.replace(self.archive_path)
+
+            new_q = sum(1 for q in fresh["earthquakes"] if q.get("id") not in prev_quake_ids)
+            new_n = sum(1 for n in fresh["municipality_updates"] if n.get("url") not in prev_notice_urls)
+            return {
+                "refreshed": True,
+                "cached": False,
+                "new_earthquakes_count": new_q,
+                "new_municipality_updates_count": new_n,
+                **self.query_updates(),
+            }
 
 
 updates_store = DisasterUpdatesStore()

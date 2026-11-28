@@ -99,6 +99,86 @@ function formatChatTime(ms: number | null): string {
   }
 }
 
+const ALLOWED_CHAT_ACTION_TYPES = new Set<MapAction["type"]>([
+  "fly_to_location",
+  "fly_to_ward",
+  "fly_to_mesh",
+  "focus_building",
+  "focus_report",
+  "set_agent_pins",
+  "clear_agent_pins",
+  "navigate_evacuation",
+  "show_route_simulation",
+  "configure_map_layers",
+]);
+
+function isKyotoCoord(lat: unknown, lon: unknown): boolean {
+  return (
+    typeof lat === "number" &&
+    typeof lon === "number" &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat >= 34.5 &&
+    lat <= 35.5 &&
+    lon >= 135.0 &&
+    lon <= 136.5
+  );
+}
+
+function parseSafeMapActions(rawJson: unknown, viewerRole: UserRole): MapAction[] {
+  if (typeof rawJson !== "string" || !rawJson.trim() || rawJson.length > 4000) return [];
+  try {
+    const parsed = JSON.parse(rawJson);
+    if (!Array.isArray(parsed)) return [];
+    const safe: MapAction[] = [];
+    for (const item of parsed.slice(0, 6)) {
+      if (!item || typeof item !== "object") continue;
+      const act = item as MapAction;
+      if (!ALLOWED_CHAT_ACTION_TYPES.has(act.type)) continue;
+      if (act.type === "set_agent_pins") {
+        if (!Array.isArray(act.pins)) continue;
+        const validPins = act.pins
+          .slice(0, 6)
+          .filter((p) => p && typeof p === "object" && isKyotoCoord(p.lat, p.lon) && typeof p.label === "string")
+          .map((p) => ({
+            id: String(p.id || "").slice(0, 64),
+            label: String(p.label).slice(0, 64),
+            lat: Number(p.lat),
+            lon: Number(p.lon),
+            tone: (["emerald", "amber", "rose", "sky"].includes(String(p.tone)) ? p.tone : "sky") as
+              | "emerald"
+              | "amber"
+              | "rose"
+              | "sky",
+            description: typeof p.description === "string" ? p.description.slice(0, 140) : undefined,
+          }));
+        if (validPins.length === 0) continue;
+        safe.push({ ...act, pins: validPins });
+        continue;
+      }
+      if (act.type === "navigate_evacuation") {
+        if (!isKyotoCoord(act.start_lat, act.start_lon)) continue;
+        if (act.target_lat != null && act.target_lon != null && !isKyotoCoord(act.target_lat, act.target_lon)) {
+          continue;
+        }
+        safe.push(act);
+        continue;
+      }
+      if (act.type === "fly_to_location" && !isKyotoCoord(act.lat, act.lon)) continue;
+      if (act.type === "configure_map_layers" && act.open_panel === "assets" && viewerRole !== "enterprise") {
+        const { open_panel: _omitted, ...rest } = act;
+        void _omitted;
+        safe.push(rest);
+        continue;
+      }
+      safe.push(act);
+    }
+    return safe;
+  } catch {
+    return [];
+  }
+}
+
 function serializeCompactMapActions(actions: MapAction[] | undefined): string {
   if (!actions || actions.length === 0) return "";
   const full = JSON.stringify(actions);
@@ -238,17 +318,7 @@ export function BoardChatPanel({
                 ? roleRaw
                 : "citizen";
 
-            let parsedActions: MapAction[] = [];
-            if (typeof data.mapActionsJson === "string" && data.mapActionsJson.trim()) {
-              try {
-                const raw = JSON.parse(data.mapActionsJson);
-                if (Array.isArray(raw)) {
-                  parsedActions = raw as MapAction[];
-                }
-              } catch {
-                parsedActions = [];
-              }
-            }
+            const parsedActions = parseSafeMapActions(data.mapActionsJson, profile.role);
 
             const replyKind: "ai_proxy" | "assistant" | "user" =
               data.replyKind === "ai_proxy" || data.replyKind === "assistant"
@@ -714,7 +784,11 @@ export function BoardChatPanel({
                       }`}
                     >
                       {isAiMsg && <Bot className="h-2.5 w-2.5" />}
-                      {isAiMsg ? "もちまも AI" : rMeta.shortLabel}
+                      {msg.senderRole === "assistant"
+                        ? "もちまも AI"
+                        : isAiMsg
+                          ? `もちまも AI (${rMeta.shortLabel}代理)`
+                          : rMeta.shortLabel}
                     </span>
                     <span className="truncate font-semibold text-white">
                       {msg.senderName}

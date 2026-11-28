@@ -54,15 +54,18 @@ def redact_secrets(text: str) -> str:
 
 
 def extract_client_ip(request: Request | None) -> str:
-    """Resolve client IP safely, honoring proxy headers only from loopback or trusted proxies."""
+    """Resolve client IP safely, honoring proxy headers ONLY when explicitly enabled."""
     if request is None:
         return "local-test"
     peer_ip = request.client.host if request.client else "unknown"
     trust_proxy = _parse_bool_env("AI_TRUST_PROXY_HEADERS", False)
-    if peer_ip in {"127.0.0.1", "::1", "testclient"} or trust_proxy:
+    if trust_proxy and peer_ip in {"127.0.0.1", "::1", "testclient"}:
         xff = request.headers.get("x-forwarded-for", "").strip()
         if xff:
-            return xff.split(",")[0].strip()[:64] or peer_ip
+            parts = [p.strip() for p in xff.split(",") if p.strip()]
+            if parts:
+                # Take the right-most proxy-appended entry rather than client-spoofable left-most entry
+                return parts[-1][:64]
         xri = request.headers.get("x-real-ip", "").strip()
         if xri:
             return xri[:64]
@@ -183,16 +186,17 @@ def validate_chat_inputs(
 class GuardTicket:
     client_ip: str
     using_server_key: bool
+    subject_key: str = ""
 
 
 class AICostGuard:
-    """In-memory per-IP rate limiter, concurrency limiter, access gate, and daily budget cap."""
+    """In-memory per-subject (UID/IP) rate limiter, concurrency limiter, access gate, and daily budget cap."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._minute_hits: dict[str, deque[float]] = defaultdict(deque)
         self._hour_hits: dict[str, deque[float]] = defaultdict(deque)
-        self._active_by_ip: dict[str, int] = defaultdict(int)
+        self._active_by_subject: dict[str, int] = defaultdict(int)
         self._active_global = 0
         self._daily_date = self._today_key()
         self._daily_server_requests = 0
@@ -206,7 +210,7 @@ class AICostGuard:
         with self._lock:
             self._minute_hits.clear()
             self._hour_hits.clear()
-            self._active_by_ip.clear()
+            self._active_by_subject.clear()
             self._active_global = 0
             self._daily_date = self._today_key()
             self._daily_server_requests = 0
@@ -257,11 +261,17 @@ class AICostGuard:
         requested_model: str | None,
         api_key_override: str | None,
         access_code: str | None,
+        user_uid: str | None = None,
     ) -> GuardTicket:
         """Validate access controls, model policy, rate limits, and acquire a concurrency slot."""
         using_byok = bool(api_key_override and api_key_override.strip())
         has_env_key = self._has_server_env_key()
         using_server_key = (not using_byok) and has_env_key
+
+        # Key rate limits primarily by authenticated Firebase UID so spoofed proxy headers
+        # cannot bypass limits and distinct users behind localhost Next.js proxy do not collide.
+        clean_uid = (user_uid or "").strip()[:128]
+        subject_key = f"uid:{clean_uid}" if clean_uid else f"ip:{client_ip}"
 
         # If server key is disabled for public visitors and user supplied no BYOK key,
         # enforce BYOK-only unless no server key exists at all (fallback data preview stays available).
@@ -295,7 +305,7 @@ class AICostGuard:
         per_min = _parse_int_env("AI_RATE_LIMIT_PER_MIN", 8 if using_server_key else 30, minimum=1)
         per_hour = _parse_int_env("AI_RATE_LIMIT_PER_HOUR", 40 if using_server_key else 180, minimum=1)
         daily_limit = _parse_int_env("AI_DAILY_BUDGET_REQUESTS", 300, minimum=1)
-        max_conc_ip = _parse_int_env("AI_MAX_CONCURRENT_PER_IP", 2, minimum=1)
+        max_conc_subject = _parse_int_env("AI_MAX_CONCURRENT_PER_IP", 2, minimum=1)
         max_conc_global = _parse_int_env("AI_MAX_CONCURRENT_GLOBAL", 15, minimum=1)
 
         with self._lock:
@@ -310,10 +320,10 @@ class AICostGuard:
                     headers={"Retry-After": "10"},
                 )
 
-            if self._active_by_ip[client_ip] >= max_conc_ip:
+            if self._active_by_subject[subject_key] >= max_conc_subject:
                 raise HTTPException(
                     status_code=429,
-                    detail="同一接続からの同時実行数の上限に達しました。現在の応答完了をお待ちください。",
+                    detail="同一ユーザーからの同時実行数の上限に達しました。現在の応答完了をお待ちください。",
                     headers={"Retry-After": "5"},
                 )
 
@@ -324,7 +334,7 @@ class AICostGuard:
                     headers={"Retry-After": "3600"},
                 )
 
-            m_key = f"srv:{client_ip}" if using_server_key else f"byok:{client_ip}"
+            m_key = f"srv:{subject_key}" if using_server_key else f"byok:{subject_key}"
             m_q = self._minute_hits[m_key]
             while m_q and now - m_q[0] > 60.0:
                 m_q.popleft()
@@ -350,19 +360,114 @@ class AICostGuard:
             h_q.append(now)
             if using_server_key:
                 self._daily_server_requests += 1
-            self._active_by_ip[client_ip] += 1
+            self._active_by_subject[subject_key] += 1
             self._active_global += 1
 
-        return GuardTicket(client_ip=client_ip, using_server_key=using_server_key)
+        return GuardTicket(
+            client_ip=client_ip,
+            using_server_key=using_server_key,
+            subject_key=subject_key,
+        )
 
     def release_slot(self, ticket: GuardTicket) -> None:
+        key = ticket.subject_key or f"ip:{ticket.client_ip}"
         with self._lock:
-            if self._active_by_ip[ticket.client_ip] > 0:
-                self._active_by_ip[ticket.client_ip] -= 1
-            if self._active_by_ip[ticket.client_ip] == 0:
-                self._active_by_ip.pop(ticket.client_ip, None)
+            if self._active_by_subject[key] > 0:
+                self._active_by_subject[key] -= 1
+            if self._active_by_subject[key] == 0:
+                self._active_by_subject.pop(key, None)
             if self._active_global > 0:
                 self._active_global -= 1
 
 
+class GovCodeBruteForceGuard:
+    """Rate-limit failed GOV_REGISTRATION_CODE attempts per UID and IP to prevent brute-forcing."""
+
+    def __init__(self, *, max_failures: int = 5, window_sec: float = 900.0) -> None:
+        self._max_failures = max_failures
+        self._window_sec = window_sec
+        self._lock = threading.Lock()
+        self._failures: dict[str, deque[float]] = defaultdict(deque)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._failures.clear()
+
+    def _prune(self, key: str, now: float) -> deque[float]:
+        q = self._failures[key]
+        while q and now - q[0] > self._window_sec:
+            q.popleft()
+        if not q:
+            self._failures.pop(key, None)
+        return q
+
+    def check_allowed(self, *, uid: str, client_ip: str) -> None:
+        now = time.monotonic()
+        with self._lock:
+            for key in (f"uid:{uid}", f"ip:{client_ip}"):
+                q = self._prune(key, now)
+                if len(q) >= self._max_failures:
+                    retry_after = max(1, int(self._window_sec - (now - q[0])))
+                    raise HTTPException(
+                        status_code=429,
+                        detail=(
+                            f"政府関連機関コードの認証失敗回数が上限に達しました。"
+                            f"約{max(1, retry_after // 60)}分後に再試行してください。"
+                        ),
+                        headers={"Retry-After": str(retry_after)},
+                    )
+
+    def record_failure(self, *, uid: str, client_ip: str) -> None:
+        now = time.monotonic()
+        with self._lock:
+            for key in (f"uid:{uid}", f"ip:{client_ip}"):
+                q = self._failures[key]
+                while q and now - q[0] > self._window_sec:
+                    q.popleft()
+                q.append(now)
+
+    def record_success(self, *, uid: str, client_ip: str) -> None:
+        with self._lock:
+            self._failures.pop(f"uid:{uid}", None)
+            self._failures.pop(f"ip:{client_ip}", None)
+
+
+class SlidingWindowRateLimiter:
+    """Bounded in-memory per-key sliding-window rate limiter for sensitive lookup endpoints."""
+
+    def __init__(self, *, max_hits: int, window_sec: float, max_keys: int = 4096) -> None:
+        self._max_hits = max_hits
+        self._window_sec = window_sec
+        self._max_keys = max_keys
+        self._lock = threading.Lock()
+        self._hits: dict[str, deque[float]] = {}
+
+    def reset(self) -> None:
+        with self._lock:
+            self._hits.clear()
+
+    def consume(self, key: str, *, detail: str) -> None:
+        now = time.monotonic()
+        with self._lock:
+            q = self._hits.get(key)
+            if q is None:
+                if len(self._hits) >= self._max_keys:
+                    # Evict oldest key cleanly
+                    self._hits.pop(next(iter(self._hits)))
+                q = deque()
+                self._hits[key] = q
+            while q and now - q[0] > self._window_sec:
+                q.popleft()
+            if len(q) >= self._max_hits:
+                retry_after = max(1, int(self._window_sec - (now - q[0])))
+                raise HTTPException(
+                    status_code=429,
+                    detail=detail,
+                    headers={"Retry-After": str(retry_after)},
+                )
+            q.append(now)
+
+
 ai_guard = AICostGuard()
+gov_code_guard = GovCodeBruteForceGuard()
+board_phone_lookup_guard = SlidingWindowRateLimiter(max_hits=20, window_sec=60.0)

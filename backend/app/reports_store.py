@@ -59,7 +59,24 @@ def _now_jst_iso() -> str:
 
 
 def _hash_passcode(passcode: str, salt: str) -> str:
-    return hashlib.sha256(f"{salt}:{passcode}".encode("utf-8")).hexdigest()
+    dk = hashlib.scrypt(
+        passcode.encode("utf-8"),
+        salt=salt.encode("utf-8"),
+        n=16384,
+        r=8,
+        p=1,
+        dklen=32,
+    )
+    return f"scrypt:{dk.hex()}"
+
+
+def _verify_passcode(passcode: str, salt: str, stored_hash: str) -> bool:
+    if stored_hash.startswith("scrypt:"):
+        candidate = _hash_passcode(passcode, salt)
+        return hmac.compare_digest(candidate, stored_hash)
+    # Backwards compatibility for legacy SHA-256 hashes
+    legacy = hashlib.sha256(f"{salt}:{passcode}".encode("utf-8")).hexdigest()
+    return hmac.compare_digest(legacy, stored_hash)
 
 
 def haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -632,7 +649,18 @@ class DamageReportStore:
                 if dist <= 400.0:
                     reasons.append(f"近接地点（約{int(dist)}m）")
             if target_text:
-                sim = text_similarity(target_text, f"{r['title']} {r['description']}")
+                can_view_desc = (
+                    viewer_role == "government"
+                    or int(r["is_sample"]) == 1
+                    or bool(
+                        viewer_uid
+                        and "owner_uid" in r.keys()
+                        and r["owner_uid"]
+                        and str(r["owner_uid"]) == viewer_uid
+                    )
+                )
+                compare_text = f"{r['title']} {r['description']}" if can_view_desc else str(r["title"])
+                sim = text_similarity(target_text, compare_text)
                 if sim >= 0.35:
                     reasons.append("類似内容")
             if reasons:
@@ -914,8 +942,7 @@ class DamageReportStore:
         if stored_hash and stored_salt:
             # If authenticated owner omits passcode or supplies it, verify when provided
             if passcode is not None and passcode != "":
-                candidate = _hash_passcode(passcode.strip(), str(stored_salt))
-                if not hmac.compare_digest(candidate, str(stored_hash)):
+                if not _verify_passcode(passcode.strip(), str(stored_salt), str(stored_hash)):
                     raise HTTPException(status_code=403, detail="編集・削除用暗証番号が一致しません。")
             elif not (owner_uid and actor_uid and owner_uid == actor_uid):
                 raise HTTPException(status_code=403, detail="編集・削除用暗証番号が一致しません。")

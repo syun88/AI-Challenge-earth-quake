@@ -78,8 +78,10 @@ from app.route_sim import (
 )
 from app.security import (
     ai_guard,
+    board_phone_lookup_guard,
     extract_client_ip,
     get_cors_allow_origins,
+    gov_code_guard,
     redact_secrets,
     validate_chat_inputs,
 )
@@ -111,11 +113,16 @@ async def lifespan(_: FastAPI):
     yield
 
 
+_disable_docs = os.getenv("DISABLE_OPENAPI_DOCS", "").strip().lower() in {"1", "true", "yes"}
+
 app = FastAPI(
     title="QuakeLens Japan API",
     description="PLATEAU建築年データ × J-SHIS地震ハザード・表層地盤 × 災害伝言板・被害報告 × Gemini Function Calling API",
     version="0.2.0",
     lifespan=lifespan,
+    docs_url=None if _disable_docs else "/docs",
+    redoc_url=None if _disable_docs else "/redoc",
+    openapi_url=None if _disable_docs else "/openapi.json",
 )
 
 app.add_middleware(
@@ -123,7 +130,13 @@ app.add_middleware(
     allow_origins=get_cors_allow_origins(),
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Gemini-Api-Key", "X-Ai-Access-Code"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-Gemini-Api-Key",
+        "X-Ai-Access-Code",
+        "X-Entry-Passcode",
+    ],
 )
 
 
@@ -279,21 +292,32 @@ def get_auth_me(claims: dict[str, Any] = Depends(get_firebase_claims)) -> dict[s
 @app.post("/api/auth/register-profile")
 def register_auth_profile(
     req: AuthRegisterRequest,
+    request: Request,
     claims: dict[str, Any] = Depends(get_firebase_claims),
 ) -> dict[str, Any]:
     uid = str(claims.get("sub") or claims.get("user_id") or "").strip()
     if not uid:
         raise HTTPException(status_code=401, detail="トークンにUIDが含まれていません。")
     email = str(claims.get("email") or "").strip()
-    profile = auth_profile_store.register_or_update_profile(
-        uid=uid,
-        email=email,
-        display_name=req.display_name,
-        role=req.role,
-        organization_name=req.organization_name,
-        department=req.department,
-        gov_code=req.gov_code,
-    )
+    client_ip = extract_client_ip(request)
+    if req.role == "government":
+        gov_code_guard.check_allowed(uid=uid, client_ip=client_ip)
+    try:
+        profile = auth_profile_store.register_or_update_profile(
+            uid=uid,
+            email=email,
+            display_name=req.display_name,
+            role=req.role,
+            organization_name=req.organization_name,
+            department=req.department,
+            gov_code=req.gov_code,
+        )
+    except HTTPException as exc:
+        if req.role == "government" and exc.status_code == 403 and "機関認証コード" in str(exc.detail):
+            gov_code_guard.record_failure(uid=uid, client_ip=client_ip)
+        raise
+    if req.role == "government":
+        gov_code_guard.record_success(uid=uid, client_ip=client_ip)
     firebase_meta = claims.get("firebase")
     provider = "password"
     if isinstance(firebase_meta, dict) and firebase_meta.get("sign_in_provider"):
@@ -609,6 +633,11 @@ def list_board_entries(
     limit: int = Query(default=50, ge=1, le=200),
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
+    if phone and phone.strip():
+        board_phone_lookup_guard.consume(
+            f"uid:{user.uid}",
+            detail="電話番号照会の回数上限に達しました。1分ほど待ってから再試行してください。",
+        )
     entries = board_store.list_entries(
         phone=phone,
         q=q,
@@ -684,11 +713,12 @@ def update_board_entry(
 def delete_board_entry(
     entry_id: str,
     passcode: str | None = Query(default=None),
+    x_entry_passcode: str | None = Header(default=None),
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     return board_store.delete_entry(
         entry_id=entry_id,
-        passcode=passcode,
+        passcode=x_entry_passcode if x_entry_passcode is not None else passcode,
         actor_uid=user.uid,
         actor_role=user.role,
     )
@@ -876,11 +906,12 @@ def update_damage_report(
 def delete_damage_report(
     report_id: str,
     passcode: str | None = Query(default=None),
+    x_entry_passcode: str | None = Header(default=None),
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     return reports_store.delete_report(
         report_id=report_id,
-        passcode=passcode,
+        passcode=x_entry_passcode if x_entry_passcode is not None else passcode,
         actor_uid=user.uid,
         actor_role=user.role,
     )
@@ -1556,7 +1587,7 @@ def chat_tts(
     request: Request,
     x_gemini_api_key: str | None = Header(default=None),
     x_ai_access_code: str | None = Header(default=None),
-    _user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> Response:
     cleaned_text = req.text.strip()
     if not cleaned_text:
@@ -1578,6 +1609,7 @@ def chat_tts(
         requested_model=tts_model,
         api_key_override=x_gemini_api_key,
         access_code=x_ai_access_code,
+        user_uid=user.uid,
     )
     try:
         audio_bytes, mime_type, used_model = synthesize_speech(
@@ -1626,6 +1658,7 @@ def chat(
         requested_model=req.model,
         api_key_override=x_gemini_api_key,
         access_code=x_ai_access_code,
+        user_uid=user.uid,
     )
     try:
         return ask_quakelens_ai(
@@ -1671,6 +1704,7 @@ def chat_stream(
         requested_model=req.model,
         api_key_override=x_gemini_api_key,
         access_code=x_ai_access_code,
+        user_uid=user.uid,
     )
 
     def event_generator():
@@ -1766,12 +1800,16 @@ def board_chat_agent(
                 detail="他社の行政連携スレッドに対するAIエージェント操作は許可されていません。",
             )
 
+    if len(req.recent_messages) > 50:
+        raise HTTPException(status_code=400, detail="recent_messages の件数が上限（50件）を超えています。")
+
     cleaned_trigger, _, _ = validate_chat_inputs(req.trigger_message, None, None)
     ticket = ai_guard.authorize_and_acquire(
         client_ip=extract_client_ip(request),
         requested_model=req.model,
         api_key_override=x_gemini_api_key,
         access_code=x_ai_access_code,
+        user_uid=user.uid,
     )
     try:
         recent_payload = [

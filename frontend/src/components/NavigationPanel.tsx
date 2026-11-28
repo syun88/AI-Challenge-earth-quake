@@ -29,7 +29,7 @@ import {
   updateDamageReport,
 } from "@/lib/api";
 import { REPORT_CATEGORY_META, VERIFICATION_META } from "@/lib/colors";
-import { readLocalReportAuth, saveLocalReportAuth } from "@/lib/reportAuth";
+import { generateRandomPasscode, readLocalReportAuth, saveLocalReportAuth } from "@/lib/reportAuth";
 import { ROAD_CAUSE_PRESETS } from "@/components/RoadDamageToolbar";
 import {
   DamageReport,
@@ -180,7 +180,7 @@ export function NavigationPanel({
     }
 
     const preset = ROAD_CAUSE_PRESETS[causeIdx] ?? ROAD_CAUSE_PRESETS[0];
-    const effPasscode = String(Math.floor(1000 + Math.random() * 9000));
+    const effPasscode = generateRandomPasscode();
     const descText = customRoadNote.trim()
       ? `${preset.desc}（補足: ${customRoadNote.trim()}）`
       : preset.desc;

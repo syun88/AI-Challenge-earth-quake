@@ -30,6 +30,7 @@ import {
   updateBoardEntry,
 } from "@/lib/api";
 import { BOARD_STATUS_META } from "@/lib/colors";
+import { generateRandomPasscode } from "@/lib/reportAuth";
 import { BoardEntry, BoardStatus, BoardSummaryResponse, UserRole } from "@/types/quakelens";
 
 type BoardView = "check" | "chat" | "register" | "history" | "web";
@@ -312,7 +313,7 @@ export function DisasterBoard({
     setRegisterFeedback(null);
 
     const effectivePasscode =
-      passcode.trim() || String(Math.floor(1000 + Math.random() * 9000));
+      passcode.trim() || generateRandomPasscode();
 
     try {
       const res = await createBoardEntry({

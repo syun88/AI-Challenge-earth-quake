@@ -54,7 +54,7 @@ import { SelectedFeatureCard } from "@/components/SelectedFeatureCard";
 import ShelterRecommendPanel from "@/components/ShelterRecommendPanel";
 import { SourcesModal } from "@/components/SourcesModal";
 import { WARD_CENTERS } from "@/lib/colors";
-import { readLocalReportAuth, saveLocalReportAuth } from "@/lib/reportAuth";
+import { generateRandomPasscode, readLocalReportAuth, saveLocalReportAuth } from "@/lib/reportAuth";
 import {
   autoSelectOptimalShelter,
   createDamageReport,
@@ -1529,7 +1529,7 @@ export default function HomePage() {
       sourceTag: string;
     }) => {
       const preset = ROAD_CAUSE_PRESETS[paintCauseIdx] ?? ROAD_CAUSE_PRESETS[0];
-      const pass = String(Math.floor(1000 + Math.random() * 9000));
+      const pass = generateRandomPasscode();
       const res = await createDamageReport({
         category: "road_blocked",
         severity: preset.severity,

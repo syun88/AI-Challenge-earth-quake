@@ -23,8 +23,10 @@ export async function POST(req: NextRequest) {
   if (apiKeyHeader) headers["X-Gemini-Api-Key"] = apiKeyHeader;
   const accessCodeHeader = req.headers.get("x-ai-access-code");
   if (accessCodeHeader) headers["X-Ai-Access-Code"] = accessCodeHeader;
-  const xff = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip");
-  if (xff) headers["X-Forwarded-For"] = xff;
+  if (process.env.AI_TRUST_PROXY_HEADERS === "true") {
+    const xff = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip");
+    if (xff) headers["X-Forwarded-For"] = xff;
+  }
 
   let upstream: Response;
   try {

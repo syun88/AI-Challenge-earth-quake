@@ -12,6 +12,7 @@ import io
 import json
 import re
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -163,7 +164,8 @@ class R8SeismicStore:
         self._loaded = False
         self._records: list[dict[str, Any]] = []
         self._meta: dict[str, Any] = {}
-        self._geocode_cache: dict[str, tuple[float, float, str]] = {}
+        self._geocode_cache: OrderedDict[str, tuple[float, float, str]] = OrderedDict()
+        self._geocode_cache_max = 256
 
     def ensure_loaded(self) -> None:
         if self._loaded:
@@ -398,10 +400,16 @@ class R8SeismicStore:
         }
 
     async def _nominatim_lookup(self, query: str, ward: str | None = None) -> tuple[float, float, str] | None:
-        cache_key = f"{ward or 'all'}::{query}"
-        if cache_key in self._geocode_cache:
-            return self._geocode_cache[cache_key]
-        search_q = f"京都市{ward} {query}" if ward and ward != "all" else f"京都市 {query}"
+        clean_q = (query or "").strip()[:160]
+        if not clean_q:
+            return None
+        cache_key = f"{ward or 'all'}::{clean_q}"
+        with self._lock:
+            cached = self._geocode_cache.get(cache_key)
+            if cached is not None:
+                self._geocode_cache.move_to_end(cache_key)
+                return cached
+        search_q = f"京都市{ward} {clean_q}" if ward and ward != "all" else f"京都市 {clean_q}"
         try:
             async with httpx.AsyncClient(
                 timeout=6.0,
@@ -428,7 +436,11 @@ class R8SeismicStore:
                 lat = float(item["lat"])
                 lon = float(item["lon"])
                 res = (lat, lon, disp)
-                self._geocode_cache[cache_key] = res
+                with self._lock:
+                    self._geocode_cache[cache_key] = res
+                    self._geocode_cache.move_to_end(cache_key)
+                    while len(self._geocode_cache) > self._geocode_cache_max:
+                        self._geocode_cache.popitem(last=False)
                 return res
         except Exception:
             return None
@@ -559,7 +571,7 @@ class R8SeismicStore:
         from app.constants import WARD_CENTERS
         from app.shelter_rec import _lookup_mesh_hazard, shelter_store
 
-        q_clean = (query or "").strip()
+        q_clean = (query or "").strip()[:160]
         lat: float | None = None
         lon: float | None = None
         geocode_source = "ward_center"

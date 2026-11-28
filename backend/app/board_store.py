@@ -16,7 +16,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from app.constants import WARD_CENTERS
+from app.constants import KYOTO_WARDS, WARD_CENTERS
 from app.firebase_backend import (
     delete_firestore_doc,
     fetch_firestore_collection,
@@ -27,6 +27,7 @@ from app.firebase_backend import (
 
 JST = timezone(timedelta(hours=9))
 DEFAULT_BOARD_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "board.db"
+ALLOWED_BOARD_WARDS: frozenset[str] = frozenset(KYOTO_WARDS) | {"京都市全域", "京都市外"}
 
 BOARD_STATUS_LABELS: dict[str, str] = {
     "safe": "無事です",
@@ -56,7 +57,23 @@ def mask_phone(phone: str) -> str:
 
 
 def _hash_passcode(passcode: str, salt: str) -> str:
-    return hashlib.sha256(f"{salt}:{passcode}".encode("utf-8")).hexdigest()
+    dk = hashlib.scrypt(
+        passcode.encode("utf-8"),
+        salt=salt.encode("utf-8"),
+        n=16384,
+        r=8,
+        p=1,
+        dklen=32,
+    )
+    return f"scrypt:{dk.hex()}"
+
+
+def _verify_passcode(passcode: str, salt: str, stored_hash: str) -> bool:
+    if stored_hash.startswith("scrypt:"):
+        candidate = _hash_passcode(passcode, salt)
+        return hmac.compare_digest(candidate, stored_hash)
+    legacy = hashlib.sha256(f"{salt}:{passcode}".encode("utf-8")).hexdigest()
+    return hmac.compare_digest(legacy, stored_hash)
 
 
 def _now_jst_iso() -> str:
@@ -362,7 +379,7 @@ class DisasterBoardStore:
                     params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%"])
             elif viewer_uid:
                 clauses.append(
-                    "(ward_name LIKE ? OR is_sample = 1 AND (name LIKE ? OR message LIKE ?) OR (owner_uid = ? AND (name LIKE ? OR message LIKE ?)))"
+                    "(ward_name LIKE ? OR (is_sample = 1 AND (name LIKE ? OR message LIKE ?)) OR (owner_uid = ? AND (name LIKE ? OR message LIKE ?)))"
                 )
                 params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%", viewer_uid, f"%{kw}%", f"%{kw}%"])
             else:
@@ -464,6 +481,8 @@ class DisasterBoardStore:
             )
 
         clean_ward = (ward_name or "京都市全域").strip()[:32] or "京都市全域"
+        if clean_ward not in ALLOWED_BOARD_WARDS:
+            raise HTTPException(status_code=400, detail=f"対象外の地域名です: {clean_ward}")
         raw_mesh = meshcode.strip()[:20] if meshcode and meshcode.strip() else None
         if location_consent is False:
             clean_mesh = None
@@ -548,8 +567,7 @@ class DisasterBoardStore:
         stored_hash = row["passcode_hash"]
         stored_salt = row["passcode_salt"]
         if stored_hash and stored_salt:
-            candidate = _hash_passcode((passcode or "").strip(), str(stored_salt))
-            if not hmac.compare_digest(candidate, str(stored_hash)):
+            if not _verify_passcode((passcode or "").strip(), str(stored_salt), str(stored_hash)):
                 raise HTTPException(
                     status_code=403,
                     detail="編集・削除用暗証番号が一致しません。",
@@ -600,7 +618,10 @@ class DisasterBoardStore:
 
             next_ward = str(row["ward_name"])
             if ward_name is not None:
-                next_ward = ward_name.strip()[:32] or "京都市全域"
+                cand_ward = ward_name.strip()[:32] or "京都市全域"
+                if cand_ward not in ALLOWED_BOARD_WARDS:
+                    raise HTTPException(status_code=400, detail=f"対象外の地域名です: {cand_ward}")
+                next_ward = cand_ward
 
             next_mesh = row["meshcode"]
             next_consent = int(row["location_consent"]) if "location_consent" in row.keys() else 0

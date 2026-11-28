@@ -531,14 +531,22 @@ export function QuakeMap({
         maxZoom: 19,
         maxPitch: 65,
         transformRequest: (url) => {
-          if (url.includes("/api/")) {
-            const token = getSyncAuthToken();
-            if (token) {
-              return {
-                url,
-                headers: { Authorization: `Bearer ${token}` },
-              };
+          try {
+            const baseOrigin =
+              typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
+            const allowedOrigin = API_BASE ? new URL(API_BASE, baseOrigin).origin : baseOrigin;
+            const parsed = new URL(url, baseOrigin);
+            if (parsed.origin === allowedOrigin && parsed.pathname.startsWith("/api/")) {
+              const token = getSyncAuthToken();
+              if (token) {
+                return {
+                  url,
+                  headers: { Authorization: `Bearer ${token}` },
+                };
+              }
             }
+          } catch {
+            // Never attach auth headers to malformed URLs
           }
           return { url };
         },
@@ -1164,16 +1172,27 @@ export function QuakeMap({
         const eqHits = map.queryRenderedFeatures(e.point, { layers: ["earthquakes-circle"] });
         if (eqHits.length > 0) {
           const p = eqHits[0].properties || {};
+          const popupRoot = document.createElement("div");
+          popupRoot.className = "text-xs space-y-1";
+
+          const titleDiv = document.createElement("div");
+          titleDiv.className = "font-bold text-rose-300";
+          titleDiv.textContent = String(p.anm || "地震情報");
+
+          const atDiv = document.createElement("div");
+          atDiv.textContent = `発生: ${String(p.at || "—")}`;
+
+          const statsDiv = document.createElement("div");
+          statsDiv.textContent = `規模: M${p.mag ?? "—"} / 最大震度: ${String(p.maxi || "—")} / 深さ: ${p.depth_km ?? "—"}km`;
+
+          const srcDiv = document.createElement("div");
+          srcDiv.className = "text-[10px] text-slate-400";
+          srcDiv.textContent = "出典: 気象庁";
+
+          popupRoot.append(titleDiv, atDiv, statsDiv, srcDiv);
           new maplibregl.Popup({ maxWidth: "260px" })
             .setLngLat(e.lngLat)
-            .setHTML(
-              `<div class="text-xs space-y-1">
-                <div class="font-bold text-rose-300">${p.anm || "地震情報"}</div>
-                <div>発生: ${p.at || "—"}</div>
-                <div>規模: M${p.mag ?? "—"} / 最大震度: ${p.maxi || "—"} / 深さ: ${p.depth_km ?? "—"}km</div>
-                <div class="text-[10px] text-slate-400">出典: 気象庁</div>
-              </div>`
-            )
+            .setDOMContent(popupRoot)
             .addTo(map);
           return;
         }
@@ -1574,7 +1593,9 @@ export function QuakeMap({
       el.title = `通行不可区間（シミュレーション）: ${item.label}`;
       el.className =
         "flex items-center gap-1 rounded-md border border-white/90 bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-lg transition hover:scale-110 cursor-pointer";
-      el.innerHTML = `<span>✕ 通行不可</span>`;
+      const blockedLabel = document.createElement("span");
+      blockedLabel.textContent = "✕ 通行不可";
+      el.appendChild(blockedLabel);
       el.addEventListener("click", (ev) => {
         ev.stopPropagation();
         callbacksRef.current.onSelectBlockedRoad(item.edge);
@@ -1610,7 +1631,11 @@ export function QuakeMap({
             ? "border-rose-300 bg-rose-900/95 text-rose-100"
             : "border-teal-300 bg-teal-900/95 text-teal-50";
       el.className = `flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[10px] font-bold shadow-md transition hover:scale-105 cursor-pointer ${tone}`;
-      el.innerHTML = `<span>🏕</span><span>${hub.ward}拠点</span>`;
+      const hubIcon = document.createElement("span");
+      hubIcon.textContent = "🏕";
+      const hubText = document.createElement("span");
+      hubText.textContent = `${hub.ward}拠点`;
+      el.append(hubIcon, hubText);
       el.addEventListener("click", (ev) => {
         ev.stopPropagation();
         callbacksRef.current.onSelectShelterHub(hub);
@@ -1674,7 +1699,14 @@ export function QuakeMap({
         el.className =
           "group flex items-center gap-1 rounded-full border-2 border-yellow-200 bg-emerald-600 px-2 py-0.5 text-[11px] font-extrabold text-white shadow-xl hover:bg-emerald-500 transition";
         el.title = `${rec.name} (${rec.walk_minutes ?? "—"}分)`;
-        el.innerHTML = `<span class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-yellow-300 text-[10px] font-black text-emerald-950">${rec.rank}</span><span class="max-w-[110px] truncate">${rec.name}</span>`;
+        const rankBadge = document.createElement("span");
+        rankBadge.className =
+          "inline-flex h-4 w-4 items-center justify-center rounded-full bg-yellow-300 text-[10px] font-black text-emerald-950";
+        rankBadge.textContent = String(rec.rank);
+        const recNameSpan = document.createElement("span");
+        recNameSpan.className = "max-w-[110px] truncate";
+        recNameSpan.textContent = rec.name;
+        el.append(rankBadge, recNameSpan);
         el.addEventListener("click", (ev) => {
           ev.stopPropagation();
           callbacksRef.current.onSelectOfficialShelter(rec);
@@ -2140,7 +2172,17 @@ export function QuakeMap({
             : "border-solid border-cyan-300";
 
       el.className = `flex items-center gap-1 rounded-full border-2 ${borderStyle} bg-slate-950/95 px-2 py-0.5 text-[10px] font-bold text-white shadow-lg transition hover:scale-110 cursor-pointer`;
-      el.innerHTML = `<span style="background:${catMeta.color}" class="inline-flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-extrabold text-slate-950">${catMeta.symbol}</span><span>${catMeta.short}</span><span class="text-[9px] text-amber-200">${verMeta.short}</span>`;
+      const symSpan = document.createElement("span");
+      symSpan.style.background = catMeta.color;
+      symSpan.className =
+        "inline-flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-extrabold text-slate-950";
+      symSpan.textContent = catMeta.symbol;
+      const catSpan = document.createElement("span");
+      catSpan.textContent = catMeta.short;
+      const verSpan = document.createElement("span");
+      verSpan.className = "text-[9px] text-amber-200";
+      verSpan.textContent = verMeta.short;
+      el.append(symSpan, catSpan, verSpan);
 
       el.addEventListener("click", (ev) => {
         ev.stopPropagation();
@@ -2178,7 +2220,12 @@ export function QuakeMap({
           ? "border-amber-400 bg-amber-950/95 text-amber-100"
           : "border-sky-400 bg-slate-900/95 text-sky-100";
       el.className = `flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[10px] font-semibold shadow-lg transition hover:scale-105 cursor-pointer ${alertClass}`;
-      el.innerHTML = `<span>安否:${w.ward_name}</span><span class="rounded bg-white/15 px-1 font-mono font-bold">${w.total_count}</span>`;
+      const wardSpan = document.createElement("span");
+      wardSpan.textContent = `安否:${w.ward_name}`;
+      const countSpan = document.createElement("span");
+      countSpan.className = "rounded bg-white/15 px-1 font-mono font-bold";
+      countSpan.textContent = String(w.total_count);
+      el.append(wardSpan, countSpan);
       el.addEventListener("click", (ev) => {
         ev.stopPropagation();
         callbacksRef.current.onSelectSafetyWard(w.ward_name);
@@ -2220,9 +2267,13 @@ export function QuakeMap({
           ? "border-amber-300 bg-amber-950/95 text-amber-100"
           : "border-emerald-300 bg-emerald-950/95 text-emerald-100"
       }`;
-      el.innerHTML = `<span class="inline-block h-2 w-2 rounded-full ${
+      const assetDot = document.createElement("span");
+      assetDot.className = `inline-block h-2 w-2 rounded-full ${
         isGovShared ? "bg-amber-400" : "bg-emerald-400"
-      }"></span><span>${asset.name}</span>`;
+      }`;
+      const assetNameSpan = document.createElement("span");
+      assetNameSpan.textContent = asset.name;
+      el.append(assetDot, assetNameSpan);
       el.addEventListener("click", (ev) => {
         ev.stopPropagation();
         onSelectEnterpriseAsset?.(asset);

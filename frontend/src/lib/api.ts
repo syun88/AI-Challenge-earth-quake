@@ -119,9 +119,22 @@ export async function downloadAuthenticatedFile(
   pathOrUrl: string,
   fallbackFilename: string
 ): Promise<void> {
-  const target = pathOrUrl.startsWith("http")
+  const baseOrigin =
+    typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
+  const allowedOrigin = API_BASE ? new URL(API_BASE, baseOrigin).origin : baseOrigin;
+  const rawTarget = pathOrUrl.startsWith("http")
     ? pathOrUrl
     : `${API_BASE}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+  let resolvedUrl: URL;
+  try {
+    resolvedUrl = new URL(rawTarget, baseOrigin);
+  } catch {
+    throw new Error("ダウンロードURLの形式が不正です。");
+  }
+  if (resolvedUrl.origin !== allowedOrigin || !resolvedUrl.pathname.startsWith("/api/")) {
+    throw new Error("許可されていない外部ダウンロード先への認証トークン送信をブロックしました。");
+  }
+  const target = resolvedUrl.toString();
   const authHeaders = await getAuthHeaders();
   const res = await fetch(target, {
     method: "GET",
@@ -528,10 +541,13 @@ export function updateBoardEntry(
 }
 
 export function deleteBoardEntry(entryId: string, passcode?: string) {
-  const qs = passcode?.trim() ? `?passcode=${encodeURIComponent(passcode.trim())}` : "";
+  const headers: Record<string, string> = {};
+  if (passcode?.trim()) {
+    headers["X-Entry-Passcode"] = passcode.trim();
+  }
   return fetchJson<{ deleted: boolean; id: string }>(
-    `/api/board/${encodeURIComponent(entryId)}${qs}`,
-    { method: "DELETE" }
+    `/api/board/${encodeURIComponent(entryId)}`,
+    { method: "DELETE", headers }
   );
 }
 
@@ -645,10 +661,13 @@ export function updateDamageReport(
 }
 
 export function deleteDamageReport(reportId: string, passcode?: string) {
-  const qs = passcode?.trim() ? `?passcode=${encodeURIComponent(passcode.trim())}` : "";
+  const headers: Record<string, string> = {};
+  if (passcode?.trim()) {
+    headers["X-Entry-Passcode"] = passcode.trim();
+  }
   return fetchJson<{ deleted: boolean; id: string }>(
-    `/api/reports/${encodeURIComponent(reportId)}${qs}`,
-    { method: "DELETE" }
+    `/api/reports/${encodeURIComponent(reportId)}`,
+    { method: "DELETE", headers }
   );
 }
 

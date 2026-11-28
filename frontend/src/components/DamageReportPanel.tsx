@@ -40,7 +40,7 @@ import {
   REPORT_SEVERITY_META,
   VERIFICATION_META,
 } from "@/lib/colors";
-import { readLocalReportAuth, saveLocalReportAuth } from "@/lib/reportAuth";
+import { generateRandomPasscode, readLocalReportAuth, saveLocalReportAuth } from "@/lib/reportAuth";
 import type { PickedMapTarget } from "@/components/QuakeMap";
 import {
   DamageReport,
@@ -301,7 +301,7 @@ export function DamageReportPanel({
     setSubmitting(true);
     setFeedback(null);
 
-    const effPasscode = passcode.trim() || String(Math.floor(1000 + Math.random() * 9000));
+    const effPasscode = passcode.trim() || generateRandomPasscode();
     try {
       const res = await createDamageReport({
         category,

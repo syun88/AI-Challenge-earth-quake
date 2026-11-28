@@ -5,6 +5,15 @@ interface LocalReportAuth {
   passcode: string;
 }
 
+export function generateRandomPasscode(): string {
+  if (typeof window !== "undefined" && window.crypto?.getRandomValues) {
+    const buf = new Uint32Array(1);
+    window.crypto.getRandomValues(buf);
+    return String(1000 + (buf[0] % 9000));
+  }
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
 export function readLocalReportAuth(): Record<string, string> {
   if (typeof window === "undefined") return {};
   try {
