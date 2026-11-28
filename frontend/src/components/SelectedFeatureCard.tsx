@@ -7,6 +7,8 @@ import {
   Ban,
   Building2,
   Check,
+  ChevronDown,
+  ChevronUp,
   Compass,
   Copy,
   ExternalLink,
@@ -108,6 +110,7 @@ export function SelectedFeatureCard({
   onRequestAiExplain,
 }: SelectedFeatureCardProps) {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [mobileExpanded, setMobileExpanded] = useState(false);
 
   const handleCopy = (key: string, text: string) => {
     if (typeof navigator === "undefined" || !navigator.clipboard) return;
@@ -120,6 +123,11 @@ export function SelectedFeatureCard({
         // ignore clipboard denial
       }
     );
+  };
+
+  const handleCloseSelection = () => {
+    setMobileExpanded(false);
+    onClearSelection();
   };
 
   const hasSelection = Boolean(
@@ -138,10 +146,53 @@ export function SelectedFeatureCard({
 
   return (
     <div
-      className={`pointer-events-none fixed inset-x-2 bottom-[calc(var(--mobile-dock-h)+8px)] z-[24] max-h-[50dvh] flex-col gap-2 overflow-y-auto pr-0.5 sm:left-auto sm:right-3 sm:w-[min(360px,calc(100vw-24px))] lg:inset-x-auto lg:bottom-4 lg:right-16 lg:z-20 lg:flex lg:max-h-[calc(100dvh-160px)] lg:w-[min(360px,calc(100vw-480px))] xl:w-[360px] ${
+      data-testid="selected-feature-sheet"
+      className={`pointer-events-none fixed inset-x-2 bottom-[calc(var(--mobile-dock-h)+8px)] z-[24] flex-col sm:left-auto sm:right-3 sm:w-[min(360px,calc(100vw-24px))] lg:inset-x-auto lg:bottom-4 lg:right-16 lg:z-20 lg:flex lg:w-[min(360px,calc(100vw-480px))] xl:w-[360px] ${
         hiddenOnMobile ? "hidden" : "flex"
       }`}
     >
+      {/* Mobile Expand / Collapse Handle Bar (always visible above scroll viewport) */}
+      <div className="mb-1 flex shrink-0 items-center justify-center gap-1.5 lg:hidden">
+        <button
+          type="button"
+          data-testid="toggle-feature-sheet-size"
+          onClick={() => setMobileExpanded((v) => !v)}
+          className="pointer-events-auto inline-flex items-center gap-1 rounded-full border border-slate-700/90 bg-slate-900/95 px-3 py-1 text-[10px] font-semibold text-slate-200 shadow-lg backdrop-blur-md active:scale-95"
+        >
+          {mobileExpanded ? (
+            <>
+              <ChevronDown className="h-3 w-3 text-sky-400" />
+              <span>小さくする</span>
+            </>
+          ) : (
+            <>
+              <ChevronUp className="h-3 w-3 text-sky-400" />
+              <span>全画面に広げる・下へスクロール</span>
+            </>
+          )}
+        </button>
+        {hasSelection && (
+          <button
+            type="button"
+            onClick={handleCloseSelection}
+            aria-label="選択を閉じる"
+            className="pointer-events-auto inline-flex items-center gap-0.5 rounded-full border border-slate-700/90 bg-slate-900/95 px-2.5 py-1 text-[10px] font-semibold text-slate-300 shadow-lg backdrop-blur-md active:scale-95"
+          >
+            <X className="h-3 w-3" />
+            <span>閉じる</span>
+          </button>
+        )}
+      </div>
+
+      {/* Dedicated Scrollable Viewport with direct max-height & pointer-events-auto (bulletproof iOS/Android touch scroll) */}
+      <div
+        className={`pointer-events-auto overflow-x-hidden overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] rounded-2xl lg:max-h-[calc(100dvh-160px)] ${
+          mobileExpanded
+            ? "max-h-[calc(100dvh-var(--mobile-dock-h)-112px)]"
+            : "max-h-[min(56dvh,calc(100dvh-180px))]"
+        }`}
+      >
+        <div className="space-y-2 pb-2">
       {/* Compact Active Route HUD */}
       {routeResult && (
         <div
@@ -696,9 +747,9 @@ export function SelectedFeatureCard({
                 {selectedBuilding.structure_label}
               </div>
               {selectedReverseAddress?.address && (
-                <div className="mt-1 flex items-center gap-1 text-[11px] text-cyan-200">
-                  <MapPin className="h-3 w-3 shrink-0 text-rose-400" />
-                  <span className="truncate">
+                <div className="mt-1 flex items-start gap-1 text-[11px] text-cyan-200">
+                  <MapPin className="mt-0.5 h-3 w-3 shrink-0 text-rose-400" />
+                  <span className="break-words leading-snug">
                     {selectedReverseAddress.address}
                     {selectedReverseAddress.nearest_road
                       ? `（${selectedReverseAddress.nearest_road}付近）`
@@ -1244,6 +1295,8 @@ export function SelectedFeatureCard({
             </div>
           </div>
         )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -540,7 +540,7 @@ export function LocationSearchBar({
       {showSearchResults && (
         <div
           data-testid="location-search-dropdown"
-          className="mt-1.5 max-h-[min(52dvh,420px)] overflow-y-auto rounded-2xl border border-slate-700/85 bg-slate-900/95 p-1.5 text-xs text-slate-200 shadow-2xl backdrop-blur-xl"
+          className="mt-1.5 max-h-[min(52dvh,420px)] overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] rounded-2xl border border-slate-700/85 bg-slate-900/95 p-1.5 text-xs text-slate-200 shadow-2xl backdrop-blur-xl"
         >
           {notice && (
             <div className="mx-1 mb-1 rounded-lg border border-amber-500/40 bg-amber-950/40 px-2.5 py-1.5 text-[10px] text-amber-200">

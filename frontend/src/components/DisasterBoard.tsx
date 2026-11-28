@@ -542,7 +542,7 @@ export function DisasterBoard({
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-y-auto p-3.5 text-xs">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] p-3.5 text-xs">
         {view === "check" && (
           <div className="space-y-3">
             {/* Regional Aggregation Summary Card */}

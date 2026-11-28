@@ -2580,7 +2580,7 @@ export default function HomePage() {
             </button>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch]">
             {activePanel === "report" && (
               <DamageReportPanel
                 key={`rep-${reportCreateTrigger}`}

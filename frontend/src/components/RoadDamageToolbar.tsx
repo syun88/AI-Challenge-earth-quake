@@ -86,7 +86,7 @@ export function RoadDamageToolbar({
   return (
     <div
       data-testid="road-paint-toolbar"
-      className={`pointer-events-auto fixed top-[calc(3.75rem+env(safe-area-inset-top,0px))] z-30 flex max-h-[42dvh] flex-col gap-2 overflow-y-auto rounded-2xl border border-cyan-500/50 bg-slate-950/95 p-2 text-xs text-slate-100 shadow-2xl backdrop-blur-xl sm:top-[66px] sm:p-2.5 ${
+      className={`pointer-events-auto fixed top-[calc(3.75rem+env(safe-area-inset-top,0px))] z-30 block max-h-[42dvh] space-y-2 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] rounded-2xl border border-cyan-500/50 bg-slate-950/95 p-2 text-xs text-slate-100 shadow-2xl backdrop-blur-xl sm:top-[66px] sm:p-2.5 ${
         drawerOpen
           ? "inset-x-2 lg:inset-x-auto lg:left-[444px] lg:right-[160px] lg:max-w-3xl"
           : "inset-x-2 sm:inset-x-auto sm:left-1/2 sm:w-[min(780px,calc(100vw-24px))] sm:-translate-x-1/2"
