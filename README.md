@@ -2,6 +2,10 @@
 
 **地震が起きる前から、起きた後まで。人命・文化・経済を守るAI防災プラットフォーム**
 
+ここで公開してます
+QuakeLens Japan
+https://syuns-mac-mini.tail375645.ts.net
+
 - **応募アワード**: **Google AI Challenge 2026**（Google Japan 25周年記念アワード）
 - **応募部門**: **Society & Planet（まちと地球の未来部門）**
 - **統合基盤**: 国土交通省 **Project PLATEAU（京都市513,815棟）** × 防災科研 **J-SHIS（2,990メッシュ・表層地盤V4）** × **京都市公式防災データ（514指定緊急避難場所・R8耐震リスト・11地震シナリオ）** × **気象庁** × **OpenStreetMap（41,813ノード / 58,360街路）** × **Firebase Authentication / Cloud Firestore** × **Gemini API（22 Function Calling ツール · Interactions API · Gemini TTS）**
