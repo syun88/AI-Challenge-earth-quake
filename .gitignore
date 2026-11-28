@@ -22,3 +22,12 @@ backend/data/*.db
 
 # OS
 .DS_Store
+
+# Google AI Challenge 2026 demo video deliverables & judge-only guide PDF (shared via YouTube / Google Drive)
+quakelens_google_ai_challenge_2026_final.mp4
+quakelens_google_ai_challenge_2026_script.md
+quakelens_google_ai_challenge_2026_subtitles.srt
+quakelens_google_ai_challenge_2026_storyboard.md
+quakelens_google_ai_challenge_2026_contact_sheet.jpg
+quakelens_google_ai_challenge_2026_validation.md
+QuakeLens_Japan_Guide.pdf

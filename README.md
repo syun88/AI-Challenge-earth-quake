@@ -1,299 +1,202 @@
 # QuakeLens Japan
 
-**建物の築年分布（Project PLATEAU）× 地震ハザード・表層地盤（J-SHIS）× 安否確認・被害状況報告 × AI状況分析（Gemini API Function Calling）**
+**地震が起きる前から、起きた後まで。人命・文化・経済を守るAI防災プラットフォーム**
 
-Google AI Challenge 2026 応募作品として開発された、平時の建物地震リスク可視化から発災時の安否確認・被害状況集約・AI状況分析・CSV/Excelレポート出力までを一貫して支援する統合型防災プラットフォームです。
+- **応募アワード**: **Google AI Challenge 2026**（Google Japan 25周年記念アワード）
+- **応募部門**: **Society & Planet（まちと地球の未来部門）**
+- **統合基盤**: 国土交通省 **Project PLATEAU（京都市513,815棟）** × 防災科研 **J-SHIS（2,990メッシュ・表層地盤V4）** × **京都市公式防災データ（514指定緊急避難場所・R8耐震リスト・11地震シナリオ）** × **気象庁** × **OpenStreetMap（41,813ノード / 58,360街路）** × **Firebase Authentication / Cloud Firestore** × **Gemini API（22 Function Calling ツール · Interactions API · Gemini TTS）**
 
 > [!IMPORTANT]
-> - 本プラットフォームのハザード・建物データは公開データ（Project PLATEAU・J-SHIS・気象庁）に基づく可視化・分析支援であり、個別建物の耐震診断や倒壊確率予測を行うものではありません。
-> - 利用者から投稿される被害・災害報告はすべて **「未確認（市民報告）」** として取り扱い、公的機関発表や訓練用サンプルと明確に区別して表示します。
-> - 代替経路シミュレーション機能は **訓練・研究用の簡易幹線モデル** であり、実災害時の道路安全性を保証するものではありません。
+> - 本プラットフォームの地震ハザード確率（`T30_I55_PS` 等）は「揺れの発生確率」に関する統計指標であり、**個別建物の倒壊確率予測や地震予知、建築士等による正式な耐震診断ではありません**。
+> - 市民から投稿される被害報告はすべてサーバー側で **`unverified`（未確認・市民報告）** として強制管理し、公的発表や訓練用サンプルと明確に区別して表示します。
+> - 歴史的建造物（築年ベース：1950年以前等）と法令上の正式な指定文化財を混同せず、企業BCP適地スコアも**公開データに基づく一次スクリーニング比較（安全性を保証しない）**として提示します。
+> - 避難・救援・迂回経路シミュレーションおよび最適避難所自動選定は **OpenStreetMap主要幹線モデルを用いた訓練・研究用機能** であり、実災害時の道路安全性や実避難所の開設を保証するものではありません。発災時は自治体・警察・消防の公式指示を最優先してください。
 
 ---
 
-## 1. 対象自治体の選定理由と属性取得率
+## 1. Google AI Challenge 2026 審査基準との対応
 
-### 選定地域：**京都府京都市全域（11区）**
-
-当初は東京23区を第一候補として、国土交通省 Project PLATEAU（[G空間情報センター CKAN](https://www.geospatial.jp/ckan/)）の `plateau-tokyo23ku-citygml-2020` および `plateau-tokyo23ku-citygml-2022` のCityGMLファイルを直接検証しました。その結果、東京23区データでは標準の建築年属性（`bldg:yearOfConstruction`）が **0%**（未整備）であることが判明しました。
-
-そこで、全国主要自治体のPLATEAUデータを横並びで調査した結果、以下の理由から **京都市（2025年度版：`plateau-26100-kyoto-shi-2025`）** を対象地域として選定しました。
-
-1. **最新の標準仕様・高い属性網羅率**
-   - 2025年度整備・2026年5月更新（標準製品仕様書第5.0版）
-   - 総建物数：**513,815棟**（242メッシュファイル全件処理 / 2,990メッシュ）
-   - 建築年判明率：**80.9%**（415,456棟が判明 / **98,359棟・19.1%が不明**）
-   - 建物用途判明率：**82.3%**（`82.28%` / 422,773棟）
-   - 建物構造判明率：**79.1%**（`79.11%` / 406,465棟）
-   - 地上階数判明率：**80.0%**（`80.04%` / 411,258棟）
-   - 実測高さ判明率：**98.2%**（`98.16%` / 504,362棟）
-2. **建築年区分のバランスの良さと欠損値の存在**
-   - 1981年以前：**158,446棟**
-   - 1982〜2000年：**131,749棟**
-   - 2001年以降：**125,261棟**
-   - 建築年不明：**98,359棟**（推測や補完を一切行わず「不明」として保持）
-3. **市内の地震ハザード・表層地盤のコントラスト**
-   - 市域全体（2,990メッシュ）の30年震度6弱以上確率（`T30_I55_PS`）は **0.5%〜58.3%**（山地最小 `0.54%` 〜 後背湿地最大 `58.29%`）の幅があり、たとえば砂礫質台地（531メッシュ平均 **5.4%**・東山区内の砂礫質台地では **5.4%〜6.7%**）であるのに対し、伏見区・山科区などの後背湿地（399メッシュ平均 **54.7%**、伏見区最大 **58.3%**・山科区最大 **52.7%**）では極めて高い確率分布を示しており、建物築年数と地盤・ハザードの重なりを直感的に分析できます。
+| 審査基準 | QuakeLens Japan におけるアプローチ |
+|---|---|
+| **ORIGINALITY（独創性）** | 単なるハザードマップでも汎用チャットボットでもなく、**513,815棟の3D都市モデル・地盤・11地震シナリオ・実道路網**と **一般市民・企業（BCP）・政府関連機関のゼロトラスト3ロールRBAC** を統合し、**AIエージェントによる自律地図操作**と**Firestoreリアルタイム掲示板への `@もちまも` 参加**を融合。 |
+| **IMPACT（社会・暮らしへの貢献度）** | **市民**は専門知識なしで自宅リスク・耐震対策・補助制度・避難経路を自然言語で把握でき、**企業**は他社や市民から機密隔離された重要設備の診断とBCP代替拠点比較を実施でき、**行政**は11起震帯・歴史的建造物と住宅のP1〜P4優先度・R8耐震リスト連携・CSV/Excel出力で予算配分を支援。平時から発災直後まで地域社会と人命・文化・経済を一貫して支えます。 |
+| **AI UTILITY（AI活用の有効性）** | `google-genai` SDK（**Gemini Interactions API / SSEストリーミング / 22 Function Calling ツール**）により複雑な空間・災害データを自動横断照会。数値・建物ID・URLの**決定論的Grounding検証**（[grounding.py](backend/app/grounding.py)）、LLM実行前後の**RBACセキュリティガードレール**、**Gemini TTS（`Leda` 音声プリセット）＋ 15パーツ Live2D リップシンク**を実装。 |
+| **SCALABILITY（展開可能性）** | 国土交通省 **Project PLATEAU 標準製品仕様書**、全国共通 **J-SHIS Web API**、**OpenStreetMap**、**Firebase / Cloud Firestore** に準拠しているため、前処理パイプラインの対象自治体コードと地域データを差し替えることで**京都から全国の自治体へ横展開可能**です。 |
 
 ---
 
-## 2. 主な機能
+## 2. 社会課題と「京都」を対象とした理由
 
-1. **インタラクティブ統合防災マップ（MapLibre GL JS + 地理院タイル + MVT全棟配信）**
-   - 築年区分による全513,815棟の建物ポリゴン色分け（1981年以前 / 1982〜2000年 / 2001年以降 / 建築年不明）および **2D平面 / 3D立体（LOD1）表示切替**
-   - 色覚多様性（Okabe-Ito）に配慮した建物カラーパレットと紫系ハザードメッシュの視覚分離
-   - J-SHIS 250mメッシュオーバーレイ（「今後30年震度6弱以上確率」「表層地盤最大速度増幅率 ARV」「1981年以前建築率」）および気象庁 地震情報オーバーレイ
-   - **地域別安否集計バッジ**（行政区単位の安否登録件数バッジを地図上に重ね、クリックで該当区の伝言板へ直行）
-   - **被害・災害報告ピン**（5カテゴリ記号＋色＋枠線種別：`未確認＝琥珀破線` / `確認済・公式＝シアン・緑実線` / `訓練サンプル＝スレート点線`）
-   - 地図上から直接クリックで被害場所や対象建物（`building_id` 連携）を指定できる **同意前提のピッカーモード** と、損壊・倒壊建物の **ポリゴン強調ハイライト表示**
-   - `road_blocked`（道路通行止め）報告に連動し、通行不可となった道路区間を地図上に常時赤破線・`✕ 通行不可` バッジで表示
-2. **災害用伝言板（安否確認 × 地図・地域集計連動）**
-   - 電話番号／連絡IDの正規化（全角ハイフン対応）と一覧時の伏せ字マスキング（`090-****-5678`）、暗証番号ハッシュ管理
-   - 安否情報の登録・検索・**ステータス更新（`PATCH /api/board/{id}`）**・削除、および行政区／250mメッシュ単位の安否区分別集計
-   - **プライバシー保護**：個人の正確なGPS位置は取得・保存せず、区・250mメッシュ連携も利用者の明示的同意チェック時のみ有効化
-   - 統合画面内の「安否確認」ドロワーに加え、QRコード・災害訓練向け軽量ページ（`/board`）および NTT `web171` / `171` 案内を搭載
-3. **3ステップ被害・災害状況報告（5カテゴリ × 未確認明示 × 建物連携 × 重複対策）**
-   - カテゴリ：`建物の損傷・倒壊` / `道路の通行止め・損壊` / `避難所の状況` / `救助・支援の必要性` / `その他の災害情報`
-   - 「1. 種別・緊急度 → 2. 地図クリックで場所・建物指定 → 3. テンプレート＆詳細入力」の3ステップガイドで迷わず入力可能
-   - すべての市民投稿はサーバー側で強制的に `unverified`（未確認・市民報告）として保存・表示
-   - 送信前後の同一区・同カテゴリ・同一メッシュ・近接座標（400m以内）・文字列類似度に基づく **重複報告検知** と、既存報告への **「+1 同種確認（確認数加算）」**（ただし未確認区分は自動昇格させない安全設計）
-   - 暗証番号による更新（解決済マーク等）・削除、および「訓練用サンプル表示」ON/OFF切替
-4. **Gemini AI 統合状況分析 × CSV／Excel出力 × 根拠検証（`grounding.py`）**
-   - `google-genai` SDK（Interactions API・SSEストリーミング）により、建物リスク・250mメッシュ・地震履歴に加え、**災害用伝言板（安否）と被害状況報告を横断照会・自然言語要約**（合計 **11ツール**）
-   - AIが未確認報告や訓練サンプルを参照した場合は、回答下部の検証カードに **「未確認の市民報告を含む／訓練サンプルを含む集計」** 警告を自動表示し、確定事実と混同しない設計
-   - チャットからの指示（例：「この地域の災害状況をCSVにまとめて」）や「統計・リスク」「被害報告」ドロワーから **UTF-8 BOM付CSV（数式インジェクション対策済）** および **マルチシートExcel（`.xlsx`）** を即時出力
-   - `GEMINI_API_KEY` 未設定時もダミー回答を行わず、バックエンド実データ照会ツールを実行して正確な集計・CSVダウンロード導線を提示
-5. **実道路ネットワークに基づく 双方向 避難・救援ナビ＆直感的 道路被害ペイント（訓練・研究用プロトタイプ）**
-   - OpenStreetMap 由来の京都市実道路ネットワーク（`kyoto_roads.json.gz`: **41,813交差点 / 58,360街路エッジ**）上で、`road_blocked` 報告の実際の街路ポリラインを赤色通行止めとして除外・描画し、実際の通り・交差点・橋梁に沿った **① 現在地→最寄り避難拠点（`evacuate`）**、**② 最寄り拠点→要救助・被害現場への救援出動（`rescue`）**、**③ 任意2拠点迂回比較（`custom`）** をA\*探索で算出・描画
-   - 地図上のフローティングツールバー（`道路を描く・選択`）から **① 水色に光る道路の1クリック即時通行止め／解除**、**② 始点→終点クリックによる区間一括閉鎖**、**③ Canvasフリーハンドなぞり描画による複数道路一括閉鎖**（`Undo`対応）を実行でき、設定と同時に表示中の経路も自動再計算されます
-   - 実際の被災状況・車両規制や実避難所開設は反映されない訓練モデルのため、API・UI・凡例のすべてで **「訓練・研究用シミュレーション専用（実災害での道路安全性・実避難所開設保証なし）」** と明記
-6. **Map-First 統合UI（全画面地図 × 切替式左ドロワー × モバイルボトムドック）**
-   - 画面全体を覆う広い地図キャンバスの上部にスリムなフローティングヘッダー（`被害報告` / `安否確認` / `避難・救援ナビ` / `AI分析` / `統計・リスク` ＋ `表示設定` ポップオーバー）を配置
-   - 選択中の1機能だけを左スライドドロワーに表示し、地図上の建物・報告・通行止め道路・避難拠点をクリックすると右下にコンテキストカード（即座に被害報告・救援ルート・AI分析を起動可能）を表示
-   - スマートフォンでは画面下部の6アイコンドック（地図 / 被害報告 / 安否確認 / ナビ / AI分析 / 統計）で片手操作できます
+事前防災（建物・地盤リスク、公的耐震支援、BCP立地）と発災後対応（安否確認、被害報告、避難所選定、救援経路調整）は窓口が分断されがちであり、一般市民・民間企業・自治体で必要な情報の粒度と守るべき機密も大きく異なります。
+
+本プラットフォームでは当初候補とした東京23区（2020/2022年度PLATEAU CityGML）で標準の建築年属性（`bldg:yearOfConstruction`）が0%（未整備）だった事前検証を踏まえ、全国主要都市から **京都市（2025年度版 `plateau-26100-kyoto-shi-2025`）** を第1実証都市として選定しました。
+
+| 指標・属性 | 実測カバー率 / 件数 |
+|---|---|
+| **対象範囲・建物総数** | 京都市全域11区・**513,815棟**（242メッシュファイル / **2,990メッシュ**） |
+| **建築年判明率** | **80.9%**（判明 415,456棟：1981年以前 158,446棟 / 1982〜2000年 131,749棟 / 2001年以降 125,261棟 / **不明 98,359棟・19.1%は推測せず保持**） |
+| **建物属性判明率** | 用途 **82.3%**（422,773棟） / 構造 **79.1%**（406,465棟） / 地上階数 **80.0%**（411,258棟） / 実測高さ **98.2%**（504,362棟） |
+| **J-SHIS 震度6弱以上確率（30年）** | **0.5%〜58.3%**（砂礫質台地 531メッシュ平均 **5.4%** vs 伏見・山科等の後背湿地 399メッシュ平均 **54.7%**：地盤差と築年分布の重なりを明確に可視化） |
+| **公式避難・耐震・地震データ** | 京都市指定緊急避難場所 **514件**（一次 444 + 広域 70）／R8市有建築物耐震性能リスト（949棟照合）／京都市11地震シナリオ |
 
 ---
 
-## 3. システム構成・データベース・主要API
+## 3. 3つの利用者ロールとゼロトラスト権限制御（RBAC）
+
+初回アクセス時は `/login` 認証ゲートが表示され、全3区分とも **「メールアドレス＋パスワード」「Googleアカウント」** の両方によるログイン・新規登録に対応しています（[`/guide`](frontend/src/app/guide/page.tsx) はログイン前でも閲覧可能）。
+
+| 機能・データ領域 | 一般市民 (`citizen`) | 企業 (`enterprise`) | 政府関連機関 (`government`) |
+|---|---|---|---|
+| **新規登録要件** | 認証コード不要（即時登録可） | 認証コード不要（企業・組織名入力） | **要 機関認証コード (`GOV_REGISTRATION_CODE`)** |
+| **公開災害・空間データ** | 全513,815棟・2,990メッシュ・514避難所・歴史×住宅P1〜P4・11地震帯を閲覧可 | 閲覧可（BCP基礎指標として参照） | 全域統合監視として閲覧可 |
+| **個別被害報告・救助要請** | 自己投稿以外の詳細・連絡先・救助出動は**非公開・制限**（投稿は常に `unverified`） | 詳細閲覧・救助出動ルートは不可 | **全件閲覧・真偽昇格 (`verified` / `official`)・救助ルート試算・全明細CSV/Excel出力可** |
+| **企業BCP拠点・機密台帳** | **API / AIエージェント / Firestore すべて完全遮断** | **自社拠点のみFirestore隔離管理**・即時診断・BCP安全立地比較可（他社不可視） | 企業側が「災害時のみ政府共有 (`gov_emergency_share`)」を許可した拠点のみ閲覧可 |
+| **Firestore リアルタイム掲示板** | 公開チャンネル（`public`）＋ `@もちまも` 避難案内 | 公開 ＋ **行政⇄企業 1:1 緊急連携** (`enterprise_liaison`) | 全チャンネル統括（公開・各社連携・**政府対策本部専用** `government`） |
+
+> [!NOTE]
+> **政府関連機関の登録認証コードについて（審査・試用向け案内）**:
+> 一般利用者による権限昇格（市民アカウントが勝手に政府区分へ登録し他者の救助要請詳細等を閲覧すること）を防ぐゼロトラスト設計のため、**機関認証コードはWeb画面上や公開リポジトリには掲載していません**。審査・評価時に政府関連機関ロールをお試しいただく際は、**別途Googleドライブで共有しているご利用ガイドPDFに記載の審査用認証コード**をご入力ください。
+
+---
+
+## 4. Google AI アーキテクチャ（22 Function Calling × Grounding × Live2D）
+
+1. **Gemini Interactions API & SSE ストリーミング（[ai_assistant.py](backend/app/ai_assistant.py)）**:
+   - 自然言語の防災質問に対し、ロール権限でフィルタリングされた **22種の Function Calling ツール** を自律選択・連続実行します（建物詳細、250mメッシュ統計、区比較、優先確認エリア、R8未掲載優先度、歴史的建物×住宅 P1〜P4優先度、京都市11地震帯影響、企業自社拠点リスク、企業BCP安全立地比較、最適避難所自動選定、避難ルート探索、自律地図操作 `operate_map_interface`、CSV/Excelエクスポート準備 `prepare_disaster_export` 等）。
+   - ログインアカウント（UID）・区分別の会話スレッド自動保存および継続対話に対応しています。
+2. **決定論的 Grounding 検証 & 安全ガード（[grounding.py](backend/app/grounding.py), [security.py](backend/app/security.py)）**:
+   - AI回答に含まれる数値・割合・メッシュコード・建物ID・報告ID・URLを実際のツール返却値と自動照合し、チャットUIに検証バッジを表示します。
+   - AIが `unverified`（未確認の市民報告）または訓練用サンプルを参照した場合は、確定事実と混同しないよう自動警告バッジを付与します。
+   - 市民からの他社機密・BCP照会など権限外のリクエストは、LLM実行前およびツール実行層の両方で即時ブロックします。
+3. **もちまも Live2D ＆ Gemini TTS 音声解説（[tts.py](backend/app/tts.py), [MochimamoLive2D.tsx](frontend/src/components/MochimamoLive2D.tsx)）**:
+   - **Gemini TTS（`gemini-3.8-flash-tts` / `gemini-3.8-flash-lite-tts`、音声 `Leda` 等）** によるリアルタイム日本語音声合成と、60Hz音声振幅に応じた15パーツ Live2D ボーンリグのリップシンク・表情連動（`idle` / `listening` / `thinking` / `speaking` / `happy` / `alert`）を搭載。
+4. **Cloud Firestore 3チャンネル掲示板 `@もちまも` Agent（[BoardChatPanel.tsx](frontend/src/components/BoardChatPanel.tsx), [firestore.rules](firestore.rules)）**:
+   - 掲示板スレッドで `@もちまも` とメンションすると、会話履歴から現在地・対象者や周辺の `road_blocked`（通行止め）状況を解析し、`/api/board-chat/agent` が避難・支援提案とワンクリック「地図にルート・ピンを表示」アクションを自動生成・永続化します。
+
+---
+
+## 5. システム構成
 
 ```text
 .
-├── start.sh                              # Backend (:8000) + Frontend (:3000) 一括起動スクリプト
-├── .env.example                          # 環境変数テンプレート（Geminiキー・公開保護設定）
+├── start.sh                                  # Backend (:8000) + Frontend (:3000) 一括起動スクリプト
+├── .env.example                              # 環境変数テンプレート（Geminiキー・公開保護・Firebase設定）
+├── firebase.json                             # Firebase / Firestore / Auth構成
+├── firestore.rules                           # ロール別・テナント隔離・掲示板3チャンネル強制セキュリティルール
+├── firestore.indexes.json                    # Firestore 複合インデックス定義
 ├── backend/
 │   ├── app/
-│   │   ├── main.py                       # FastAPI アプリ・CORS制御・全APIエンドポイント
-│   │   ├── data_store.py                 # Parquet/GeoJSON空間データ読込・フィルタ集計
-│   │   ├── mvt.py                        # 建物全件配信用 Mapbox Vector Tiles (MVT v2.1) エンコーダ
-│   │   ├── board_store.py                # SQLite 災害用伝言板（登録・検索・更新・削除・地域集計）
-│   │   ├── reports_store.py              # SQLite 被害状況報告（未確認強制・重複検知・同意検証）
-│   │   ├── export_utils.py               # UTF-8 BOM CSV & openpyxl Excel(.xlsx) 出力エンジン
-│   │   ├── route_sim.py                  # 京都市実道路ネットワーク（OSM）A*避難・救援・迂回経路エンジン（訓練用）
-│   │   ├── ai_assistant.py               # Gemini Interactions API / SSE / Function Calling（11ツール）
-│   │   ├── grounding.py                  # 数値・ID・URL自動検証＆未確認/サンプルソース検知
-│   │   ├── security.py                   # レート制限・日次上限・アクセスコード・秘密マスク
-│   │   └── constants.py                  # 区中心座標・カテゴリ定義・耐震補助制度データ
+│   │   ├── main.py                           # FastAPI アプリ・CORS・全APIエンドポイント
+│   │   ├── auth.py                           # Firebase ID Token署名検証・ロール別RBAC・機関認証コード保護
+│   │   ├── firebase_backend.py               # Firebase Admin SDK（Custom Claims同期・Firestore永続化/Fallback）
+│   │   ├── ai_assistant.py                   # Gemini Interactions API / SSE / 22 Function Calling / 自律地図操作
+│   │   ├── grounding.py                      # 数値・ID・URL自動照合＆未確認/サンプルソース検知
+│   │   ├── tts.py                            # Gemini TTS（response_modalities=['AUDIO']）音声合成ヘルパー
+│   │   ├── data_store.py                     # Parquet/GeoJSON空間データ読込・フィルタ集計
+│   │   ├── mvt.py                            # 全513,815棟 Mapbox Vector Tiles (MVT v2.1) エンコーダ
+│   │   ├── bcp_site.py                       # 企業BCP安全立地一次スクリーニング・自社拠点即時診断
+│   │   ├── seismic_belts.py                  # 京都市11地震シナリオ・活断層・液状化傾向関係分析
+│   │   ├── heritage_residential.py           # 1950年以前歴史的建物 × 住宅系 P1〜P4 対策優先度＆解決策
+│   │   ├── r8_seismic.py                     # 京都市 R8市有建築物耐震性能リスト連携・未掲載優先判定
+│   │   ├── shelter_rec.py                    # 514指定緊急避難場所連携・発災時最適避難所自動選定
+│   │   ├── route_sim.py                      # 京都市実道路ネットワーク（OSM）A*回避経路シミュレーション（訓練用）
+│   │   ├── board_store.py                    # 災害用伝言板ストア（電話番号正規化・マスキング・暗証番号管理）
+│   │   ├── reports_store.py                  # 被害状況報告ストア（未確認強制・同意検証・重複検知）
+│   │   ├── disaster_updates.py               # 気象庁 / 京都市防災ポータル更新取得・アーカイブ
+│   │   ├── export_utils.py                   # UTF-8 BOM付 CSV & マルチシート Excel (.xlsx) 出力エンジン
+│   │   ├── geocoding.py                      # 京都市地名・住所・施設名・避難所検索 & 逆ジオコーディング
+│   │   ├── security.py                       # レート制限・日次上限・BYOK制御・入力サニタイズ・秘密マスク
+│   │   └── constants.py                      # 行政区中心座標・J-SHIS階級定義・京都市公的耐震支援制度
 │   ├── scripts/
-│   │   ├── fetch_and_build.py            # PLATEAU + J-SHIS データ取得・EPSG:6674空間結合パイプライン
-│   │   └── fetch_road_network.py         # OpenStreetMap (Overpass) 京都市実道路ネットワーク構築スクリプト
-│   ├── data/
-│   │   ├── board.db                      # SQLite DB（board_entries / damage_reports）
-│   │   └── processed/                    # 前処理済み空間データ（buildings.parquet, meshes.geojson, kyoto_roads.json.gz, summary.json）
-│   └── tests/
-│       ├── test_pipeline_and_api.py      # 空間データ・API・AIセキュリティ・根拠検証・伝言板テスト（10件）
-│       └── test_disaster_platform.py     # 安否更新/集計・被害報告・重複・CSV/Excel・AI・迂回経路・道路ペイントテスト（5件）
+│   │   └── fetch_and_build.py                # PLATEAU + J-SHIS データ取得・EPSG:6674空間結合パイプライン
+│   ├── data/processed/                       # 前処理済空間データ（buildings.parquet, meshes.geojson, kyoto_roads.json.gz 等）
+│   └── tests/                                # 6テストスイート（計42件：RBAC・AIセキュリティ・Firestore・防災API等）
 └── frontend/
     └── src/
         ├── app/
-        │   ├── page.tsx                  # Map-First 統合防災プラットフォーム（全画面地図＋切替ドロワー）
-        │   ├── board/page.tsx            # 災害用伝言板 スタンドアロンUI (/board)
-        │   └── api/
-        │       ├── [...path]/route.ts    # /api/* 汎用中継（GET/POST/PATCH/PUT/DELETE + File Header対応）
-        │       └── chat/...              # Gemini REST / SSE ストリーミング中継
-        └── components/
-            ├── FloatingHeader.tsx        # 上部スリムナビバー＆モバイルボトムドック
-            ├── MapDisplayPopover.tsx     # 地図表示テーマ（災害対応/建物リスク）・レイヤー・絞込設定
-            ├── QuakeMap.tsx              # MapLibre 2D/3D + ハイライト街路 + Canvas描画 + 通行止道路 + 倒壊建物
-            ├── RoadDamageToolbar.tsx     # 道路クリック／始点→終点／Canvasなぞり フローティングツールバー
-            ├── SelectedFeatureCard.tsx   # 地図選択中オブジェクトカード＆ルート案内HUD
-            ├── DisasterBoard.tsx         # 災害用伝言板（集計・検索・登録・更新・削除・web171案内）
-            ├── DamageReportPanel.tsx     # 3ステップ被害状況報告（建物連携・未確認区別・重複照合・CSV/Excel）
-            ├── NavigationPanel.tsx       # 双方向 避難・救援ルート案内パネル（訓練用）
-            ├── RiskStatsDrawer.tsx       # 災害統計KPI・Rechartsインタラクティブグラフ・優先確認エリア
-            └── AiAssistantPanel.tsx      # ストリーミングAI対話・参照根拠・CSVダウンロード/地図アクション
+        │   ├── page.tsx                      # Map-First 統合防災プラットフォーム（認証ガード・全画面地図・切替ドロワー）
+        │   ├── login/page.tsx                # 3区分認証ゲート（メール / Googleログイン / ガイド・新規登録ショートカット）
+        │   ├── register/page.tsx             # 3区分新規登録（一般市民・企業・要認証コード政府機関、メール / Google対応）
+        │   ├── guide/page.tsx                # ご利用ガイド（登録手順・権限比較表・ワンクリックコピーAI活用例）
+        │   ├── board/page.tsx                # 災害用伝言板 スタンドアロンUI (/board)
+        │   └── api/                          # FastAPI / SSE ストリーミングプロキシ
+        ├── contexts/AuthContext.tsx          # Firebase Auth + Custom Claims + バックエンドRBAC同期コンテキスト
+        └── components/                       # QuakeMap, FloatingHeader, AiAssistantPanel, MochimamoLive2D,
+                                              # BoardChatPanel, EnterpriseAssetsPanel, RiskStatsDrawer,
+                                              # DamageReportPanel, DisasterBoard, ShelterRecommendPanel, NavigationPanel 他
 ```
 
-### 主要 API エンドポイント一覧
-
-| メソッド | パス | 用途 |
-|---|---|---|
-| `GET` | `/api/health` | 稼働確認・ロード件数・`gemini_configured`・`ai_protection` 残枠 |
-| `GET` | `/api/metadata`, `/api/stats`, `/api/meshes`, `/api/priority-areas` | 建物・J-SHIS 250mメッシュ統計・優先確認エリア分析 |
-| `GET` | `/api/tiles/buildings/{z}/{x}/{y}.pbf`, `/api/buildings/{id}` | 全513,815棟 Mapbox Vector Tiles 配信・建物詳細取得 |
-| `GET` | `/api/earthquakes` | 気象庁 地震情報 JSON キャッシュ付き取得 |
-| `GET / POST / PATCH / DELETE` | `/api/board`, `/api/board/{id}`, `/api/board/summary` | 災害用伝言板 CRUD・暗証番号更新/削除・区別/メッシュ別安否集計 |
-| `GET / POST / PATCH / DELETE` | `/api/reports`, `/api/reports/{id}`, `/api/reports/summary` | 被害状況報告 CRUD・`building_id` 連携・未確認区分管理・集計 |
-| `POST` | `/api/reports/similar`, `/api/reports/{id}/confirm` | 類似/重複報告事前チェック・既存報告への `+1 同種確認` |
-| `GET` | `/api/disaster-overview` | 安否伝言板と被害状況報告の統合サマリー取得 |
-| `GET` | `/api/exports/disaster-summary.csv`, `.xlsx` | 統合状況／報告一覧の CSV（UTF-8 BOM）・Excel（`.xlsx`）ダウンロード |
-| `GET / POST` | `/api/network/status`, `/api/network/roads`, `/api/network/snap-road`, `/api/network/corridor`, `/api/network/stroke` | 実道路ハイライト取得・1クリック/区間/なぞり道路選択・閉鎖状況（訓練用） |
-| `GET` | `/api/routes/navigate`, `/api/routes/simulate` | 通行止め区間回避・双方向避難/救援ルート案内（訓練用） |
-| `POST` | `/api/chat`, `/api/chat/stream` | Gemini AI 状況分析（REST / SSEストリーミング） |
-
 ---
 
-## 4. 使用データセット・API・ライセンス一覧
+## 6. セットアップ・起動・テスト方法（Mac / Linux）
 
-| データ種別 | 名称・API | 提供元 | 基準年・バージョン | ライセンス / 利用条件 | 出典URL |
-|---|---|---|---|---|---|
-| 建物データ | Project PLATEAU 3D都市モデル（京都市） | 国土交通省・京都市 | 2025年度（更新日: 2026-05-08） | PLATEAU Site Policy「3. 著作権について」（商用含め無償利用可・出典明記） | https://www.geospatial.jp/ckan/dataset/plateau-26100-kyoto-shi-2025 |
-| 地震ハザード | J-SHIS Web API（確率論的地震動予測地図 250mメッシュ） | 防災科学技術研究所（NIED） | 2024年版（`Y2024` / 平均ケース `AVR` / 全地震 `TTL_MTTL`） | J-SHIS 利用規約（編集・加工成果物の頒布可・出典明記必須） | https://www.j-shis.bosai.go.jp/api-list |
-| 表層地盤 | J-SHIS Web API（表層地盤情報 250mメッシュ） | 防災科学技術研究所（NIED） | `V4`（微地形区分・ARV・AVS） | 同上 | https://www.j-shis.bosai.go.jp/api-sstruct-meshinfo |
-| 地震履歴 | 気象庁 地震情報 JSON | 気象庁（JMA） | リアルタイム・直近履歴 | 気象庁ホームページ利用規約（出典明記） | https://www.jma.go.jp/bosai/quake/data/list.json |
-| 背景地図 | 地理院タイル（淡色地図） | 国土地理院（GSI） | 最新 | 国土地理院コンテンツ利用規約（出典明記） | https://maps.gsi.go.jp/development/ichiran.html |
-| 道路ネットワーク | OpenStreetMap (Overpass API) | © OpenStreetMap contributors | 最新（京都市域前処理済） | ODbL（出典明記・訓練用経路シミュレーションに利用） | https://www.openstreetmap.org/copyright |
-
----
-
-## 5. データの扱いに関する重要な前提・制約
-
-- **ハザード確率の定義**：`T30_I55_PS`（今後30年間に震度6弱以上の揺れに見舞われる確率）等は地震動の発生確率であり、**個別建物の倒壊確率やリアルタイム地震予知ではありません**。
-- **建築年の粒度と耐震基準**：PLATEAUの `bldg:yearOfConstruction` は「年」単位のデータです。1981年6月1日施行の新耐震基準や、2000年6月1日施行の木造住宅に関する基準（接合部・耐力壁バランス等）は「月日」に依存するため、築年数のみで厳密に適合・不適合を判定していません。
-- **欠損値の扱い**：建築年が未入力または異常値（`0001`・`9999`等）の建物は推測せず「建築年不明」として集計・表示しています。用途が `461`（不明）または欠損の建物も勝手に住宅扱いしていません。
-
----
-
-## 6. セットアップ・起動方法（Mac / Linux）
-
-前処理済みの京都市データ（`backend/data/processed/buildings.parquet`, `meshes.geojson`, `summary.json`）を同梱しているため、**APIキーなしでも地図・フィルター・統計・優先エリア分析・実データプレビューがそのまま動作します**。AI防災解説機能を利用する場合のみ `.env` に `GEMINI_API_KEY` を設定するか、ブラウザ上の「APIキー設定」から入力してください。
-
-> [!NOTE]
-> 本アプリは **2つのサーバー** で構成されています。
-> - **Webアプリ画面（ブラウザで開くURL）**: `http://localhost:3000`（Next.js フロントエンド）
-> - **APIサーバー**: `http://127.0.0.1:8000`（FastAPI バックエンド／API仕様: `http://127.0.0.1:8000/docs`）
->
-> バックエンドだけを起動して `http://127.0.0.1:8000` を開くと案内ページが表示されます。地図とダッシュボードを表示するには **フロントエンドも起動して `http://localhost:3000` にアクセスしてください。**
+前処理済みの京都市空間データ（`backend/data/processed/`）を同梱しているため、ローカル環境ですぐに全機能を起動・検証できます。
 
 ### 必要環境
 - Python 3.12+ & `uv`
 - Node.js 20+ & `npm`
+- Firebase プロジェクト（Firebase Authentication［メール・Google有効］＋ Cloud Firestore）
+- Gemini API キー（`.env` に `GEMINI_API_KEY` を設定、またはブラウザUIから個人キー持込 BYOK も可）
 
-### 1) 環境変数設定（任意：AI解説・公開時の保護設定）
+### 1) 環境変数の設定
 
 ```bash
+# ルート側（Backend / Gemini / Firebase検証 / 政府機関コード）
 cp .env.example .env
-# .env を開き、GEMINI_API_KEY=あなたのAPIキー を記入
+# .env に GEMINI_API_KEY / FIREBASE_PROJECT_ID / GOV_REGISTRATION_CODE を設定
+
+# フロントエンド側（Firebase Web SDK構成）
+cp frontend/.env.local.example frontend/.env.local
+# frontend/.env.local に NEXT_PUBLIC_FIREBASE_* を設定
 ```
 
-### 2) かんたん一括起動（推奨）
-
-リポジトリルートで `./start.sh` を実行すると、バックエンド（`:8000`）の起動待機とフロントエンドの本番ビルド＆起動（`:3000`）を順番に行います：
+### 2) 一括起動（推奨）
 
 ```bash
 ./start.sh
 ```
 
-起動後、ブラウザで **`http://localhost:3000`** を開いてください（終了は `Ctrl + C`）。
+起動後、ブラウザで **`http://localhost:3000`** を開きます（`Ctrl + C` で停止）。
+- Webアプリ画面: `http://localhost:3000`（`/login`・`/register`・`/guide`・`/`・`/board`）
+- APIドキュメント（Swagger）: `http://127.0.0.1:8000/docs`
 
-### 3) 個別に起動する場合（2ターミナル）
-
-**ターミナル1：バックエンド起動（FastAPI: `http://127.0.0.1:8000`）**
+### 3) テスト・静的解析
 
 ```bash
+# バックエンド単体・結合テスト（RBAC・AIセキュリティ・Firestore・空間データ・API 全42件）
 cd backend
-uv sync
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv run pytest -v
+
+# フロントエンド TypeScript型チェック・ESLint・本番ビルド確認
+cd ../frontend
+npx tsc --noEmit && npm run lint && npm run build
 ```
-
-> データパイプラインをゼロから再実行して最新データを取得・再構築する場合：
-> ```bash
-> cd backend
-> uv run python scripts/fetch_and_build.py
-> ```
-
-**ターミナル2：フロントエンド起動（Next.js: `http://localhost:3000`）**
-
-```bash
-cd frontend
-npm install
-npm run dev
-# 本番ビルドで起動する場合: npm run build && npm run start -- --port 3000
-```
-
-起動後、ブラウザで **`http://localhost:3000`** を開きます。
 
 ---
 
-## 7. 公開運用時のAPI保護・費用制御設定
-
-不特定多数へ公開した際の Gemini API 不正利用・課金急増を防ぐため、以下の多層保護機構を標準搭載しています（設定はすべて `.env` で変更可能）。
+## 7. 公開運用時のAPI保護・費用制御設定（`.env`）
 
 | 環境変数 | デフォルト値 | 役割 |
 |---|---|---|
 | `GEMINI_API_KEY` | 未設定 | サーバー側の共用 Gemini API キー（`.gitignore` 対象） |
-| `AI_PUBLIC_SERVER_KEY_ENABLED` | `true` | `false` にすると共用キーを無効化し、利用者の個人キー持込（BYOK）のみでAI稼働 |
-| `AI_ACCESS_CODE` | 空（無効） | 設定時、共用キー利用に `X-Ai-Access-Code` 一致を必須化（BYOK時は不要） |
-| `AI_ALLOW_PREMIUM_MODELS` | `false` | `false` の場合、共用キーでは `gemini-3.5-flash-lite` のみ許可（`gemini-4-*` は個人キー持込または `true` 時のみ） |
-| `AI_RATE_LIMIT_PER_MIN` | `8` | 共用キー利用時の IP あたり 1分間リクエスト上限（超過時 `429` + `Retry-After`） |
-| `AI_RATE_LIMIT_PER_HOUR` | `40` | 共用キー利用時の IP あたり 1時間リクエスト上限 |
-| `AI_DAILY_BUDGET_REQUESTS` | `300` | 共用キー利用時のサーバー全体 1日合計リクエスト上限（到達時はBYOK案内） |
-| `AI_MAX_CONCURRENT_PER_IP` | `2` | 同一 IP からの同時ストリーミング接続上限 |
-| `AI_MAX_CONCURRENT_GLOBAL` | `15` | サーバー全体の同時 AI 実行上限 |
-| `AI_MAX_MESSAGE_CHARS` | `1200` | 1回の質問メッセージ最大文字数（超過時 `413`） |
-| `AI_MAX_OUTPUT_TOKENS` | `1536` | Gemini 応答の最大出力トークン数上限（ツールループも最大4ターンに制限） |
-| `CORS_ALLOW_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | 許可するフロントエンドオリジン（カンマ区切り・ワイルドカード `*` 廃止） |
-| `AI_TRUST_PROXY_HEADERS` | `false` | リバースプロキシ配下で `X-Forwarded-For` を信頼する場合に `true`（ループバック接続は自動許可） |
-
-> [!TIP]
-> インターネット公開時は、上記に加えて **Google Cloud / Google AI Studio 側でも APIキーの「API制限（Generative Language API のみに限定）」および「課金予算アラート／クォータ上限」を設定** することを推奨します。
+| `AI_PUBLIC_SERVER_KEY_ENABLED` | `true` | `false` にすると共用キーを無効化し、個人キー持込（BYOK）のみで稼働 |
+| `AI_ACCESS_CODE` | 空（無効） | 設定時、共用キー利用に `X-Ai-Access-Code` 一致を必須化 |
+| `AI_ALLOW_PREMIUM_MODELS` | `false` | `false` の場合、共用キーでは `gemini-3.5-flash-lite` のみ許可 |
+| `AI_RATE_LIMIT_PER_MIN` / `PER_HOUR` | `8` / `40` | 共用キー利用時の IP あたりリクエスト上限 |
+| `AI_DAILY_BUDGET_REQUESTS` | `300` | 共用キー利用時のサーバー全体 1日合計リクエスト上限 |
+| `GOV_REGISTRATION_CODE` | 未設定 | 政府関連機関アカウント新規登録時のサーバー側必須照合コード |
+| `CORS_ALLOW_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | 許可するフロントエンドオリジン（ワイルドカード `*` 禁止） |
 
 ---
 
-## 8. アプリの正しい使い方
+## 8. 使用データセット・API・ライセンス一覧
 
-1. **Map-First 全体把握と表示設定**：
-   - 起動直後は京都市の広い地図を中心に、通行止め区間（赤破線・`✕ 通行不可`）、防災・救援拠点（`🏕`）、区別の安否集計バッジ、被害報告ピン、建物・250mハザードを重ねて表示します。
-   - 右上の **「表示設定」** から「災害対応モード / 建物リスク強調」「2D / 3D」「各種レイヤー・築年・ハザード絞込」を切り替えられます。
-2. **安否確認と地図連携（「安否確認」 ／ `/board`）**：
-   - 地図上の安否集計バッジ（例：`安否:伏見区`）をクリックすると該当区の伝言板へ即座に切り替わります。
-   - 登録時は個人の精密GPS位置を取得せず、明示的同意がある場合のみ250mメッシュ統計へ紐付けます。登録後の状況更新・削除は暗証番号で操作できます。
-3. **3ステップ被害報告と建物ポリゴン連携（「被害報告」）**：
-   - 地図上の建物または被害報告アイコンをクリックすると右下に選択カードが表示され、対象建物の被害報告・救援ルート・AI分析をワンクリックで開始できます。
-   - 市民投稿はすべて **「未確認（市民報告）」** バッジ（破線枠）で表示され、同一区・近接・類似内容がある場合は重複候補と `+1 同種確認` ボタンを提案します。
-4. **双方向 避難・救援ルート案内（「避難・救援ナビ」・訓練用）**：
-   - **避難所へ**：地図上で現在地をクリックするか最寄り拠点を選ぶと、通行止め区間を避けて最寄りの開設可能避難拠点への迂回経路を表示します。
-   - **救援出動**：救助要請や建物損傷の報告横の「🚑 救援経路」ボタンを押すと、最寄り拠点から現場への救援ルートを試算します（訓練・研究用専用）。
-5. **Gemini AI 状況分析・CSV/Excel出力（「AI分析」「統計・リスク」）**：
-   - 「伏見区の現在の被害報告と建物リスクをまとめて」「道路損壊が報告されている地域は？」「現在の地域の災害状況をCSVにまとめて」等の質問に対し、11個の Function Calling ツールで実集計を取得・検証し、地図移動やCSV/Excelダウンロードボタンを生成します。
-
----
-
-## 9. テスト・ビルド実行
-
-```bash
-# バックエンド単体・結合テスト（全15件：空間結合・API・セキュリティ・根拠検証・伝言板・被害報告・CSV/Excel・AI・迂回経路・道路ペイント）
-cd backend
-uv run pytest -v
-
-# フロントエンド 本番ビルド・TypeScript・ESLint
-cd ../frontend
-npm run lint && npm run build
-```
-
----
-
-## 10. 今後の制約事項・発展余地
-
-- **道路ネットワーク精緻化**：現在の代替経路シミュレーションは OpenStreetMap（41,813ノード・58,360エッジ）を用いた訓練・研究用モデルです。実運用へ近づけるには、自治体指定の緊急輸送道路規制・幅員・信号/標高・橋梁耐震点検データのリアルタイム統合が必要です。
-- **公的フィード連携・本人確認**：現在は市民報告をすべて `unverified` として分離管理していますが、自治体の防災情報XML / Lアラート等と連携する公式取り込みチャネルを追加することで、`official` / `verified` 区分をより充実できます。
-- **複数自治体展開**：`fetch_and_build.py` の対象自治体コードを差し替えることで、建築年整備済み他都市への横展開が可能です。
-
----
-
-## 11. Google AI Challenge 2026 提出用 90秒デモ構成案
-
-- **0:00〜0:15｜課題提起**：事前の建物耐震リスク（PLATEAU × J-SHIS）と、発災直後の安否確認・被害状況は別々の窓口に分散しがちです。両者を1画面で結び、AIで即時集約する統合防災プラットフォーム「**QuakeLens Japan**」を紹介します。
-- **0:15〜0:35｜平時・事前の建物×地盤リスク可視化（京都市513,815棟）**：全棟MVT配信・2D/3D立体表示で、砂礫質台地と伏見区・山科区などの後背湿地（最大震度6弱+確率58.3%・ARV 2.0+）× 1981年以前建築の重なりを提示し、建築年不明19.1%も含め透明に可視化します。
-- **0:35〜0:55｜安否伝言板 × 被害報告の地図統合（未確認と訓練データの明確な分離）**：地図上の被害報告フォームから道路通行止めや支援要請を位置同意の上で投稿すると、即座に **「未確認（市民報告）」**（破線枠）として地図と集計へ反映され、公式情報・訓練サンプルと混同せずに現場状況を共有できます。
-- **0:55〜1:20｜Gemini AI 統合分析 × CSV/Excel出力 × 迂回ルート試算（訓練用）**：AI分析タブで「伏見区の現在の被害報告と建物リスクをまとめて」「CSVにまとめて」を実行すると、Gemini が実データツールで建物統計・安否集計・未確認被害報告を横断分析し、未確認注意バッジ付きの解説とワンクリックCSV/Excel出力・地図ジャンプ・迂回経路確認までつなげます。
-- **1:20〜1:30｜まとめ**：公的オープンデータ × 市民からの未確認情報分離設計 × Gemini Function Calling・根拠自動検証による、平時から発災直後まで迷わず使える防災インテリジェンスとして締めくくります。
+| データ種別 | 名称・API | 提供元 | 基準年・バージョン | ライセンス / 利用条件 | 出典URL |
+|---|---|---|---|---|---|
+| 建物データ | Project PLATEAU 3D都市モデル（京都市） | 国土交通省・京都市 | 2025年度（2026年5月更新・第5.0版） | PLATEAU Site Policy「3. 著作権について」（出典明記で無償利用可） | https://www.geospatial.jp/ckan/dataset/plateau-26100-kyoto-shi-2025 |
+| 地震ハザード | J-SHIS Web API（確率論的地震動予測地図 250mメッシュ） | 防災科学技術研究所（NIED） | 2024年版（`Y2024` / 平均ケース `AVR` / 全地震 `TTL_MTTL`） | J-SHIS 利用規約（加工・頒布可・出典明記必須） | https://www.j-shis.bosai.go.jp/api-list |
+| 表層地盤 | J-SHIS Web API（表層地盤情報 250mメッシュ） | 防災科学技術研究所（NIED） | `V4`（微地形区分・ARV・AVS） | 同上 | https://www.j-shis.bosai.go.jp/api-sstruct-meshinfo |
+| 避難・耐震・地震帯 | 京都市 指定緊急避難場所・R8市有建築物耐震性能リスト・11地震シナリオ | 国土地理院・京都市 | 令和8年版等 | 各自治体・機関利用規約（出典明記） | https://www.city.kyoto.lg.jp/tokei/page/0000128082.html |
+| 地震履歴 | 気象庁 地震情報 JSON / Yahoo!災害履歴 | 気象庁（JMA）ほか | リアルタイム・直近履歴 | 気象庁ホームページ利用規約（出典明記） | https://www.jma.go.jp/bosai/quake/data/list.json |
+| 背景地図 | 地理院タイル（淡色地図） | 国土地理院（GSI） | 最新 | 国土地理院コンテンツ利用規約（出典明記） | https://maps.gsi.go.jp/development/ichiran.html |
+| 道路網 | OpenStreetMap (Overpass API) | © OpenStreetMap contributors | 最新（京都市域前処理済） | ODbL（出典明記・訓練用経路シミュレーションに利用） | https://www.openstreetmap.org/copyright |
